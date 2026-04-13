@@ -52,11 +52,13 @@ Full architecture and decision rationale: [project brief §3–4](waldo.WTF-proj
 
 ## Status
 
-Pre-Weekend-2. The spike
-(`/Users/waldo/Temp/waldo-wtf-spike/`) has proven MSAL device code
-flow, Graph `Mail.Read`, delta queries with `@removed` handling, and
-better-sqlite3 WAL mode on one real account. Second account and
-TypeScript graduation are next.
+Weekend 2 closing. TypeScript project scaffolded, all core seams
+(clock, fs, Graph, auth, store, sync, HTTP) landed behind unit tests,
+and `main()` wires real MSAL + SQLite + a skeleton `node:http` MCP
+transport shell. The one deferred piece is the real Graph HTTP
+adapter — until it lands, `main()` wires a `NotImplementedGraph`
+stub. Next: real Graph client, then Weekend 3 MCP tools
+(`get_recent_activity`, `search`, `get_sync_status`).
 
 Live progress: [PROGRESS.md](PROGRESS.md). Recent changes:
 [docs/changelog.md](docs/changelog.md).

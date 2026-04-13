@@ -23,6 +23,8 @@
     "vitest": "^2.1.0"
   },
   "dependencies": {
-    "better-sqlite3": "^12.9.0"
+    "@azure/msal-node": "^5.1.2",
+    "better-sqlite3": "^12.9.0",
+    "dotenv": "^17.4.2"
   }
 }

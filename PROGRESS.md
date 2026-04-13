@@ -57,15 +57,15 @@ Scaffold **in-place** in this repo (`/Users/waldo/SourceCode/Community/waldo.WTF
 - [x] First RED test before any production code (run `/tdd-cycle`) — 2026-04-13 (`FakeClock` contract tests)
 - [x] Folder structure (`src/auth`, `src/sources`, `src/store`, `src/sync`, `src/mcp`, `src/config.ts`, `src/index.ts`) — 2026-04-13 (pure `loadConfig` + stub `main()`; 11 tests, 100% coverage)
 - [ ] Port spike logic from `/Users/waldo/Temp/waldo-wtf-spike` — **reference, don't copy-paste**
-  - [x] Auth seam: `AuthClient` interface, `FakeAuthClient`, `TokenCacheStore` (fs-backed, atomic write, mode 0o600) — 2026-04-13. Real MSAL adapter still pending.
+  - [x] Auth seam: `AuthClient` interface, `FakeAuthClient`, `TokenCacheStore` (fs-backed, atomic write, mode 0o600) — 2026-04-13. Real MSAL adapter landed 2026-04-13 ([src/auth/msal-auth-client.ts](src/auth/msal-auth-client.ts)) — `@azure/msal-node` wrapped behind injectable PCA seam; live login remains a manual smoke step.
   - [x] Store seam: `Message`/`SyncStateEntry` types (mirror brief §5), `MessageStore` interface (`upsertMessages`, `deleteMessages`, `get`/`setSyncState`), `InMemoryMessageStore` fake — 2026-04-13.
   - [x] Real `SqliteMessageStore` (`better-sqlite3`, `messages` + `sync_state` tables, WAL via `openDatabase`, transactional upserts) — 2026-04-13. `accounts` / `sync_log` / FTS5 / query ops still pending.
   - [x] `accounts` + `sync_log` tables behind `PRAGMA user_version=1` migration ([src/store/schema.ts](src/store/schema.ts)); `MessageStore` extended with `appendSyncLog` / `upsertAccount` / `listAccounts` on both impls — 2026-04-13. FTS5 still pending (slice 9).
   - [x] FTS5 `messages_fts` virtual table + ai/ad/au triggers + v1→v2 migration with backfill ([src/store/schema.ts](src/store/schema.ts)); `searchMessages(query, limit)` on `MessageStore` (BM25-ranked + `snippet()` in sqlite, naive substring in fake); FTS5 input escaped to a quoted phrase via `toFts5Phrase` — 2026-04-13.
 - [x] Real schema (full `messages` table incl. `raw_json`, `sync_state`, `sync_log`, `accounts`, FTS5)
-- [ ] 5-minute sync loop writing to `sync_log`
-- [ ] Skeleton HTTP MCP server (transport only, no tools yet)
-- [ ] `.env`: `MS_CLIENT_ID`, `BEARER_TOKEN`
+- [x] 5-minute sync loop writing to `sync_log` — 2026-04-13. `syncInbox` + `SyncScheduler` ([src/sync/](src/sync/)) with injected `setTimer`, per-account ok/error rows, overlap-tick skip. Real HTTP `GraphClient` still stubbed (`NotImplementedGraph` in `main()`).
+- [x] Skeleton HTTP MCP server (transport only, no tools yet) — 2026-04-13. `node:http`, `/health` bypass, `crypto.timingSafeEqual` bearer check, 404 fall-through ([src/mcp/http-server.ts](src/mcp/http-server.ts)).
+- [x] `.env`: `MS_CLIENT_ID`, `BEARER_TOKEN` (plus `WALDO_PORT`, `WALDO_SYNC_INTERVAL_MS`) — 2026-04-13. `dotenv`-loaded in `main()`; template in [.env.example](.env.example).
 
 ---
 

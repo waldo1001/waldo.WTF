@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { loadConfig, ConfigError, DEFAULT_DB_PATH, DEFAULT_AUTH_DIR } from "./config.js";
+import {
+  loadConfig,
+  ConfigError,
+  DEFAULT_DB_PATH,
+  DEFAULT_AUTH_DIR,
+  DEFAULT_PORT,
+  DEFAULT_SYNC_INTERVAL_MS,
+} from "./config.js";
 
 const validEnv = () => ({
   MS_CLIENT_ID: "client-abc",
@@ -18,7 +25,36 @@ describe("loadConfig", () => {
       bearerToken: "bearer-xyz",
       dbPath: "/tmp/lake.db",
       authDir: "/tmp/auth",
+      port: DEFAULT_PORT,
+      syncIntervalMs: DEFAULT_SYNC_INTERVAL_MS,
     });
+  });
+
+  it("port defaults to 8765 when WALDO_PORT is unset", () => {
+    expect(loadConfig(validEnv()).port).toBe(8765);
+  });
+
+  it("port reads WALDO_PORT as an integer when set", () => {
+    expect(loadConfig({ ...validEnv(), WALDO_PORT: "9090" }).port).toBe(9090);
+  });
+
+  it("throws ConfigError when WALDO_PORT is not a positive integer", () => {
+    expect(() =>
+      loadConfig({ ...validEnv(), WALDO_PORT: "not-a-number" }),
+    ).toThrow(ConfigError);
+    expect(() => loadConfig({ ...validEnv(), WALDO_PORT: "0" })).toThrow(
+      ConfigError,
+    );
+  });
+
+  it("syncIntervalMs defaults to DEFAULT_SYNC_INTERVAL_MS", () => {
+    expect(loadConfig(validEnv()).syncIntervalMs).toBe(DEFAULT_SYNC_INTERVAL_MS);
+  });
+
+  it("syncIntervalMs reads WALDO_SYNC_INTERVAL_MS when set", () => {
+    expect(
+      loadConfig({ ...validEnv(), WALDO_SYNC_INTERVAL_MS: "60000" }).syncIntervalMs,
+    ).toBe(60_000);
   });
 
   it("applies default dbPath when WALDO_DB_PATH is unset", () => {
