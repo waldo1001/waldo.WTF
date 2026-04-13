@@ -35,6 +35,17 @@ export interface SyncLogEntry {
   readonly errorMessage?: string;
 }
 
+export interface SyncStatusRow {
+  readonly account: string;
+  readonly source: MessageSource;
+  readonly lastSyncAt?: Date;
+  readonly lastOkAt?: Date;
+  readonly lastStatus?: SyncLogStatus;
+  readonly lastError?: string;
+  readonly messagesAddedLastOk?: number;
+  readonly messagesAddedLast24h: number;
+}
+
 export interface AccountRecord {
   readonly username: string;
   readonly displayName?: string;

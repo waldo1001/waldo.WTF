@@ -11,6 +11,7 @@ import type {
   SearchHit,
   SyncLogEntry,
   SyncStateEntry,
+  SyncStatusRow,
 } from "../store/types.js";
 
 export type InMemoryMessageStoreCall =
@@ -22,7 +23,8 @@ export type InMemoryMessageStoreCall =
   | { method: "upsertAccount"; account: AccountRecord }
   | { method: "listAccounts" }
   | { method: "searchMessages"; query: string; limit: number }
-  | { method: "getRecentMessages"; opts: GetRecentMessagesOptions };
+  | { method: "getRecentMessages"; opts: GetRecentMessagesOptions }
+  | { method: "getSyncStatus"; now: Date };
 
 export interface InMemoryMessageStoreOptions {
   seed?: {
@@ -122,6 +124,59 @@ export class InMemoryMessageStore implements MessageStore {
     }
     hits.sort((a, b) => b.message.sentAt.getTime() - a.message.sentAt.getTime());
     return hits.slice(0, limit);
+  }
+
+  async getSyncStatus(now: Date): Promise<readonly SyncStatusRow[]> {
+    this.calls.push({ method: "getSyncStatus", now });
+    const pairs = new Map<string, { account: string; source: MessageSource }>();
+    for (const s of this.syncState.values()) {
+      pairs.set(syncKey(s.account, s.source), {
+        account: s.account,
+        source: s.source,
+      });
+    }
+    for (const entry of this.syncLog) {
+      pairs.set(syncKey(entry.account, entry.source), {
+        account: entry.account,
+        source: entry.source,
+      });
+    }
+    const since24h = now.getTime() - 24 * 3600 * 1000;
+    const rows: SyncStatusRow[] = [];
+    for (const { account, source } of pairs.values()) {
+      const state = this.syncState.get(syncKey(account, source));
+      const logs = this.syncLog
+        .filter((e) => e.account === account && e.source === source)
+        .slice()
+        .sort((a, b) => a.ts.getTime() - b.ts.getTime());
+      const latest = logs.length > 0 ? logs[logs.length - 1] : undefined;
+      const latestOk = [...logs].reverse().find((e) => e.status === "ok");
+      let sum = 0;
+      for (const e of logs) {
+        if (e.status !== "ok") continue;
+        if (e.ts.getTime() < since24h) continue;
+        sum += e.messagesAdded ?? 0;
+      }
+      const row: SyncStatusRow = {
+        account,
+        source,
+        ...(state?.lastSyncAt !== undefined && { lastSyncAt: state.lastSyncAt }),
+        ...(latestOk?.ts !== undefined && { lastOkAt: latestOk.ts }),
+        ...(latest !== undefined && { lastStatus: latest.status }),
+        ...(latest?.status === "error" &&
+          latest.errorMessage !== undefined && { lastError: latest.errorMessage }),
+        ...(latestOk?.messagesAdded !== undefined && {
+          messagesAddedLastOk: latestOk.messagesAdded,
+        }),
+        messagesAddedLast24h: sum,
+      };
+      rows.push(row);
+    }
+    rows.sort((a, b) => {
+      const c = a.account.localeCompare(b.account);
+      return c !== 0 ? c : a.source.localeCompare(b.source);
+    });
+    return rows;
   }
 
   async getRecentMessages(

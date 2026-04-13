@@ -13,6 +13,7 @@ import type {
   SearchHit,
   SyncLogEntry,
   SyncStateEntry,
+  SyncStatusRow,
 } from "./types.js";
 
 interface MessageRow {
@@ -262,6 +263,69 @@ export class SqliteMessageStore implements MessageStore {
     `;
     const rows = this.db.prepare(sql).all(...params) as MessageRow[];
     return rows.map(fromRow);
+  }
+
+  async getSyncStatus(now: Date): Promise<readonly SyncStatusRow[]> {
+    const since24h = now.getTime() - 24 * 3600 * 1000;
+    const rows = this.db
+      .prepare(
+        `
+      WITH pairs AS (
+        SELECT account, source FROM sync_state
+        UNION
+        SELECT account, source FROM sync_log
+      )
+      SELECT
+        p.account AS account,
+        p.source AS source,
+        (SELECT last_sync_at FROM sync_state
+           WHERE account = p.account AND source = p.source) AS last_sync_at,
+        (SELECT ts FROM sync_log
+           WHERE account = p.account AND source = p.source AND status = 'ok'
+           ORDER BY ts DESC LIMIT 1) AS last_ok_at,
+        (SELECT messages_added FROM sync_log
+           WHERE account = p.account AND source = p.source AND status = 'ok'
+           ORDER BY ts DESC LIMIT 1) AS messages_added_last_ok,
+        (SELECT status FROM sync_log
+           WHERE account = p.account AND source = p.source
+           ORDER BY ts DESC LIMIT 1) AS last_status,
+        (SELECT error_message FROM sync_log
+           WHERE account = p.account AND source = p.source
+           ORDER BY ts DESC LIMIT 1) AS last_error_message,
+        COALESCE((SELECT SUM(messages_added) FROM sync_log
+           WHERE account = p.account AND source = p.source
+             AND status = 'ok' AND ts >= ?), 0) AS messages_added_last_24h
+      FROM pairs p
+      ORDER BY account ASC, source ASC
+    `,
+      )
+      .all(since24h) as {
+      account: string;
+      source: string;
+      last_sync_at: number | null;
+      last_ok_at: number | null;
+      messages_added_last_ok: number | null;
+      last_status: string | null;
+      last_error_message: string | null;
+      messages_added_last_24h: number | null;
+    }[];
+    return rows.map((r) => {
+      const status = r.last_status as "ok" | "error" | null;
+      const row: SyncStatusRow = {
+        account: r.account,
+        source: r.source as MessageSource,
+        ...(r.last_sync_at !== null && { lastSyncAt: new Date(r.last_sync_at) }),
+        ...(r.last_ok_at !== null && { lastOkAt: new Date(r.last_ok_at) }),
+        ...(status !== null && { lastStatus: status }),
+        ...(status === "error" &&
+          r.last_error_message !== null && { lastError: r.last_error_message }),
+        ...(r.messages_added_last_ok !== null && {
+          messagesAddedLastOk: r.messages_added_last_ok,
+        }),
+        messagesAddedLast24h: r.messages_added_last_24h ?? 0,
+      };
+      return row;
+    });
   }
 
   async searchMessages(

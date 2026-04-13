@@ -5,6 +5,7 @@ import type {
   SearchHit,
   SyncLogEntry,
   SyncStateEntry,
+  SyncStatusRow,
 } from "./types.js";
 
 export interface UpsertResult {
@@ -38,4 +39,5 @@ export interface MessageStore {
   getRecentMessages(
     opts: GetRecentMessagesOptions,
   ): Promise<readonly Message[]>;
+  getSyncStatus(now: Date): Promise<readonly SyncStatusRow[]>;
 }

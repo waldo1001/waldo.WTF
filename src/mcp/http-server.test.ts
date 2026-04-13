@@ -143,7 +143,7 @@ describe("createMcpHttpServer", () => {
     expect(body.error.code).toBe(-32601);
   });
 
-  it("POST / tools/list returns get_recent_activity tool schema", async () => {
+  it("POST / tools/list advertises both get_recent_activity and get_sync_status", async () => {
     const res = await rpcPost(
       JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
     );
@@ -152,6 +152,72 @@ describe("createMcpHttpServer", () => {
     };
     const names = body.result.tools.map((t) => t.name);
     expect(names).toContain("get_recent_activity");
+    expect(names).toContain("get_sync_status");
+  });
+
+  it("POST / tools/call get_sync_status returns a snapshot for an empty store", async () => {
+    const res = await rpcPost(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 11,
+        method: "tools/call",
+        params: { name: "get_sync_status", arguments: {} },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      id: number;
+      result: {
+        generatedAt: string;
+        accountsTracked: number;
+        staleCount: number;
+        rows: unknown[];
+      };
+    };
+    expect(body.id).toBe(11);
+    expect(body.result.generatedAt).toBe("2026-04-13T12:00:00.000Z");
+    expect(body.result.accountsTracked).toBe(0);
+    expect(body.result.staleCount).toBe(0);
+    expect(body.result.rows).toEqual([]);
+  });
+
+  it("POST / tools/call get_sync_status surfaces a populated row", async () => {
+    await store.appendSyncLog({
+      ts: new Date("2026-04-13T11:55:00Z"),
+      account: "a@example.test",
+      source: "outlook",
+      status: "ok",
+      messagesAdded: 4,
+    });
+    const res = await rpcPost(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 12,
+        method: "tools/call",
+        params: { name: "get_sync_status", arguments: {} },
+      }),
+    );
+    const body = (await res.json()) as {
+      result: {
+        accountsTracked: number;
+        staleCount: number;
+        rows: Array<{
+          account: string;
+          source: string;
+          lastStatus?: string;
+          messagesAddedLastOk?: number;
+          stale: boolean;
+        }>;
+      };
+    };
+    expect(body.result.accountsTracked).toBe(1);
+    expect(body.result.rows).toHaveLength(1);
+    expect(body.result.rows[0]?.account).toBe("a@example.test");
+    expect(body.result.rows[0]?.source).toBe("outlook");
+    expect(body.result.rows[0]?.lastStatus).toBe("ok");
+    expect(body.result.rows[0]?.messagesAddedLastOk).toBe(4);
+    expect(body.result.rows[0]?.stale).toBe(false);
+    expect(body.result.staleCount).toBe(0);
   });
 
   it("POST / tools/call get_recent_activity returns count and messages", async () => {

@@ -54,11 +54,12 @@ Full architecture and decision rationale: [project brief §3–4](waldo.WTF-proj
 
 Weekend 3 underway. Weekend 2 closed with all core seams in place and
 `main()` wiring real MSAL + SQLite + `HttpGraphClient` behind the
-`node:http` transport shell. Weekend 3 has lit up the first MCP tool
-`get_recent_activity(hours, sources?, accounts?)` via a hand-rolled
-JSON-RPC 2.0 dispatch on `POST /` (adopting `@modelcontextprotocol/sdk`
-is deferred until 2–3 tools exist). Next: `get_sync_status`, `search`
-(FTS5), and Claude Desktop wiring.
+`node:http` transport shell. Weekend 3 has lit up the first two MCP
+tools — `get_recent_activity(hours, sources?, accounts?)` and
+`get_sync_status()` (per-`(account, source)` health with a 15-min
+`stale` flag) — via a hand-rolled JSON-RPC 2.0 dispatch on `POST /`
+(adopting `@modelcontextprotocol/sdk` is deferred until 2–3 tools
+exist). Next: `search` (FTS5) and Claude Desktop wiring.
 
 Live progress: [PROGRESS.md](PROGRESS.md). Recent changes:
 [docs/changelog.md](docs/changelog.md).

@@ -58,10 +58,12 @@ start of a session so it knows which tenants exist.
 
 ### `get_sync_status()`
 
-Per-`(account, source)`: when it last synced successfully, how many
-messages it added on the last run, any recent errors. **Critical** for
-"is Claude's answer stale?" — Claude should check this at the top of
-any triage.
+Per-`(account, source)`: `lastSyncAt`, `lastOkAt`, `lastStatus`,
+`lastError`, `messagesAddedLastOk`, `messagesAddedLast24h`, and a
+`stale` flag (true when no successful sync in the last 15 minutes).
+Top-level `generatedAt`, `accountsTracked`, `staleCount`. **Critical**
+for "is Claude's answer stale?" — Claude should check this at the top
+of any triage.
 
 ---
 
@@ -72,9 +74,8 @@ project:
 
 ```
 When I ask about my messages, emails, chats, or "wtf is going on":
-1. First call get_sync_status() to verify freshness. If any account is
-   stale (last_sync_at > 10 minutes old) or erroring, flag that before
-   answering.
+1. First call get_sync_status() to verify freshness. If staleCount > 0
+   or any row has lastStatus="error", flag that before answering.
 2. Then call list_accounts() if you haven't yet this session.
 3. Default to checking ALL accounts and ALL sources unless I specify.
 4. Call get_recent_activity(24) as the baseline, then drill deeper with

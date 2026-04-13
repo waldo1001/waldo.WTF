@@ -377,6 +377,186 @@ export function runMessageStoreContract(
       expect(got.map((m) => m.id)).toEqual(["1"]);
     });
 
+    it("getSyncStatus on an empty store returns []", async () => {
+      const { store } = await factory();
+      expect(
+        await store.getSyncStatus(new Date("2026-04-13T12:00:00Z")),
+      ).toEqual([]);
+    });
+
+    it("getSyncStatus returns one row per (account, source) seen in sync_state", async () => {
+      const { store } = await factory();
+      await store.setSyncState({
+        account: "a@example.test",
+        source: "outlook",
+        deltaToken: "tok",
+        lastSyncAt: new Date("2026-04-13T11:55:00Z"),
+      });
+      const rows = await store.getSyncStatus(new Date("2026-04-13T12:00:00Z"));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.account).toBe("a@example.test");
+      expect(rows[0]?.source).toBe("outlook");
+      expect(rows[0]?.lastSyncAt).toEqual(new Date("2026-04-13T11:55:00Z"));
+      expect(rows[0]?.lastStatus).toBeUndefined();
+      expect(rows[0]?.lastOkAt).toBeUndefined();
+      expect(rows[0]?.messagesAddedLast24h).toBe(0);
+    });
+
+    it("getSyncStatus includes a row for a pair with only sync_log entries", async () => {
+      const { store } = await factory();
+      await store.appendSyncLog({
+        ts: new Date("2026-04-13T11:00:00Z"),
+        account: "a@example.test",
+        source: "teams",
+        status: "ok",
+        messagesAdded: 3,
+      });
+      const rows = await store.getSyncStatus(new Date("2026-04-13T12:00:00Z"));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.source).toBe("teams");
+      expect(rows[0]?.lastStatus).toBe("ok");
+      expect(rows[0]?.lastSyncAt).toBeUndefined();
+    });
+
+    it("getSyncStatus.lastStatus reflects the most recent sync_log row (error after ok)", async () => {
+      const { store } = await factory();
+      await store.appendSyncLog({
+        ts: new Date("2026-04-13T10:00:00Z"),
+        account: "a@example.test",
+        source: "outlook",
+        status: "ok",
+        messagesAdded: 7,
+      });
+      await store.appendSyncLog({
+        ts: new Date("2026-04-13T11:00:00Z"),
+        account: "a@example.test",
+        source: "outlook",
+        status: "error",
+        errorMessage: "graph 429",
+      });
+      const rows = await store.getSyncStatus(new Date("2026-04-13T12:00:00Z"));
+      expect(rows[0]?.lastStatus).toBe("error");
+      expect(rows[0]?.lastError).toBe("graph 429");
+      expect(rows[0]?.lastOkAt).toEqual(new Date("2026-04-13T10:00:00Z"));
+      expect(rows[0]?.messagesAddedLastOk).toBe(7);
+    });
+
+    it("getSyncStatus.lastStatus reflects the most recent sync_log row (ok after error)", async () => {
+      const { store } = await factory();
+      await store.appendSyncLog({
+        ts: new Date("2026-04-13T10:00:00Z"),
+        account: "a@example.test",
+        source: "outlook",
+        status: "error",
+        errorMessage: "transient",
+      });
+      await store.appendSyncLog({
+        ts: new Date("2026-04-13T11:00:00Z"),
+        account: "a@example.test",
+        source: "outlook",
+        status: "ok",
+        messagesAdded: 4,
+      });
+      const rows = await store.getSyncStatus(new Date("2026-04-13T12:00:00Z"));
+      expect(rows[0]?.lastStatus).toBe("ok");
+      expect(rows[0]?.lastError).toBeUndefined();
+      expect(rows[0]?.lastOkAt).toEqual(new Date("2026-04-13T11:00:00Z"));
+      expect(rows[0]?.messagesAddedLastOk).toBe(4);
+    });
+
+    it("getSyncStatus.messagesAddedLast24h sums ok rows within 24h of now", async () => {
+      const { store } = await factory();
+      const now = new Date("2026-04-13T12:00:00Z");
+      // Outside window (25h old) — excluded
+      await store.appendSyncLog({
+        ts: new Date("2026-04-12T11:00:00Z"),
+        account: "a@example.test",
+        source: "outlook",
+        status: "ok",
+        messagesAdded: 1000,
+      });
+      // Inside window (23h old)
+      await store.appendSyncLog({
+        ts: new Date("2026-04-12T13:00:00Z"),
+        account: "a@example.test",
+        source: "outlook",
+        status: "ok",
+        messagesAdded: 5,
+      });
+      // Inside window, but error — excluded from sum
+      await store.appendSyncLog({
+        ts: new Date("2026-04-13T09:00:00Z"),
+        account: "a@example.test",
+        source: "outlook",
+        status: "error",
+        errorMessage: "x",
+      });
+      // Inside window
+      await store.appendSyncLog({
+        ts: new Date("2026-04-13T11:00:00Z"),
+        account: "a@example.test",
+        source: "outlook",
+        status: "ok",
+        messagesAdded: 8,
+      });
+      const rows = await store.getSyncStatus(now);
+      expect(rows[0]?.messagesAddedLast24h).toBe(13);
+    });
+
+    it("getSyncStatus rows are ordered by account ASC, source ASC", async () => {
+      const { store } = await factory();
+      await store.appendSyncLog({
+        ts: new Date("2026-04-13T11:00:00Z"),
+        account: "b@example.test",
+        source: "outlook",
+        status: "ok",
+        messagesAdded: 1,
+      });
+      await store.appendSyncLog({
+        ts: new Date("2026-04-13T11:00:00Z"),
+        account: "a@example.test",
+        source: "teams",
+        status: "ok",
+        messagesAdded: 1,
+      });
+      await store.appendSyncLog({
+        ts: new Date("2026-04-13T11:00:00Z"),
+        account: "a@example.test",
+        source: "outlook",
+        status: "ok",
+        messagesAdded: 1,
+      });
+      const rows = await store.getSyncStatus(new Date("2026-04-13T12:00:00Z"));
+      expect(rows.map((r) => `${r.account}/${r.source}`)).toEqual([
+        "a@example.test/outlook",
+        "a@example.test/teams",
+        "b@example.test/outlook",
+      ]);
+    });
+
+    it("getSyncStatus unions sync_state and sync_log rows for the same pair", async () => {
+      const { store } = await factory();
+      await store.setSyncState({
+        account: "a@example.test",
+        source: "outlook",
+        deltaToken: "t",
+        lastSyncAt: new Date("2026-04-13T11:55:00Z"),
+      });
+      await store.appendSyncLog({
+        ts: new Date("2026-04-13T11:00:00Z"),
+        account: "a@example.test",
+        source: "outlook",
+        status: "ok",
+        messagesAdded: 2,
+      });
+      const rows = await store.getSyncStatus(new Date("2026-04-13T12:00:00Z"));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.lastSyncAt).toEqual(new Date("2026-04-13T11:55:00Z"));
+      expect(rows[0]?.lastOkAt).toEqual(new Date("2026-04-13T11:00:00Z"));
+      expect(rows[0]?.lastStatus).toBe("ok");
+      expect(rows[0]?.messagesAddedLastOk).toBe(2);
+    });
+
     it("getRecentMessages honours the limit", async () => {
       const { store } = await factory();
       await store.upsertMessages([

@@ -8,6 +8,28 @@ import {
   handleGetRecentActivity,
   type GetRecentActivityParams,
 } from "./tools/get-recent-activity.js";
+import {
+  GET_SYNC_STATUS_TOOL,
+  handleGetSyncStatus,
+} from "./tools/get-sync-status.js";
+
+type ToolHandler = (
+  store: MessageStore,
+  clock: Clock,
+  args: unknown,
+) => Promise<unknown>;
+
+const TOOL_DESCRIPTORS = [
+  GET_RECENT_ACTIVITY_TOOL,
+  GET_SYNC_STATUS_TOOL,
+] as const;
+
+const TOOL_HANDLERS: Record<string, ToolHandler> = {
+  [GET_RECENT_ACTIVITY_TOOL.name]: (store, clock, args) =>
+    handleGetRecentActivity(store, clock, args as GetRecentActivityParams),
+  [GET_SYNC_STATUS_TOOL.name]: (store, clock) =>
+    handleGetSyncStatus(store, clock),
+};
 
 export interface McpHttpServerOptions {
   readonly bearerToken: string;
@@ -77,22 +99,16 @@ async function dispatch(
 ): Promise<object> {
   const id: JsonRpcId = req.id === undefined ? null : req.id;
   if (req.method === "tools/list") {
-    return rpcResult(id, { tools: [GET_RECENT_ACTIVITY_TOOL] });
+    return rpcResult(id, { tools: TOOL_DESCRIPTORS });
   }
   if (req.method === "tools/call") {
-    const params = req.params as {
-      name: string;
-      arguments: GetRecentActivityParams;
-    };
-    if (params.name !== GET_RECENT_ACTIVITY_TOOL.name) {
+    const params = req.params as { name: string; arguments: unknown };
+    const handler = TOOL_HANDLERS[params.name];
+    if (handler === undefined) {
       return rpcError(id, -32601, `unknown tool: ${params.name}`);
     }
     try {
-      const result = await handleGetRecentActivity(
-        store,
-        clock,
-        params.arguments,
-      );
+      const result = await handler(store, clock, params.arguments);
       return rpcResult(id, result);
     } catch (err) {
       if (err instanceof InvalidParamsError) {
