@@ -18,6 +18,12 @@ export interface TimerHandle {
 
 export type SetTimerFn = (fn: () => void, ms: number) => TimerHandle;
 
+export interface TickSummary {
+  readonly accounts: number;
+  readonly okCount: number;
+  readonly errorCount: number;
+}
+
 export interface SyncSchedulerDeps {
   readonly auth: AuthClient;
   readonly graph: GraphClient;
@@ -27,6 +33,7 @@ export interface SyncSchedulerDeps {
   readonly setTimer: SetTimerFn;
   readonly intervalMs: number;
   readonly onSkip?: () => void;
+  readonly onTickComplete?: (summary: TickSummary) => void;
 }
 
 export class SyncScheduler {
@@ -41,8 +48,12 @@ export class SyncScheduler {
       return;
     }
     this.isRunning = true;
+    let okCount = 0;
+    let errorCount = 0;
+    let accountsCount = 0;
     try {
       const accounts = await this.deps.auth.listAccounts();
+      accountsCount = accounts.length;
       for (const account of accounts) {
         try {
           const r = await syncInbox({
@@ -59,6 +70,7 @@ export class SyncScheduler {
             status: "ok",
             messagesAdded: r.added,
           });
+          okCount += 1;
         } catch (err) {
           await this.deps.store.appendSyncLog({
             ts: this.deps.clock.now(),
@@ -67,6 +79,7 @@ export class SyncScheduler {
             status: "error",
             errorMessage: errorToString(err),
           });
+          errorCount += 1;
         }
         if (this.deps.teams !== undefined) {
           try {
@@ -84,6 +97,7 @@ export class SyncScheduler {
               status: "ok",
               messagesAdded: r.added,
             });
+            okCount += 1;
           } catch (err) {
             await this.deps.store.appendSyncLog({
               ts: this.deps.clock.now(),
@@ -92,11 +106,17 @@ export class SyncScheduler {
               status: "error",
               errorMessage: errorToString(err),
             });
+            errorCount += 1;
           }
         }
       }
     } finally {
       this.isRunning = false;
+      this.deps.onTickComplete?.({
+        accounts: accountsCount,
+        okCount,
+        errorCount,
+      });
     }
   }
 

@@ -350,4 +350,49 @@ describe("SyncScheduler", () => {
     releaseFirstRun?.();
     await firstRun;
   });
+
+  it("runOnce invokes onTickComplete with the tick summary after sync_log writes", async () => {
+    const a1 = acc("alice");
+    const a2 = acc("bob");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ value: [], "@odata.deltaLink": "d1" }) },
+        { kind: "error", error: new Error("boom") },
+      ],
+    });
+    const auth = new FakeAuthClient({
+      accounts: [a1, a2],
+      tokens: new Map([
+        [a1.homeAccountId, tok(a1)],
+        [a2.homeAccountId, tok(a2)],
+      ]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+    const onTickComplete = vi.fn();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+      onTickComplete,
+    });
+    await scheduler.runOnce();
+
+    expect(onTickComplete).toHaveBeenCalledTimes(1);
+    const summary = onTickComplete.mock.calls[0]![0] as {
+      accounts: number;
+      okCount: number;
+      errorCount: number;
+    };
+    expect(summary.accounts).toBe(2);
+    expect(summary.okCount).toBe(1);
+    expect(summary.errorCount).toBe(1);
+    // Contract: callback fires after sync_log has been written
+    expect(store.syncLog).toHaveLength(2);
+  });
 });

@@ -74,13 +74,13 @@ describe("InMemoryFileSystem", () => {
     const events: string[] = [];
     fs.watch("/downloads", "WhatsApp Chat*.txt", (p) => events.push(p));
 
-    fs.trigger("/downloads/WhatsApp Chat - Eric.txt");
+    fs.trigger("/downloads/WhatsApp Chat - Alice.txt");
     fs.trigger("/downloads/WhatsApp Chat with Team.txt");
     fs.trigger("/downloads/notes.txt");
     fs.trigger("/downloads/WhatsApp Chat with Team.zip");
 
     expect(events).toEqual([
-      "/downloads/WhatsApp Chat - Eric.txt",
+      "/downloads/WhatsApp Chat - Alice.txt",
       "/downloads/WhatsApp Chat with Team.txt",
     ]);
   });

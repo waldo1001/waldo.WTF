@@ -21,7 +21,13 @@
       "Bash(git push:*)",
       "Bash(xargs -I {} basename {})",
       "Bash(awk 'END{print NR}' /Users/waldo/SourceCode/Community/waldo.WTF/src/sync/sync-teams.test.ts)",
-      "Bash(echo \"exit=$?\")"
+      "Bash(echo \"exit=$?\")",
+      "Bash(ls /Users/waldo/SourceCode/Community/waldo.WTF/src/*.test.ts)",
+      "Bash(npx tsx:*)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8765/health)",
+      "Bash(kill %1)",
+      "Bash(pkill -f \"tsx src/index.ts\")",
+      "Bash(curl -s -o /dev/null -w \"health: %{http_code}\\\\n\" http://localhost:8765/health)"
     ],
     "additionalDirectories": [
       "/tmp"

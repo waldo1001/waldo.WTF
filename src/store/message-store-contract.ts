@@ -267,9 +267,9 @@ export function runMessageStoreContract(
     it("searchMessages finds a message by a senderName term", async () => {
       const { store } = await factory();
       await store.upsertMessages([
-        msg({ id: "1", senderName: "Eric Wauters", body: "hello" }),
+        msg({ id: "1", senderName: "Alice Example", body: "hello" }),
       ]);
-      const hits = await store.searchMessages("Wauters", 10);
+      const hits = await store.searchMessages("Example", 10);
       expect(hits.map((h) => h.message.id)).toEqual(["1"]);
     });
 

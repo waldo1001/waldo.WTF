@@ -18,20 +18,40 @@ import {
   SyncScheduler,
   type SetTimerFn,
   type TimerHandle,
+  type TickSummary,
 } from "./sync/sync-scheduler.js";
 import { createMcpHttpServer } from "./mcp/http-server.js";
+import { consoleLogger, type Logger } from "./logger.js";
 import type { Server } from "node:http";
+
+export interface MainOverrides {
+  readonly auth?: AuthClient;
+  readonly graph?: GraphClient;
+  readonly teams?: TeamsClient;
+  readonly store?: MessageStore;
+  readonly setTimer?: SetTimerFn;
+  readonly logger?: Logger;
+}
 
 export interface MainOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly loadDotenv?: boolean;
+  readonly overrides?: MainOverrides;
 }
 
 export interface MainResult {
   readonly config: Config;
   readonly scheduler: SyncScheduler;
   readonly httpServer: Server;
-  readonly shutdown: () => Promise<void>;
+  shutdown: () => Promise<void>;
+}
+
+export interface Signals {
+  on(signal: "SIGINT" | "SIGTERM", handler: () => void): void;
+}
+
+export interface RunFromCliOptions extends MainOptions {
+  readonly signals?: Signals;
 }
 
 const nodeFileSystem: FileSystem = {
@@ -58,30 +78,47 @@ const nodeSetTimer: SetTimerFn = (fn, ms): TimerHandle => {
   return { clear: () => clearInterval(h) };
 };
 
+/* c8 ignore next 6 -- default process signal seam, exercised only at runtime */
+const nodeSignals: Signals = {
+  on(signal, handler) {
+    process.on(signal, handler);
+  },
+};
+
 export async function main(opts: MainOptions = {}): Promise<MainResult> {
   if (opts.loadDotenv !== false && !opts.env) {
     loadDotenv();
   }
   const env = opts.env ?? process.env;
   const config = loadConfig(env);
+  const overrides = opts.overrides ?? {};
+  const logger = overrides.logger ?? consoleLogger;
 
   const clock: Clock = systemClock;
   const cacheStore = new TokenCacheStore({
     fs: nodeFileSystem,
     path: path.join(config.authDir, "token-cache.json"),
   });
-  const auth: AuthClient = new MsalAuthClient({
-    clientId: config.msClientId,
-    cacheStore,
-  });
-  const db = openDatabase(config.dbPath);
-  const store: MessageStore = new SqliteMessageStore(db);
-  const graph: GraphClient = new HttpGraphClient({
-    fetch: (input, init) => globalThis.fetch(input, init),
-  });
-  const teams: TeamsClient = new HttpTeamsClient({
-    fetch: (input, init) => globalThis.fetch(input, init),
-  });
+  const auth: AuthClient =
+    overrides.auth ??
+    new MsalAuthClient({
+      clientId: config.msClientId,
+      cacheStore,
+    });
+  const ownsDb = overrides.store === undefined;
+  const db = ownsDb ? openDatabase(config.dbPath) : null;
+  const store: MessageStore =
+    overrides.store ?? new SqliteMessageStore(db!);
+  const graph: GraphClient =
+    overrides.graph ??
+    new HttpGraphClient({
+      fetch: (input, init) => globalThis.fetch(input, init),
+    });
+  const teams: TeamsClient =
+    overrides.teams ??
+    new HttpTeamsClient({
+      fetch: (input, init) => globalThis.fetch(input, init),
+    });
 
   const scheduler = new SyncScheduler({
     auth,
@@ -89,8 +126,14 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
     teams,
     store,
     clock,
-    setTimer: nodeSetTimer,
+    setTimer: overrides.setTimer ?? nodeSetTimer,
     intervalMs: config.syncIntervalMs,
+    onTickComplete: (summary: TickSummary) => {
+      logger.info(
+        `sync tick complete: ${summary.accounts} account(s), ` +
+          `${summary.okCount} ok, ${summary.errorCount} error(s)`,
+      );
+    },
   });
 
   const httpServer = createMcpHttpServer({
@@ -101,14 +144,49 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
   await new Promise<void>((resolve) => {
     httpServer.listen(config.port, "127.0.0.1", () => resolve());
   });
+  logger.info(
+    `waldo.WTF MCP server listening on http://127.0.0.1:${config.port}`,
+  );
+  logger.info("starting initial sync tick (this may take a while on first run)");
 
+  await scheduler.start();
+
+  let shuttingDown = false;
   const shutdown = async (): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     scheduler.stop();
     await new Promise<void>((resolve, reject) => {
       httpServer.close((err) => (err ? reject(err) : resolve()));
     });
-    db.close();
+    if (ownsDb && db !== null) db.close();
   };
 
   return { config, scheduler, httpServer, shutdown };
+}
+
+export async function runFromCli(
+  opts: RunFromCliOptions = {},
+): Promise<MainResult> {
+  const logger = opts.overrides?.logger ?? consoleLogger;
+  const signals = opts.signals ?? nodeSignals;
+
+  const result = await main(opts);
+
+  const onSignal = (name: string) => () => {
+    logger.info(`received ${name}, shutting down`);
+    void result.shutdown();
+  };
+  signals.on("SIGINT", onSignal("SIGINT"));
+  signals.on("SIGTERM", onSignal("SIGTERM"));
+
+  return result;
+}
+
+/* c8 ignore next 4 -- direct-run guard, exercised only by `tsx src/index.ts` */
+const isDirectRun =
+  import.meta.url === `file://${process.argv[1]}` ||
+  process.argv[1]?.endsWith("/src/index.ts") === true;
+if (isDirectRun) {
+  void runFromCli();
 }
