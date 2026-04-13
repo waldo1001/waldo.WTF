@@ -1,4 +1,10 @@
-import type { Message, MessageSource, SyncStateEntry } from "./types.js";
+import type {
+  AccountRecord,
+  Message,
+  MessageSource,
+  SyncLogEntry,
+  SyncStateEntry,
+} from "./types.js";
 
 export interface UpsertResult {
   readonly added: number;
@@ -17,4 +23,7 @@ export interface MessageStore {
     source: MessageSource,
   ): Promise<SyncStateEntry | null>;
   setSyncState(entry: SyncStateEntry): Promise<void>;
+  appendSyncLog(entry: SyncLogEntry): Promise<void>;
+  upsertAccount(account: AccountRecord): Promise<void>;
+  listAccounts(): Promise<readonly AccountRecord[]>;
 }

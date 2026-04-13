@@ -60,7 +60,8 @@ Scaffold **in-place** in this repo (`/Users/waldo/SourceCode/Community/waldo.WTF
   - [x] Auth seam: `AuthClient` interface, `FakeAuthClient`, `TokenCacheStore` (fs-backed, atomic write, mode 0o600) — 2026-04-13. Real MSAL adapter still pending.
   - [x] Store seam: `Message`/`SyncStateEntry` types (mirror brief §5), `MessageStore` interface (`upsertMessages`, `deleteMessages`, `get`/`setSyncState`), `InMemoryMessageStore` fake — 2026-04-13.
   - [x] Real `SqliteMessageStore` (`better-sqlite3`, `messages` + `sync_state` tables, WAL via `openDatabase`, transactional upserts) — 2026-04-13. `accounts` / `sync_log` / FTS5 / query ops still pending.
-- [ ] Real schema (full `messages` table incl. `raw_json`, `sync_state`, `sync_log`, `accounts`, FTS5)
+  - [x] `accounts` + `sync_log` tables behind `PRAGMA user_version=1` migration ([src/store/schema.ts](src/store/schema.ts)); `MessageStore` extended with `appendSyncLog` / `upsertAccount` / `listAccounts` on both impls — 2026-04-13. FTS5 still pending (slice 9).
+- [ ] Real schema (full `messages` table incl. `raw_json`, `sync_state`, `sync_log`, `accounts`, FTS5) — `messages` + `sync_state` + `sync_log` + `accounts` real; FTS5 still pending
 - [ ] 5-minute sync loop writing to `sync_log`
 - [ ] Skeleton HTTP MCP server (transport only, no tools yet)
 - [ ] `.env`: `MS_CLIENT_ID`, `BEARER_TOKEN`

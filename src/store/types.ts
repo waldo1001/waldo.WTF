@@ -24,6 +24,24 @@ export interface SyncStateEntry {
   readonly lastSyncAt?: Date;
 }
 
+export type SyncLogStatus = "ok" | "error";
+
+export interface SyncLogEntry {
+  readonly ts: Date;
+  readonly account: string;
+  readonly source: MessageSource;
+  readonly status: SyncLogStatus;
+  readonly messagesAdded?: number;
+  readonly errorMessage?: string;
+}
+
+export interface AccountRecord {
+  readonly username: string;
+  readonly displayName?: string;
+  readonly tenantId?: string;
+  readonly addedAt: Date;
+}
+
 export type StoreErrorKind = "not-found" | "conflict" | "corrupt";
 
 export class StoreError extends Error {

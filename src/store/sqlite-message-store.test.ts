@@ -4,10 +4,35 @@ import { runMessageStoreContract } from "./message-store-contract.js";
 import { SqliteMessageStore } from "./sqlite-message-store.js";
 import type { Message } from "./types.js";
 
-runMessageStoreContract(
-  "SqliteMessageStore",
-  () => new SqliteMessageStore(new Database(":memory:")),
-);
+runMessageStoreContract("SqliteMessageStore", () => {
+  const db = new Database(":memory:");
+  const store = new SqliteMessageStore(db);
+  return {
+    store,
+    readSyncLog: () => {
+      const rows = db
+        .prepare(
+          "SELECT ts, account, source, status, messages_added, error_message FROM sync_log ORDER BY ts ASC",
+        )
+        .all() as {
+        ts: number;
+        account: string;
+        source: string;
+        status: string;
+        messages_added: number | null;
+        error_message: string | null;
+      }[];
+      return rows.map((r) => ({
+        ts: new Date(r.ts),
+        account: r.account,
+        source: r.source as "outlook" | "teams" | "whatsapp",
+        status: r.status as "ok" | "error",
+        ...(r.messages_added !== null && { messagesAdded: r.messages_added }),
+        ...(r.error_message !== null && { errorMessage: r.error_message }),
+      }));
+    },
+  };
+});
 
 function baseMsg(id: string, overrides: Partial<Message> = {}): Message {
   return {
@@ -120,6 +145,24 @@ describe("SqliteMessageStore — sqlite-specific behavior", () => {
     expect(entry).not.toBeNull();
     expect(entry?.deltaToken).toBeUndefined();
     expect(entry?.lastSyncAt).toBeUndefined();
+  });
+
+  it("sync_log rows persist across re-construction over the same handle", async () => {
+    const db = new Database(":memory:");
+    const a = new SqliteMessageStore(db);
+    await a.appendSyncLog({
+      ts: new Date("2026-04-13T10:00:00Z"),
+      account: "a@example.test",
+      source: "outlook",
+      status: "ok",
+      messagesAdded: 7,
+    });
+
+    new SqliteMessageStore(db); // second construction must not wipe data
+    const count = (
+      db.prepare("SELECT COUNT(*) AS n FROM sync_log").get() as { n: number }
+    ).n;
+    expect(count).toBe(1);
   });
 
   it("isRead boolean round-trips through INTEGER column", async () => {

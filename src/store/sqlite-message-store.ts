@@ -4,37 +4,14 @@ import type {
   MessageStore,
   UpsertResult,
 } from "./message-store.js";
-import type { Message, MessageSource, SyncStateEntry } from "./types.js";
-
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS messages (
-  id TEXT PRIMARY KEY,
-  source TEXT NOT NULL,
-  account TEXT NOT NULL,
-  native_id TEXT NOT NULL,
-  thread_id TEXT,
-  thread_name TEXT,
-  sender_name TEXT,
-  sender_email TEXT,
-  sent_at INTEGER NOT NULL,
-  imported_at INTEGER NOT NULL,
-  is_read INTEGER,
-  body TEXT,
-  body_html TEXT,
-  raw_json TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_messages_sent_at ON messages(sent_at DESC);
-CREATE INDEX IF NOT EXISTS idx_messages_account_source
-  ON messages(account, source);
-
-CREATE TABLE IF NOT EXISTS sync_state (
-  account TEXT NOT NULL,
-  source TEXT NOT NULL,
-  delta_token TEXT,
-  last_sync_at INTEGER,
-  PRIMARY KEY (account, source)
-);
-`;
+import { applyMigrations } from "./schema.js";
+import type {
+  AccountRecord,
+  Message,
+  MessageSource,
+  SyncLogEntry,
+  SyncStateEntry,
+} from "./types.js";
 
 interface MessageRow {
   id: string;
@@ -60,6 +37,13 @@ interface SyncStateRow {
   last_sync_at: number | null;
 }
 
+interface AccountRow {
+  username: string;
+  display_name: string | null;
+  tenant_id: string | null;
+  added_at: number;
+}
+
 const nullable = <T>(value: T | undefined): T | null =>
   value === undefined ? null : value;
 
@@ -76,9 +60,16 @@ export class SqliteMessageStore implements MessageStore {
   private readonly setSyncStmt: Statement<
     [string, string, string | null, number | null]
   >;
+  private readonly appendSyncLogStmt: Statement<
+    [number, string, string, string, number | null, string | null]
+  >;
+  private readonly upsertAccountStmt: Statement<
+    [string, string | null, string | null, number]
+  >;
+  private readonly listAccountsStmt: Statement<[]>;
 
   constructor(private readonly db: Database) {
-    db.exec(SCHEMA);
+    applyMigrations(db);
 
     this.existsStmt = db.prepare("SELECT 1 FROM messages WHERE id = ?");
     this.upsertStmt = db.prepare(`
@@ -117,6 +108,21 @@ export class SqliteMessageStore implements MessageStore {
         delta_token = excluded.delta_token,
         last_sync_at = excluded.last_sync_at
     `);
+    this.appendSyncLogStmt = db.prepare(`
+      INSERT INTO sync_log (ts, account, source, status, messages_added, error_message)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    this.upsertAccountStmt = db.prepare(`
+      INSERT INTO accounts (username, display_name, tenant_id, added_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(username) DO UPDATE SET
+        display_name = excluded.display_name,
+        tenant_id = excluded.tenant_id,
+        added_at = excluded.added_at
+    `);
+    this.listAccountsStmt = db.prepare(
+      "SELECT username, display_name, tenant_id, added_at FROM accounts ORDER BY added_at ASC, username ASC",
+    );
   }
 
   async upsertMessages(messages: readonly Message[]): Promise<UpsertResult> {
@@ -181,6 +187,36 @@ export class SqliteMessageStore implements MessageStore {
       entry.lastSyncAt === undefined ? null : entry.lastSyncAt.getTime(),
     );
   }
+
+  async appendSyncLog(entry: SyncLogEntry): Promise<void> {
+    this.appendSyncLogStmt.run(
+      entry.ts.getTime(),
+      entry.account,
+      entry.source,
+      entry.status,
+      nullable(entry.messagesAdded),
+      nullable(entry.errorMessage),
+    );
+  }
+
+  async upsertAccount(account: AccountRecord): Promise<void> {
+    this.upsertAccountStmt.run(
+      account.username,
+      nullable(account.displayName),
+      nullable(account.tenantId),
+      account.addedAt.getTime(),
+    );
+  }
+
+  async listAccounts(): Promise<readonly AccountRecord[]> {
+    const rows = this.listAccountsStmt.all() as AccountRow[];
+    return rows.map((r) => ({
+      username: r.username,
+      ...(r.display_name !== null && { displayName: r.display_name }),
+      ...(r.tenant_id !== null && { tenantId: r.tenant_id }),
+      addedAt: new Date(r.added_at),
+    }));
+  }
 }
 
 function toRow(m: Message): MessageRow {
@@ -201,4 +237,3 @@ function toRow(m: Message): MessageRow {
     raw_json: nullable(m.rawJson),
   };
 }
-

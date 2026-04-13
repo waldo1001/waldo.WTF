@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { MessageStore } from "./message-store.js";
-import type { Message, SyncStateEntry } from "./types.js";
+import type {
+  AccountRecord,
+  Message,
+  SyncLogEntry,
+  SyncStateEntry,
+} from "./types.js";
 
 function msg(overrides: Partial<Message> & Pick<Message, "id">): Message {
   return {
@@ -13,13 +18,22 @@ function msg(overrides: Partial<Message> & Pick<Message, "id">): Message {
   };
 }
 
+export interface MessageStoreTestHarness {
+  readonly store: MessageStore;
+  readSyncLog(): readonly SyncLogEntry[];
+}
+
+export type MessageStoreFactory = () =>
+  | MessageStoreTestHarness
+  | Promise<MessageStoreTestHarness>;
+
 export function runMessageStoreContract(
   label: string,
-  factory: () => MessageStore | Promise<MessageStore>,
+  factory: MessageStoreFactory,
 ): void {
   describe(`MessageStore contract (${label})`, () => {
     it("upsertMessages on an empty store adds all rows", async () => {
-      const store = await factory();
+      const { store } = await factory();
       const result = await store.upsertMessages([
         msg({ id: "1" }),
         msg({ id: "2" }),
@@ -29,7 +43,7 @@ export function runMessageStoreContract(
     });
 
     it("upsertMessages updates an existing id in place", async () => {
-      const store = await factory();
+      const { store } = await factory();
       await store.upsertMessages([msg({ id: "1", body: "first" })]);
       const result = await store.upsertMessages([
         msg({ id: "1", body: "second" }),
@@ -38,7 +52,7 @@ export function runMessageStoreContract(
     });
 
     it("upsertMessages reports mixed added/updated counts", async () => {
-      const store = await factory();
+      const { store } = await factory();
       await store.upsertMessages([msg({ id: "1" }), msg({ id: "2" })]);
       const result = await store.upsertMessages([
         msg({ id: "2" }),
@@ -49,13 +63,13 @@ export function runMessageStoreContract(
     });
 
     it("upsertMessages with empty array is a no-op", async () => {
-      const store = await factory();
+      const { store } = await factory();
       const result = await store.upsertMessages([]);
       expect(result).toEqual({ added: 0, updated: 0 });
     });
 
     it("deleteMessages removes listed ids and returns actual deleted count", async () => {
-      const store = await factory();
+      const { store } = await factory();
       await store.upsertMessages([
         msg({ id: "1" }),
         msg({ id: "2" }),
@@ -68,18 +82,18 @@ export function runMessageStoreContract(
     });
 
     it("deleteMessages with empty array is a no-op", async () => {
-      const store = await factory();
+      const { store } = await factory();
       const result = await store.deleteMessages([]);
       expect(result).toEqual({ deleted: 0 });
     });
 
     it("getSyncState returns null when no entry exists", async () => {
-      const store = await factory();
+      const { store } = await factory();
       expect(await store.getSyncState("a@example.test", "outlook")).toBeNull();
     });
 
     it("setSyncState then getSyncState round-trips the entry", async () => {
-      const store = await factory();
+      const { store } = await factory();
       const entry: SyncStateEntry = {
         account: "a@example.test",
         source: "outlook",
@@ -93,7 +107,7 @@ export function runMessageStoreContract(
     });
 
     it("setSyncState overwrites an existing entry for the same key", async () => {
-      const store = await factory();
+      const { store } = await factory();
       await store.setSyncState({
         account: "a@example.test",
         source: "outlook",
@@ -109,7 +123,7 @@ export function runMessageStoreContract(
     });
 
     it("sync state is isolated by (account, source) pair", async () => {
-      const store = await factory();
+      const { store } = await factory();
       await store.setSyncState({
         account: "a@example.test",
         source: "outlook",
@@ -134,6 +148,96 @@ export function runMessageStoreContract(
       expect(
         (await store.getSyncState("b@example.test", "outlook"))?.deltaToken,
       ).toBe("B-out");
+    });
+
+    it("appendSyncLog round-trips an ok entry with messagesAdded", async () => {
+      const harness = await factory();
+      const entry: SyncLogEntry = {
+        ts: new Date("2026-04-13T10:00:00Z"),
+        account: "a@example.test",
+        source: "outlook",
+        status: "ok",
+        messagesAdded: 5,
+      };
+      await harness.store.appendSyncLog(entry);
+      const rows = harness.readSyncLog();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toEqual(entry);
+      expect(rows[0]?.errorMessage).toBeUndefined();
+    });
+
+    it("appendSyncLog round-trips an error entry with errorMessage", async () => {
+      const harness = await factory();
+      const entry: SyncLogEntry = {
+        ts: new Date("2026-04-13T10:05:00Z"),
+        account: "a@example.test",
+        source: "teams",
+        status: "error",
+        errorMessage: "graph 429",
+      };
+      await harness.store.appendSyncLog(entry);
+      const rows = harness.readSyncLog();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toEqual(entry);
+      expect(rows[0]?.messagesAdded).toBeUndefined();
+    });
+
+    it("upsertAccount inserts a new account visible to listAccounts", async () => {
+      const { store } = await factory();
+      const account: AccountRecord = {
+        username: "a@example.test",
+        displayName: "Eric",
+        tenantId: "tenant-1",
+        addedAt: new Date("2026-04-13T08:00:00Z"),
+      };
+      await store.upsertAccount(account);
+      expect(await store.listAccounts()).toEqual([account]);
+    });
+
+    it("upsertAccount updates an existing username in place", async () => {
+      const { store } = await factory();
+      await store.upsertAccount({
+        username: "a@example.test",
+        displayName: "Old",
+        addedAt: new Date("2026-04-13T08:00:00Z"),
+      });
+      await store.upsertAccount({
+        username: "a@example.test",
+        displayName: "New",
+        tenantId: "tenant-2",
+        addedAt: new Date("2026-04-13T08:00:00Z"),
+      });
+      const rows = await store.listAccounts();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.displayName).toBe("New");
+      expect(rows[0]?.tenantId).toBe("tenant-2");
+    });
+
+    it("listAccounts returns rows ordered by addedAt ASC, tie-break by username", async () => {
+      const { store } = await factory();
+      await store.upsertAccount({
+        username: "b@example.test",
+        addedAt: new Date("2026-04-13T09:00:00Z"),
+      });
+      await store.upsertAccount({
+        username: "a@example.test",
+        addedAt: new Date("2026-04-13T08:00:00Z"),
+      });
+      await store.upsertAccount({
+        username: "c@example.test",
+        addedAt: new Date("2026-04-13T08:00:00Z"),
+      });
+      const rows = await store.listAccounts();
+      expect(rows.map((r) => r.username)).toEqual([
+        "a@example.test",
+        "c@example.test",
+        "b@example.test",
+      ]);
+    });
+
+    it("listAccounts on an empty store returns []", async () => {
+      const { store } = await factory();
+      expect(await store.listAccounts()).toEqual([]);
     });
   });
 }
