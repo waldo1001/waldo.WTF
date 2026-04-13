@@ -1,6 +1,7 @@
 import type { Database, Statement } from "better-sqlite3";
 import type {
   DeleteResult,
+  GetRecentMessagesOptions,
   MessageStore,
   UpsertResult,
 } from "./message-store.js";
@@ -230,6 +231,37 @@ export class SqliteMessageStore implements MessageStore {
       ...(r.tenant_id !== null && { tenantId: r.tenant_id }),
       addedAt: new Date(r.added_at),
     }));
+  }
+
+  async getRecentMessages(
+    opts: GetRecentMessagesOptions,
+  ): Promise<readonly Message[]> {
+    const clauses: string[] = ["sent_at >= ?"];
+    const params: (string | number)[] = [opts.since.getTime()];
+    if (opts.sources && opts.sources.length > 0) {
+      clauses.push(
+        `source IN (${opts.sources.map(() => "?").join(", ")})`,
+      );
+      params.push(...opts.sources);
+    }
+    if (opts.accounts && opts.accounts.length > 0) {
+      clauses.push(
+        `account IN (${opts.accounts.map(() => "?").join(", ")})`,
+      );
+      params.push(...opts.accounts);
+    }
+    params.push(opts.limit);
+    const sql = `
+      SELECT id, source, account, native_id,
+             thread_id, thread_name, sender_name, sender_email,
+             sent_at, imported_at, is_read, body, body_html, raw_json
+      FROM messages
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY sent_at DESC, id DESC
+      LIMIT ?
+    `;
+    const rows = this.db.prepare(sql).all(...params) as MessageRow[];
+    return rows.map(fromRow);
   }
 
   async searchMessages(

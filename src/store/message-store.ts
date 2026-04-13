@@ -16,6 +16,13 @@ export interface DeleteResult {
   readonly deleted: number;
 }
 
+export interface GetRecentMessagesOptions {
+  readonly since: Date;
+  readonly sources?: readonly MessageSource[];
+  readonly accounts?: readonly string[];
+  readonly limit: number;
+}
+
 export interface MessageStore {
   upsertMessages(messages: readonly Message[]): Promise<UpsertResult>;
   deleteMessages(ids: readonly string[]): Promise<DeleteResult>;
@@ -28,4 +35,7 @@ export interface MessageStore {
   upsertAccount(account: AccountRecord): Promise<void>;
   listAccounts(): Promise<readonly AccountRecord[]>;
   searchMessages(query: string, limit: number): Promise<readonly SearchHit[]>;
+  getRecentMessages(
+    opts: GetRecentMessagesOptions,
+  ): Promise<readonly Message[]>;
 }

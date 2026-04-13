@@ -71,10 +71,10 @@ Scaffold **in-place** in this repo (`/Users/waldo/SourceCode/Community/waldo.WTF
 
 ## Weekend 3 — First MCP tools + Claude Desktop wiring
 
-- [ ] `@modelcontextprotocol/sdk` installed
-- [ ] `get_recent_activity(hours, sources?, accounts?)`
+- [ ] `@modelcontextprotocol/sdk` installed (deferred — using hand-rolled JSON-RPC 2.0 on `POST /` until 2–3 tools exist)
+- [x] `get_recent_activity(hours, sources?, accounts?)` — 2026-04-13. Handler in [src/mcp/tools/get-recent-activity.ts](src/mcp/tools/get-recent-activity.ts); backed by new `MessageStore.getRecentMessages`; JSON-RPC dispatch wired into [src/mcp/http-server.ts](src/mcp/http-server.ts). 30 new tests, 201 total.
 - [ ] `get_sync_status()`
-- [ ] Bearer token middleware
+- [x] Bearer token middleware — Weekend 2 slice 10 (pre-existing; still in effect for `POST /`).
 - [ ] Wired into Claude Desktop (`http://localhost:PORT`)
 - [ ] End-to-end test: *"summarize my mail from the last 24 hours"*
 - [ ] `search` tool (FTS5)

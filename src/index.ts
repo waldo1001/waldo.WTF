@@ -87,7 +87,11 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
     intervalMs: config.syncIntervalMs,
   });
 
-  const httpServer = createMcpHttpServer({ bearerToken: config.bearerToken });
+  const httpServer = createMcpHttpServer({
+    bearerToken: config.bearerToken,
+    store,
+    clock,
+  });
   await new Promise<void>((resolve) => {
     httpServer.listen(config.port, "127.0.0.1", () => resolve());
   });

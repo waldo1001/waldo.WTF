@@ -52,13 +52,13 @@ Full architecture and decision rationale: [project brief §3–4](waldo.WTF-proj
 
 ## Status
 
-Weekend 2 closing. TypeScript project scaffolded, all core seams
-(clock, fs, Graph, auth, store, sync, HTTP) landed behind unit tests,
-and `main()` wires real MSAL + SQLite + a skeleton `node:http` MCP
-transport shell. The one deferred piece is the real Graph HTTP
-adapter — until it lands, `main()` wires a `NotImplementedGraph`
-stub. Next: real Graph client, then Weekend 3 MCP tools
-(`get_recent_activity`, `search`, `get_sync_status`).
+Weekend 3 underway. Weekend 2 closed with all core seams in place and
+`main()` wiring real MSAL + SQLite + `HttpGraphClient` behind the
+`node:http` transport shell. Weekend 3 has lit up the first MCP tool
+`get_recent_activity(hours, sources?, accounts?)` via a hand-rolled
+JSON-RPC 2.0 dispatch on `POST /` (adopting `@modelcontextprotocol/sdk`
+is deferred until 2–3 tools exist). Next: `get_sync_status`, `search`
+(FTS5), and Claude Desktop wiring.
 
 Live progress: [PROGRESS.md](PROGRESS.md). Recent changes:
 [docs/changelog.md](docs/changelog.md).

@@ -292,5 +292,104 @@ export function runMessageStoreContract(
       expect(await store.searchMessages("", 10)).toEqual([]);
       expect(await store.searchMessages("   ", 10)).toEqual([]);
     });
+
+    it("getRecentMessages returns [] on an empty store", async () => {
+      const { store } = await factory();
+      const got = await store.getRecentMessages({
+        since: new Date("2026-04-13T00:00:00Z"),
+        limit: 50,
+      });
+      expect(got).toEqual([]);
+    });
+
+    it("getRecentMessages filters out messages older than since", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({ id: "old", sentAt: new Date("2026-04-10T12:00:00Z") }),
+        msg({ id: "edge", sentAt: new Date("2026-04-13T00:00:00Z") }),
+        msg({ id: "new", sentAt: new Date("2026-04-13T09:00:00Z") }),
+      ]);
+      const got = await store.getRecentMessages({
+        since: new Date("2026-04-13T00:00:00Z"),
+        limit: 50,
+      });
+      expect(got.map((m) => m.id).sort()).toEqual(["edge", "new"]);
+    });
+
+    it("getRecentMessages orders by sentAt DESC with id DESC tiebreak", async () => {
+      const { store } = await factory();
+      const ts = new Date("2026-04-13T10:00:00Z");
+      await store.upsertMessages([
+        msg({ id: "a", sentAt: ts }),
+        msg({ id: "b", sentAt: ts }),
+        msg({ id: "c", sentAt: new Date("2026-04-13T11:00:00Z") }),
+      ]);
+      const got = await store.getRecentMessages({
+        since: new Date("2026-04-13T00:00:00Z"),
+        limit: 50,
+      });
+      expect(got.map((m) => m.id)).toEqual(["c", "b", "a"]);
+    });
+
+    it("getRecentMessages filters by sources", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({ id: "1", source: "outlook" }),
+        msg({ id: "2", source: "teams" }),
+        msg({ id: "3", source: "whatsapp" }),
+      ]);
+      const got = await store.getRecentMessages({
+        since: new Date("2026-04-01T00:00:00Z"),
+        sources: ["teams", "whatsapp"],
+        limit: 50,
+      });
+      expect(got.map((m) => m.id).sort()).toEqual(["2", "3"]);
+    });
+
+    it("getRecentMessages filters by accounts", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({ id: "1", account: "a@example.test" }),
+        msg({ id: "2", account: "b@example.test" }),
+        msg({ id: "3", account: "c@example.test" }),
+      ]);
+      const got = await store.getRecentMessages({
+        since: new Date("2026-04-01T00:00:00Z"),
+        accounts: ["a@example.test", "c@example.test"],
+        limit: 50,
+      });
+      expect(got.map((m) => m.id).sort()).toEqual(["1", "3"]);
+    });
+
+    it("getRecentMessages applies sources and accounts together", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({ id: "1", source: "outlook", account: "a@example.test" }),
+        msg({ id: "2", source: "teams", account: "a@example.test" }),
+        msg({ id: "3", source: "outlook", account: "b@example.test" }),
+      ]);
+      const got = await store.getRecentMessages({
+        since: new Date("2026-04-01T00:00:00Z"),
+        sources: ["outlook"],
+        accounts: ["a@example.test"],
+        limit: 50,
+      });
+      expect(got.map((m) => m.id)).toEqual(["1"]);
+    });
+
+    it("getRecentMessages honours the limit", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({ id: "1", sentAt: new Date("2026-04-13T01:00:00Z") }),
+        msg({ id: "2", sentAt: new Date("2026-04-13T02:00:00Z") }),
+        msg({ id: "3", sentAt: new Date("2026-04-13T03:00:00Z") }),
+        msg({ id: "4", sentAt: new Date("2026-04-13T04:00:00Z") }),
+      ]);
+      const got = await store.getRecentMessages({
+        since: new Date("2026-04-01T00:00:00Z"),
+        limit: 2,
+      });
+      expect(got.map((m) => m.id)).toEqual(["4", "3"]);
+    });
   });
 }

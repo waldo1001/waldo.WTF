@@ -1,5 +1,6 @@
 import type {
   DeleteResult,
+  GetRecentMessagesOptions,
   MessageStore,
   UpsertResult,
 } from "../store/message-store.js";
@@ -20,7 +21,8 @@ export type InMemoryMessageStoreCall =
   | { method: "appendSyncLog"; entry: SyncLogEntry }
   | { method: "upsertAccount"; account: AccountRecord }
   | { method: "listAccounts" }
-  | { method: "searchMessages"; query: string; limit: number };
+  | { method: "searchMessages"; query: string; limit: number }
+  | { method: "getRecentMessages"; opts: GetRecentMessagesOptions };
 
 export interface InMemoryMessageStoreOptions {
   seed?: {
@@ -120,5 +122,29 @@ export class InMemoryMessageStore implements MessageStore {
     }
     hits.sort((a, b) => b.message.sentAt.getTime() - a.message.sentAt.getTime());
     return hits.slice(0, limit);
+  }
+
+  async getRecentMessages(
+    opts: GetRecentMessagesOptions,
+  ): Promise<readonly Message[]> {
+    this.calls.push({ method: "getRecentMessages", opts });
+    const sinceMs = opts.since.getTime();
+    const sources =
+      opts.sources && opts.sources.length > 0 ? new Set(opts.sources) : null;
+    const accounts =
+      opts.accounts && opts.accounts.length > 0 ? new Set(opts.accounts) : null;
+    const rows: Message[] = [];
+    for (const m of this.messages.values()) {
+      if (m.sentAt.getTime() < sinceMs) continue;
+      if (sources !== null && !sources.has(m.source)) continue;
+      if (accounts !== null && !accounts.has(m.account)) continue;
+      rows.push(m);
+    }
+    rows.sort((a, b) => {
+      const t = b.sentAt.getTime() - a.sentAt.getTime();
+      if (t !== 0) return t;
+      return b.id.localeCompare(a.id);
+    });
+    return rows.slice(0, opts.limit);
   }
 }
