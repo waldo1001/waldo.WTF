@@ -1,0 +1,131 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { config as loadDotenv } from "dotenv";
+import { loadConfig } from "./config.js";
+import { MsalAuthClient } from "./auth/msal-auth-client.js";
+import { TokenCacheStore } from "./auth/token-cache-store.js";
+import type { AuthClient } from "./auth/auth-client.js";
+import type { Account } from "./auth/types.js";
+import type { FileSystem } from "./fs.js";
+import { main, type MainOptions, type MainResult } from "./index.js";
+
+export type Env = Readonly<Record<string, string | undefined>>;
+export type PrintFn = (message: string) => void;
+
+export class CliUsageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CliUsageError";
+  }
+}
+
+export interface AddAccountOptions {
+  readonly env?: Env;
+  readonly loadDotenv?: boolean;
+  readonly auth?: AuthClient;
+  readonly print?: PrintFn;
+}
+
+export interface RunCliOptions extends AddAccountOptions {
+  readonly mainImpl?: (opts: MainOptions) => Promise<MainResult>;
+}
+
+export type RunCliResult =
+  | { readonly mode: "add-account"; readonly account: Account }
+  | { readonly mode: "server"; readonly main: MainResult };
+
+const KNOWN_FLAGS = new Set(["--add-account"]);
+
+function resolveEnv(opts: AddAccountOptions): Env {
+  /* c8 ignore next -- dotenv side-effect, loaded only in production */
+  if (opts.loadDotenv !== false && !opts.env) loadDotenv();
+  return opts.env ?? process.env;
+}
+
+/* c8 ignore start -- real filesystem + MSAL adapter, exercised only via live smoke */
+const nodeFileSystem: FileSystem = {
+  async readFile(p) {
+    return fs.readFile(p);
+  },
+  async writeFile(p, data, mode) {
+    await fs.mkdir(path.dirname(p), { recursive: true });
+    await fs.writeFile(p, data, { mode });
+  },
+  async rename(from, to) {
+    await fs.rename(from, to);
+  },
+  watch() {
+    throw new Error("not implemented: FileSystem.watch (cli stub)");
+  },
+  async listDir(p) {
+    return fs.readdir(p);
+  },
+};
+
+function buildRealAuth(env: Env): AuthClient {
+  const config = loadConfig(env);
+  const cacheStore = new TokenCacheStore({
+    fs: nodeFileSystem,
+    path: path.join(config.authDir, "token-cache.json"),
+  });
+  return new MsalAuthClient({
+    clientId: config.msClientId,
+    cacheStore,
+  });
+}
+/* c8 ignore stop */
+
+export async function addAccount(
+  opts: AddAccountOptions = {},
+): Promise<Account> {
+  const env = resolveEnv(opts);
+  loadConfig(env);
+  /* c8 ignore next -- default console.log path, only in production */
+  const print: PrintFn = opts.print ?? ((m) => console.log(m));
+  /* c8 ignore next -- real MSAL adapter only constructed outside tests */
+  const auth = opts.auth ?? buildRealAuth(env);
+  return auth.loginWithDeviceCode((msg) => print(msg));
+}
+
+export async function runCli(
+  argv: readonly string[],
+  opts: RunCliOptions = {},
+): Promise<RunCliResult> {
+  for (const a of argv) {
+    if (!KNOWN_FLAGS.has(a)) {
+      throw new CliUsageError(
+        `Unknown flag: ${a}. Usage: waldo-wtf [--add-account]`,
+      );
+    }
+  }
+  if (argv.includes("--add-account")) {
+    const account = await addAccount(opts);
+    return { mode: "add-account", account };
+  }
+  const mainImpl = opts.mainImpl ?? main;
+  const mainOpts: MainOptions = {};
+  if (opts.env !== undefined) (mainOpts as { env?: Env }).env = opts.env;
+  if (opts.loadDotenv !== undefined)
+    (mainOpts as { loadDotenv?: boolean }).loadDotenv = opts.loadDotenv;
+  const result = await mainImpl(mainOpts);
+  return { mode: "server", main: result };
+}
+
+/* c8 ignore start -- process-level bootstrap, exercised only in production */
+const isMain =
+  typeof process !== "undefined" &&
+  process.argv[1] !== undefined &&
+  import.meta.url === `file://${process.argv[1]}`;
+if (isMain) {
+  runCli(process.argv.slice(2))
+    .then((r) => {
+      if (r.mode === "add-account") {
+        console.log(`Added account: ${r.account.username}`);
+      }
+    })
+    .catch((err) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    });
+}
+/* c8 ignore stop */
