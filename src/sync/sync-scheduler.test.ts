@@ -351,6 +351,45 @@ describe("SyncScheduler", () => {
     await firstRun;
   });
 
+  it("runOnce forwards backfillDays to both syncInbox and syncTeams (first-call filter URL)", async () => {
+    const a1 = acc("alice");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [{ kind: "ok", response: ok({ "@odata.deltaLink": "do" }) }],
+    });
+    const teams = new FakeTeamsClient({
+      steps: [
+        {
+          kind: "ok",
+          response: { value: [], "@odata.deltaLink": "dt" },
+        },
+      ],
+    });
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      teams,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+      backfillDays: 14,
+    });
+    await scheduler.runOnce();
+
+    expect(graph.calls[0]?.url).toContain("$filter=receivedDateTime%20ge%20");
+    expect(teams.calls[0]?.url).toContain(
+      "$filter=lastModifiedDateTime%20ge%20",
+    );
+  });
+
   it("runOnce invokes onTickComplete with the tick summary after sync_log writes", async () => {
     const a1 = acc("alice");
     const a2 = acc("bob");

@@ -128,6 +128,9 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
     clock,
     setTimer: overrides.setTimer ?? nodeSetTimer,
     intervalMs: config.syncIntervalMs,
+    ...(config.backfillDays !== undefined && {
+      backfillDays: config.backfillDays,
+    }),
     onTickComplete: (summary: TickSummary) => {
       logger.info(
         `sync tick complete: ${summary.accounts} account(s), ` +

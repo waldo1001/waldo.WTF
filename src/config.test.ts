@@ -124,6 +124,34 @@ describe("loadConfig", () => {
     }
   });
 
+  it("backfillDays is undefined when WALDO_BACKFILL_DAYS is unset", () => {
+    expect(loadConfig(validEnv()).backfillDays).toBeUndefined();
+  });
+
+  it("backfillDays parses WALDO_BACKFILL_DAYS as a positive integer", () => {
+    expect(
+      loadConfig({ ...validEnv(), WALDO_BACKFILL_DAYS: "30" }).backfillDays,
+    ).toBe(30);
+  });
+
+  it("throws ConfigError when WALDO_BACKFILL_DAYS is zero", () => {
+    expect(() =>
+      loadConfig({ ...validEnv(), WALDO_BACKFILL_DAYS: "0" }),
+    ).toThrow(ConfigError);
+  });
+
+  it("throws ConfigError when WALDO_BACKFILL_DAYS is negative", () => {
+    expect(() =>
+      loadConfig({ ...validEnv(), WALDO_BACKFILL_DAYS: "-5" }),
+    ).toThrow(ConfigError);
+  });
+
+  it("throws ConfigError when WALDO_BACKFILL_DAYS is non-numeric", () => {
+    expect(() =>
+      loadConfig({ ...validEnv(), WALDO_BACKFILL_DAYS: "abc" }),
+    ).toThrow(ConfigError);
+  });
+
   it("does not mutate the input env object", () => {
     const env = { ...validEnv() };
     const snapshot = JSON.stringify(env);

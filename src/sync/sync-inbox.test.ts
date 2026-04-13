@@ -354,6 +354,82 @@ describe("syncInbox", () => {
     expect(upserted?.rawJson).toBe(JSON.stringify(dto));
   });
 
+  it("first delta call with backfillDays composes a receivedDateTime filter from clock.now() minus N days", async () => {
+    const store = new InMemoryMessageStore();
+    const now = new Date("2026-04-13T12:00:00Z");
+    const clock = new FakeClock(now);
+    const graph = new FakeGraphClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({ value: [], "@odata.deltaLink": "d" }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncInbox({ account, auth, graph, store, clock, backfillDays: 30 });
+
+    const expectedIso = new Date(
+      now.getTime() - 30 * 86_400_000,
+    ).toISOString();
+    const expectedUrl =
+      `${DEFAULT_INBOX_DELTA_ENDPOINT}?$filter=` +
+      encodeURIComponent(`receivedDateTime ge ${expectedIso}`);
+    expect(graph.calls[0]?.url).toBe(expectedUrl);
+    // Sanity: encoded colons and no raw spaces in the query
+    expect(graph.calls[0]?.url).toContain("%3A");
+    expect(graph.calls[0]?.url).not.toContain(" ");
+  });
+
+  it("first delta call without backfillDays uses the unfiltered default endpoint", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const graph = new FakeGraphClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({ value: [], "@odata.deltaLink": "d" }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncInbox({ account, auth, graph, store, clock });
+
+    expect(graph.calls[0]?.url).toBe(DEFAULT_INBOX_DELTA_ENDPOINT);
+  });
+
+  it("subsequent delta call uses stored deltaLink and ignores backfillDays", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        syncState: [
+          {
+            account: account.username,
+            source: "outlook",
+            deltaToken: "https://graph/delta?token=prev",
+            lastSyncAt: new Date("2026-04-13T11:00:00Z"),
+          },
+        ],
+      },
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const graph = new FakeGraphClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({ value: [], "@odata.deltaLink": "d" }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncInbox({ account, auth, graph, store, clock, backfillDays: 30 });
+
+    expect(graph.calls[0]?.url).toBe("https://graph/delta?token=prev");
+    expect(graph.calls[0]?.url).not.toContain("$filter");
+  });
+
   it("does not upsert rawJson for @removed entries", async () => {
     const store = new InMemoryMessageStore();
     const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));

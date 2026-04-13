@@ -18,6 +18,7 @@ export interface SyncTeamsDeps {
   readonly store: MessageStore;
   readonly clock: Clock;
   readonly deltaEndpoint?: string;
+  readonly backfillDays?: number;
 }
 
 export interface SyncTeamsResult {
@@ -93,8 +94,18 @@ export async function syncTeams(deps: SyncTeamsDeps): Promise<SyncTeamsResult> {
   const token = await auth.getTokenSilent(account);
 
   const existing = await store.getSyncState(account.username, "teams");
-  let url =
-    existing?.deltaToken ?? deps.deltaEndpoint ?? DEFAULT_TEAMS_DELTA_ENDPOINT;
+  const baseEndpoint = deps.deltaEndpoint ?? DEFAULT_TEAMS_DELTA_ENDPOINT;
+  let url: string;
+  if (existing?.deltaToken !== undefined) {
+    url = existing.deltaToken;
+  } else if (deps.backfillDays !== undefined) {
+    const cutoff = new Date(
+      clock.now().getTime() - deps.backfillDays * 86_400_000,
+    ).toISOString();
+    url = `${baseEndpoint}?$filter=${encodeURIComponent(`lastModifiedDateTime ge ${cutoff}`)}`;
+  } else {
+    url = baseEndpoint;
+  }
 
   let added = 0;
   let removed = 0;

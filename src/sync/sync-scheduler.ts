@@ -34,6 +34,7 @@ export interface SyncSchedulerDeps {
   readonly intervalMs: number;
   readonly onSkip?: () => void;
   readonly onTickComplete?: (summary: TickSummary) => void;
+  readonly backfillDays?: number;
 }
 
 export class SyncScheduler {
@@ -62,6 +63,9 @@ export class SyncScheduler {
             graph: this.deps.graph,
             store: this.deps.store,
             clock: this.deps.clock,
+            ...(this.deps.backfillDays !== undefined && {
+              backfillDays: this.deps.backfillDays,
+            }),
           });
           await this.deps.store.appendSyncLog({
             ts: this.deps.clock.now(),
@@ -89,6 +93,9 @@ export class SyncScheduler {
               teams: this.deps.teams,
               store: this.deps.store,
               clock: this.deps.clock,
+              ...(this.deps.backfillDays !== undefined && {
+                backfillDays: this.deps.backfillDays,
+              }),
             });
             await this.deps.store.appendSyncLog({
               ts: this.deps.clock.now(),

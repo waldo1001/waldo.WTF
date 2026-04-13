@@ -15,6 +15,7 @@ export interface SyncInboxDeps {
   readonly store: MessageStore;
   readonly clock: Clock;
   readonly deltaEndpoint?: string;
+  readonly backfillDays?: number;
 }
 
 export interface SyncInboxResult {
@@ -56,8 +57,18 @@ export async function syncInbox(deps: SyncInboxDeps): Promise<SyncInboxResult> {
   const token = await auth.getTokenSilent(account);
 
   const existing = await store.getSyncState(account.username, "outlook");
-  let url =
-    existing?.deltaToken ?? deps.deltaEndpoint ?? DEFAULT_INBOX_DELTA_ENDPOINT;
+  const baseEndpoint = deps.deltaEndpoint ?? DEFAULT_INBOX_DELTA_ENDPOINT;
+  let url: string;
+  if (existing?.deltaToken !== undefined) {
+    url = existing.deltaToken;
+  } else if (deps.backfillDays !== undefined) {
+    const cutoff = new Date(
+      clock.now().getTime() - deps.backfillDays * 86_400_000,
+    ).toISOString();
+    url = `${baseEndpoint}?$filter=${encodeURIComponent(`receivedDateTime ge ${cutoff}`)}`;
+  } else {
+    url = baseEndpoint;
+  }
 
   let added = 0;
   let removed = 0;

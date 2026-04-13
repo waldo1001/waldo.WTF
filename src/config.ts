@@ -10,6 +10,7 @@ export type Config = Readonly<{
   authDir: string;
   port: number;
   syncIntervalMs: number;
+  backfillDays?: number;
 }>;
 
 export class ConfigError extends Error {
@@ -48,6 +49,10 @@ export function loadConfig(env: Env): Config {
     ? parsePositiveInt(env.WALDO_SYNC_INTERVAL_MS, "WALDO_SYNC_INTERVAL_MS")
     : DEFAULT_SYNC_INTERVAL_MS;
 
+  const backfillDays = present(env.WALDO_BACKFILL_DAYS)
+    ? parsePositiveInt(env.WALDO_BACKFILL_DAYS, "WALDO_BACKFILL_DAYS")
+    : undefined;
+
   return {
     msClientId: env.MS_CLIENT_ID as string,
     bearerToken: env.BEARER_TOKEN as string,
@@ -55,5 +60,6 @@ export function loadConfig(env: Env): Config {
     authDir: present(env.WALDO_AUTH_DIR) ? env.WALDO_AUTH_DIR : DEFAULT_AUTH_DIR,
     port,
     syncIntervalMs,
+    ...(backfillDays !== undefined ? { backfillDays } : {}),
   };
 }

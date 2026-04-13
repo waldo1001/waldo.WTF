@@ -340,6 +340,80 @@ describe("syncTeams", () => {
     expect(upserted?.rawJson).toBe(JSON.stringify(dto));
   });
 
+  it("first delta call with backfillDays composes a lastModifiedDateTime filter from clock.now() minus N days", async () => {
+    const store = new InMemoryMessageStore();
+    const now = new Date("2026-04-13T12:00:00Z");
+    const clock = new FakeClock(now);
+    const teams = new FakeTeamsClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({ value: [], "@odata.deltaLink": "d" }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncTeams({ account, auth, teams, store, clock, backfillDays: 7 });
+
+    const expectedIso = new Date(
+      now.getTime() - 7 * 86_400_000,
+    ).toISOString();
+    const expectedUrl =
+      `${DEFAULT_TEAMS_DELTA_ENDPOINT}?$filter=` +
+      encodeURIComponent(`lastModifiedDateTime ge ${expectedIso}`);
+    expect(teams.calls[0]?.url).toBe(expectedUrl);
+    expect(teams.calls[0]?.url).toContain("%3A");
+    expect(teams.calls[0]?.url).not.toContain(" ");
+  });
+
+  it("first delta call without backfillDays uses the unfiltered default Teams endpoint", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const teams = new FakeTeamsClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({ value: [], "@odata.deltaLink": "d" }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncTeams({ account, auth, teams, store, clock });
+
+    expect(teams.calls[0]?.url).toBe(DEFAULT_TEAMS_DELTA_ENDPOINT);
+  });
+
+  it("subsequent Teams delta call uses stored deltaLink and ignores backfillDays", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        syncState: [
+          {
+            account: account.username,
+            source: "teams",
+            deltaToken: "https://graph/teams/delta?token=prev",
+          },
+        ],
+      },
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const teams = new FakeTeamsClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({ value: [], "@odata.deltaLink": "d" }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncTeams({ account, auth, teams, store, clock, backfillDays: 7 });
+
+    expect(teams.calls[0]?.url).toBe("https://graph/teams/delta?token=prev");
+    expect(teams.calls[0]?.url).not.toContain("$filter");
+  });
+
   it("does not upsert rawJson for @removed Teams entries", async () => {
     const store = new InMemoryMessageStore();
     const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
