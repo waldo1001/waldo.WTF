@@ -12,6 +12,11 @@ import {
   GET_SYNC_STATUS_TOOL,
   handleGetSyncStatus,
 } from "./tools/get-sync-status.js";
+import {
+  SEARCH_TOOL,
+  handleSearch,
+  type SearchParams,
+} from "./tools/search.js";
 
 type ToolHandler = (
   store: MessageStore,
@@ -22,6 +27,7 @@ type ToolHandler = (
 const TOOL_DESCRIPTORS = [
   GET_RECENT_ACTIVITY_TOOL,
   GET_SYNC_STATUS_TOOL,
+  SEARCH_TOOL,
 ] as const;
 
 const TOOL_HANDLERS: Record<string, ToolHandler> = {
@@ -29,6 +35,8 @@ const TOOL_HANDLERS: Record<string, ToolHandler> = {
     handleGetRecentActivity(store, clock, args as GetRecentActivityParams),
   [GET_SYNC_STATUS_TOOL.name]: (store, clock) =>
     handleGetSyncStatus(store, clock),
+  [SEARCH_TOOL.name]: (store, clock, args) =>
+    handleSearch(store, clock, args as SearchParams),
 };
 
 export interface McpHttpServerOptions {
