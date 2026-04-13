@@ -53,7 +53,7 @@ Scaffold **in-place** in this repo (`/Users/waldo/SourceCode/Community/waldo.WTF
 
 - [x] `npm init`, `tsconfig.json`, `tsx` for dev (at repo root) — 2026-04-13
 - [x] Copy [testing/vitest.config.ts](testing/vitest.config.ts) + merge [testing/package.deps.json](testing/package.deps.json) into `package.json` — 2026-04-13
-- [ ] Port example fakes from [testing/examples/](testing/examples/) into `src/testing/` (clock done; fs/graph pending)
+- [ ] Port example fakes from [testing/examples/](testing/examples/) into `src/testing/` (clock + fs done; graph pending) — fs: 2026-04-13
 - [x] First RED test before any production code (run `/tdd-cycle`) — 2026-04-13 (`FakeClock` contract tests)
 - [ ] Folder structure (`src/auth`, `src/sources`, `src/store`, `src/sync`, `src/mcp`, `src/config.ts`, `src/index.ts`)
 - [ ] Port spike logic from `/Users/waldo/Temp/waldo-wtf-spike` — **reference, don't copy-paste**
