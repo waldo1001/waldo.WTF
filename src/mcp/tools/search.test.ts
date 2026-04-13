@@ -158,6 +158,31 @@ describe("handleSearch", () => {
     expect(hit.hits).toHaveLength(2);
   });
 
+  it("projects Teams-specific fields on search hits", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mkMessage({
+            id: "t1",
+            source: "teams",
+            chatType: "channel",
+            replyToId: "root",
+            mentions: ["bob@example.test"],
+            body: "teamhit",
+          }),
+        ],
+      },
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleSearch(store, clock, { query: "teamhit" });
+    expect(result.count).toBe(1);
+    const msg = result.hits[0]?.message;
+    expect(msg?.source).toBe("teams");
+    expect(msg?.chatType).toBe("channel");
+    expect(msg?.replyToId).toBe("root");
+    expect(msg?.mentions).toEqual(["bob@example.test"]);
+  });
+
   it("exposes a tool descriptor with a valid JSON-schema input", () => {
     expect(SEARCH_TOOL.name).toBe("search");
     expect(SEARCH_TOOL.inputSchema.type).toBe("object");

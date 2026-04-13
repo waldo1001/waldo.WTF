@@ -199,6 +199,90 @@ describe("handleGetRecentActivity", () => {
     expect(result.messages[0]?.snippet).toBe("hi");
   });
 
+  it("projects Teams-specific fields (chatType, replyToId, mentions)", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mkMessage({
+            id: "t1",
+            source: "teams",
+            chatType: "channel",
+            replyToId: "root",
+            mentions: ["alice@example.test"],
+            body: "hi team",
+            sentAt: new Date("2026-04-13T11:30:00Z"),
+          }),
+        ],
+      },
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleGetRecentActivity(store, clock, { hours: 2 });
+    const m = result.messages[0];
+    expect(m?.source).toBe("teams");
+    expect(m?.chatType).toBe("channel");
+    expect(m?.replyToId).toBe("root");
+    expect(m?.mentions).toEqual(["alice@example.test"]);
+  });
+
+  it("sources:['teams'] returns only teams rows", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mkMessage({ id: "o1", sentAt: new Date("2026-04-13T11:30:00Z") }),
+          mkMessage({
+            id: "t1",
+            source: "teams",
+            sentAt: new Date("2026-04-13T11:40:00Z"),
+          }),
+        ],
+      },
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleGetRecentActivity(store, clock, {
+      hours: 2,
+      sources: ["teams"],
+    });
+    expect(result.count).toBe(1);
+    expect(result.messages[0]?.source).toBe("teams");
+  });
+
+  it("falls back to bodyHtml for snippet when body is undefined", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mkMessage({
+            id: "html",
+            source: "teams",
+            bodyHtml: "<p>richtext</p>",
+            sentAt: new Date("2026-04-13T11:30:00Z"),
+          }),
+        ],
+      },
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleGetRecentActivity(store, clock, { hours: 2 });
+    expect(result.messages[0]?.snippet).toBe("<p>richtext</p>");
+  });
+
+  it("truncates bodyHtml fallback to SNIPPET_MAX", async () => {
+    const long = "x".repeat(500);
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mkMessage({
+            id: "html-long",
+            source: "teams",
+            bodyHtml: long,
+            sentAt: new Date("2026-04-13T11:30:00Z"),
+          }),
+        ],
+      },
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleGetRecentActivity(store, clock, { hours: 2 });
+    expect(result.messages[0]?.snippet?.length).toBe(280);
+  });
+
   it("exposes a tool descriptor with a valid JSON-schema input", () => {
     expect(GET_RECENT_ACTIVITY_TOOL.name).toBe("get_recent_activity");
     expect(GET_RECENT_ACTIVITY_TOOL.inputSchema.type).toBe("object");

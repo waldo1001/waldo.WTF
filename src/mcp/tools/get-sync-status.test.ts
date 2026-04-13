@@ -133,6 +133,36 @@ describe("handleGetSyncStatus", () => {
     expect(Object.keys(row ?? {})).not.toContain("lastError");
   });
 
+  it("emits two rows (outlook + teams) for one account with mixed sources", async () => {
+    const store = new InMemoryMessageStore();
+    const now = new Date("2026-04-13T12:00:00Z");
+    const account = "eric@example.test";
+    await store.appendSyncLog({
+      ts: new Date(now.getTime() - 5 * 60 * 1000),
+      account,
+      source: "outlook",
+      status: "ok",
+      messagesAdded: 3,
+    });
+    await store.appendSyncLog({
+      ts: new Date(now.getTime() - 3 * 60 * 1000),
+      account,
+      source: "teams",
+      status: "ok",
+      messagesAdded: 7,
+    });
+    const result = await handleGetSyncStatus(store, new FakeClock(now));
+    expect(result.accountsTracked).toBe(1);
+    expect(result.rows).toHaveLength(2);
+    const outlook = result.rows.find((r) => r.source === "outlook");
+    const teams = result.rows.find((r) => r.source === "teams");
+    expect(outlook?.lastStatus).toBe("ok");
+    expect(outlook?.messagesAddedLastOk).toBe(3);
+    expect(teams?.lastStatus).toBe("ok");
+    expect(teams?.messagesAddedLastOk).toBe(7);
+    expect(result.staleCount).toBe(0);
+  });
+
   it("exposes a no-param tool descriptor", () => {
     expect(GET_SYNC_STATUS_TOOL.name).toBe("get_sync_status");
     expect(GET_SYNC_STATUS_TOOL.inputSchema.type).toBe("object");

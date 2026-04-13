@@ -1,6 +1,6 @@
 import type { Clock } from "../../clock.js";
 import type { MessageStore } from "../../store/message-store.js";
-import type { Message, SearchHit } from "../../store/types.js";
+import type { ChatType, Message, SearchHit } from "../../store/types.js";
 import { InvalidParamsError } from "./get-recent-activity.js";
 
 export const DEFAULT_SEARCH_LIMIT = 20;
@@ -19,6 +19,9 @@ export interface ProjectedSearchMessage {
   readonly senderName?: string;
   readonly senderEmail?: string;
   readonly sentAt: string;
+  readonly chatType?: ChatType;
+  readonly replyToId?: string;
+  readonly mentions?: readonly string[];
 }
 
 export interface ProjectedSearchHit {
@@ -97,6 +100,9 @@ function project(h: SearchHit): ProjectedSearchHit {
       ...(m.senderName !== undefined && { senderName: m.senderName }),
       ...(m.senderEmail !== undefined && { senderEmail: m.senderEmail }),
       sentAt: m.sentAt.toISOString(),
+      ...(m.chatType !== undefined && { chatType: m.chatType }),
+      ...(m.replyToId !== undefined && { replyToId: m.replyToId }),
+      ...(m.mentions !== undefined && { mentions: m.mentions }),
     },
     snippet: h.snippet,
     rank: h.rank,

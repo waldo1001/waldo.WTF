@@ -1,6 +1,6 @@
 import type { Clock } from "../../clock.js";
 import type { MessageStore } from "../../store/message-store.js";
-import type { Message, MessageSource } from "../../store/types.js";
+import type { ChatType, Message, MessageSource } from "../../store/types.js";
 
 export class InvalidParamsError extends Error {
   constructor(message: string) {
@@ -34,6 +34,9 @@ export interface ProjectedMessage {
   readonly senderEmail?: string;
   readonly sentAt: string;
   readonly snippet?: string;
+  readonly chatType?: ChatType;
+  readonly replyToId?: string;
+  readonly mentions?: readonly string[];
 }
 
 export interface GetRecentActivityResult {
@@ -111,13 +114,14 @@ export async function handleGetRecentActivity(
   };
 }
 
+function snippetFrom(m: Message): string | undefined {
+  const raw = m.body ?? m.bodyHtml;
+  if (raw === undefined) return undefined;
+  return raw.length > SNIPPET_MAX ? raw.slice(0, SNIPPET_MAX) : raw;
+}
+
 function project(m: Message): ProjectedMessage {
-  const snippet =
-    m.body !== undefined
-      ? m.body.length > SNIPPET_MAX
-        ? m.body.slice(0, SNIPPET_MAX)
-        : m.body
-      : undefined;
+  const snippet = snippetFrom(m);
   return {
     id: m.id,
     source: m.source,
@@ -127,5 +131,8 @@ function project(m: Message): ProjectedMessage {
     ...(m.senderEmail !== undefined && { senderEmail: m.senderEmail }),
     sentAt: m.sentAt.toISOString(),
     ...(snippet !== undefined && { snippet }),
+    ...(m.chatType !== undefined && { chatType: m.chatType }),
+    ...(m.replyToId !== undefined && { replyToId: m.replyToId }),
+    ...(m.mentions !== undefined && { mentions: m.mentions }),
   };
 }

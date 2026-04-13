@@ -98,6 +98,9 @@ Scaffold **in-place** in this repo (`/Users/waldo/SourceCode/Community/waldo.WTF
 ### Slice 5 — `syncTeams` + scheduler wiring ✅ (2026-04-13)
 - [x] [src/sync/sync-teams.ts](src/sync/sync-teams.ts) walks Teams delta, maps → `Message`, routes `@removed`, persists `setSyncState({source:"teams"})`. `SyncScheduler` now takes optional `teams: TeamsClient` and emits a second `sync_log` row per account per tick. `src/index.ts` wires real `HttpTeamsClient`. Plan: [docs/plans/weekend-4-slice-5-sync-teams.md](docs/plans/weekend-4-slice-5-sync-teams.md).
 
+### Slice 6 — MCP tool coverage for Teams source ✅ (2026-04-13)
+- [x] `get_recent_activity` + `search` projections carry `chatType` / `replyToId` / `mentions`; snippet falls back to `bodyHtml` when `body` absent. `get_sync_status` verified against a mixed outlook+teams log. Weekend 4 closed. Plan: [docs/plans/weekend-4-slice-6-mcp-teams-coverage.md](docs/plans/weekend-4-slice-6-mcp-teams-coverage.md).
+
 - [ ] Remaining Microsoft accounts logged in (iFacto, customer tenants, personal) — uses `tsx src/cli.ts --add-account` (Slice 1)
 - [ ] Open Q: do all 4 support delegated `Mail.Read` without admin consent?
 - [ ] Teams source: `/me/chats/getAllMessages` with delta
