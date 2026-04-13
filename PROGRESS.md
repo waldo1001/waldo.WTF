@@ -69,15 +69,15 @@ Scaffold **in-place** in this repo (`/Users/waldo/SourceCode/Community/waldo.WTF
 
 ---
 
-## Weekend 3 — First MCP tools + Claude Desktop wiring
+## Weekend 3 — First MCP tools + Claude Desktop wiring ✅ (2026-04-13)
 
 - [ ] `@modelcontextprotocol/sdk` installed (deferred — using hand-rolled JSON-RPC 2.0 on `POST /` until 2–3 tools exist)
 - [x] `get_recent_activity(hours, sources?, accounts?)` — 2026-04-13. Handler in [src/mcp/tools/get-recent-activity.ts](src/mcp/tools/get-recent-activity.ts); backed by new `MessageStore.getRecentMessages`; JSON-RPC dispatch wired into [src/mcp/http-server.ts](src/mcp/http-server.ts). 30 new tests, 201 total.
 - [x] `get_sync_status()` — 2026-04-13. Handler in [src/mcp/tools/get-sync-status.ts](src/mcp/tools/get-sync-status.ts); backed by new `MessageStore.getSyncStatus(now)` (union of `sync_state` ∪ `sync_log` per pair, with `lastOkAt` / `lastStatus` / `messagesAddedLast24h`). 15-min `stale` threshold, top-level `staleCount`. http-server dispatch refactored to a `{name → handler}` map. 28 new tests, 229 total.
 - [x] Bearer token middleware — Weekend 2 slice 10 (pre-existing; still in effect for `POST /`).
-- [ ] Wired into Claude Desktop (`http://localhost:PORT`)
-- [ ] End-to-end test: *"summarize my mail from the last 24 hours"*
-- [ ] `search` tool (FTS5)
+- [x] Wired into Claude Desktop (`http://localhost:PORT`) — 2026-04-13. Operator recipe at [docs/claude-desktop-wiring.md](docs/claude-desktop-wiring.md): prereqs, `curl /health` + JSON-RPC `tools/list` verification, config snippet, troubleshooting table, security notes. Linked from [getting-started.md §6](docs/getting-started.md).
+- [x] End-to-end test: *"summarize my mail from the last 24 hours"* — 2026-04-13. [src/mcp/e2e-http.test.ts](src/mcp/e2e-http.test.ts) drives the full stack (real `SqliteMessageStore` `:memory:` + FTS5 + real `fetch`) through `tools/list`, `get_recent_activity` (24h window), `search`, `get_sync_status`, and unauth rejection. 5 tests, green on first run.
+- [x] `search` tool (FTS5) — 2026-04-13. [src/mcp/tools/search.ts](src/mcp/tools/search.ts) wraps the slice-9 `MessageStore.searchMessages`; validates non-empty query + `limit ∈ (0,100]` (default 20); projects hits to drop body/rawJson while preserving BM25 `rank` + `snippet`. 11 handler tests, 245 total.
 
 ---
 

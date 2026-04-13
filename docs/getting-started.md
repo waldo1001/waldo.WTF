@@ -66,7 +66,9 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-Restart Claude Desktop.
+Restart Claude Desktop. For verification steps (curl `/health` and
+`tools/list`) and troubleshooting, see
+[claude-desktop-wiring.md](claude-desktop-wiring.md).
 
 ## 7. First prompt
 
