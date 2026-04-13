@@ -9,6 +9,7 @@ import type { FileSystem } from "./fs.js";
 import type { AuthClient } from "./auth/auth-client.js";
 import type { MessageStore } from "./store/message-store.js";
 import type { GraphClient } from "./sources/graph.js";
+import { HttpGraphClient } from "./sources/http-graph-client.js";
 import { openDatabase } from "./store/open-database.js";
 import { SqliteMessageStore } from "./store/sqlite-message-store.js";
 import {
@@ -30,14 +31,6 @@ export interface MainResult {
   readonly httpServer: Server;
   readonly shutdown: () => Promise<void>;
 }
-
-const notImplementedGraph: GraphClient = {
-  async getDelta() {
-    throw new Error(
-      "not implemented: real Graph HTTP adapter — wire a GraphClient before starting the scheduler",
-    );
-  },
-};
 
 const nodeFileSystem: FileSystem = {
   async readFile(p) {
@@ -81,7 +74,9 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
   });
   const db = openDatabase(config.dbPath);
   const store: MessageStore = new SqliteMessageStore(db);
-  const graph: GraphClient = notImplementedGraph;
+  const graph: GraphClient = new HttpGraphClient({
+    fetch: (input, init) => globalThis.fetch(input, init),
+  });
 
   const scheduler = new SyncScheduler({
     auth,
