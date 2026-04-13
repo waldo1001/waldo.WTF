@@ -14,7 +14,10 @@
       "Bash(grep -l \"PublicClientApplication\" /Users/waldo/SourceCode/Community/waldo.WTF/node_modules/@azure/msal-node/lib/types/*.d.ts)",
       "Bash(ls /Users/waldo/SourceCode/Community/waldo.WTF/.env*)",
       "Bash(ls /Users/waldo/SourceCode/Community/waldo.WTF/src/**/__snapshots__)",
-      "Bash(ls /Users/waldo/SourceCode/Community/waldo.WTF/src/**/__fixtures__)"
+      "Bash(ls /Users/waldo/SourceCode/Community/waldo.WTF/src/**/__fixtures__)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git push:*)"
     ],
     "additionalDirectories": [
       "/tmp"
