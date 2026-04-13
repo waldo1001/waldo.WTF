@@ -299,4 +299,89 @@ describe("syncInbox", () => {
     expect(html?.bodyHtml).toBe("<p>rich</p>");
     expect(html?.body).toBeUndefined();
   });
+
+  it("persists rawJson as stringified Graph DTO on upsert", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const dto = makeGraphMessage({ id: "msg-raw" });
+    const graph = new FakeGraphClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({
+            value: [dto],
+            "@odata.deltaLink": "d",
+          }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncInbox({ account, auth, graph, store, clock });
+
+    const upserted = store.calls
+      .flatMap((c) => (c.method === "upsertMessages" ? c.messages : []))
+      .find((m) => m.nativeId === "msg-raw");
+    expect(upserted?.rawJson).toBe(JSON.stringify(dto));
+  });
+
+  it("persists rawJson even when Graph message lacks from", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const dto: GraphMessage = {
+      id: "msg-nofrom",
+      receivedDateTime: "2026-04-13T09:00:00Z",
+      subject: "no sender",
+    };
+    const graph = new FakeGraphClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({
+            value: [dto],
+            "@odata.deltaLink": "d",
+          }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncInbox({ account, auth, graph, store, clock });
+
+    const upserted = store.calls
+      .flatMap((c) => (c.method === "upsertMessages" ? c.messages : []))
+      .find((m) => m.nativeId === "msg-nofrom");
+    expect(upserted?.rawJson).toBe(JSON.stringify(dto));
+  });
+
+  it("does not upsert rawJson for @removed entries", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const graph = new FakeGraphClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({
+            value: [
+              {
+                id: "gone",
+                receivedDateTime: "2026-04-12T09:00:00Z",
+                subject: null,
+                "@removed": { reason: "deleted" },
+              },
+            ],
+            "@odata.deltaLink": "d",
+          }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncInbox({ account, auth, graph, store, clock });
+
+    const upsertedRows = store.calls.flatMap((c) =>
+      c.method === "upsertMessages" ? c.messages : [],
+    );
+    expect(upsertedRows).toHaveLength(0);
+  });
 });

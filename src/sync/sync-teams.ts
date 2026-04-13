@@ -71,6 +71,7 @@ const toMessage = (
     nativeId: t.id,
     sentAt: new Date(t.createdDateTime),
     importedAt,
+    rawJson: JSON.stringify(t),
     ...(t.chatId !== undefined && { threadId: t.chatId }),
     ...(user?.displayName !== undefined && { senderName: user.displayName }),
     ...(user?.userPrincipalName !== undefined && {

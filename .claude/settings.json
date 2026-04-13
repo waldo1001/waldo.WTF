@@ -18,7 +18,10 @@
       "Bash(git add:*)",
       "Bash(git commit -m ':*)",
       "Bash(git commit *)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(xargs -I {} basename {})",
+      "Bash(awk 'END{print NR}' /Users/waldo/SourceCode/Community/waldo.WTF/src/sync/sync-teams.test.ts)",
+      "Bash(echo \"exit=$?\")"
     ],
     "additionalDirectories": [
       "/tmp"

@@ -37,6 +37,7 @@ const toMessage = (
     nativeId: g.id,
     sentAt: new Date(g.receivedDateTime),
     importedAt,
+    rawJson: JSON.stringify(g),
   };
   if (g.from) {
     return {

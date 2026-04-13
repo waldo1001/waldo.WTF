@@ -297,4 +297,77 @@ describe("syncTeams", () => {
     const state = await store.getSyncState(account.username, "teams");
     expect(state?.deltaToken).toBe("https://graph/teams/delta?token=stale");
   });
+
+  it("persists rawJson as stringified Teams DTO on upsert", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const dto = makeTeamsMsg({
+      id: "tmsg-raw",
+      replyToId: "root-1",
+      channelIdentity: { teamId: "team-1", channelId: "chan-1" },
+      mentions: [
+        {
+          id: 0,
+          mentionText: "Alice",
+          mentioned: {
+            user: {
+              id: "u-a",
+              displayName: "Alice",
+              userPrincipalName: "alice@example.invalid",
+            },
+          },
+        },
+      ],
+    });
+    const teams = new FakeTeamsClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({
+            value: [dto],
+            "@odata.deltaLink": "d",
+          }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncTeams({ account, auth, teams, store, clock });
+
+    const upserted = store.calls
+      .flatMap((c) => (c.method === "upsertMessages" ? c.messages : []))
+      .find((m) => m.nativeId === "tmsg-raw");
+    expect(upserted?.rawJson).toBe(JSON.stringify(dto));
+  });
+
+  it("does not upsert rawJson for @removed Teams entries", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const teams = new FakeTeamsClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({
+            value: [
+              {
+                id: "gone",
+                createdDateTime: "2026-04-12T09:00:00Z",
+                messageType: "message",
+                "@removed": { reason: "deleted" },
+              },
+            ],
+            "@odata.deltaLink": "d",
+          }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncTeams({ account, auth, teams, store, clock });
+
+    const upsertedRows = store.calls.flatMap((c) =>
+      c.method === "upsertMessages" ? c.messages : [],
+    );
+    expect(upsertedRows).toHaveLength(0);
+  });
 });

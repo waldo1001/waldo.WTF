@@ -101,6 +101,9 @@ Scaffold **in-place** in this repo (`/Users/waldo/SourceCode/Community/waldo.WTF
 ### Slice 6 — MCP tool coverage for Teams source ✅ (2026-04-13)
 - [x] `get_recent_activity` + `search` projections carry `chatType` / `replyToId` / `mentions`; snippet falls back to `bodyHtml` when `body` absent. `get_sync_status` verified against a mixed outlook+teams log. Weekend 4 closed. Plan: [docs/plans/weekend-4-slice-6-mcp-teams-coverage.md](docs/plans/weekend-4-slice-6-mcp-teams-coverage.md).
 
+### Retrofit — `rawJson` population ✅ (2026-04-13)
+- [x] `syncInbox` + `syncTeams` mappers now stringify the raw DTO into `Message.rawJson` on upsert, closing the brief §4.10 insurance-policy gap. Column existed since Weekend 2 but sync writers never set it; pre-retrofit rows remain `rawJson=NULL` until delta resync naturally overwrites them (no migration). Plan: [docs/plans/fix-raw-json-population.md](docs/plans/fix-raw-json-population.md).
+
 - [ ] Remaining Microsoft accounts logged in (iFacto, customer tenants, personal) — uses `tsx src/cli.ts --add-account` (Slice 1)
 - [ ] Open Q: do all 4 support delegated `Mail.Read` without admin consent?
 - [ ] Teams source: `/me/chats/getAllMessages` with delta
