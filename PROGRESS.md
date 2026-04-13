@@ -71,7 +71,7 @@ Scaffold **in-place** in this repo (`/Users/waldo/SourceCode/Community/waldo.WTF
 
 ## Weekend 3 — First MCP tools + Claude Desktop wiring ✅ (2026-04-13)
 
-- [ ] `@modelcontextprotocol/sdk` installed (deferred — using hand-rolled JSON-RPC 2.0 on `POST /` until 2–3 tools exist)
+- [x] `@modelcontextprotocol/sdk` installed — 2026-04-13. Hand-rolled JSON-RPC dispatcher replaced by SDK `Server` + `StreamableHTTPServerTransport` (stateless). New [src/mcp/mcp-server.ts](src/mcp/mcp-server.ts) wraps the three existing tool handlers into MCP content blocks and maps `InvalidParamsError` → `McpError(InvalidParams)`. [src/mcp/http-server.ts](src/mcp/http-server.ts) is now a thin shell: `/health` + bearer middleware + per-request SDK transport mount. Plan: [docs/plans/adopt-mcp-sdk.md](docs/plans/adopt-mcp-sdk.md).
 - [x] `get_recent_activity(hours, sources?, accounts?)` — 2026-04-13. Handler in [src/mcp/tools/get-recent-activity.ts](src/mcp/tools/get-recent-activity.ts); backed by new `MessageStore.getRecentMessages`; JSON-RPC dispatch wired into [src/mcp/http-server.ts](src/mcp/http-server.ts). 30 new tests, 201 total.
 - [x] `get_sync_status()` — 2026-04-13. Handler in [src/mcp/tools/get-sync-status.ts](src/mcp/tools/get-sync-status.ts); backed by new `MessageStore.getSyncStatus(now)` (union of `sync_state` ∪ `sync_log` per pair, with `lastOkAt` / `lastStatus` / `messagesAddedLast24h`). 15-min `stale` threshold, top-level `staleCount`. http-server dispatch refactored to a `{name → handler}` map. 28 new tests, 229 total.
 - [x] Bearer token middleware — Weekend 2 slice 10 (pre-existing; still in effect for `POST /`).
@@ -111,8 +111,14 @@ Scaffold **in-place** in this repo (`/Users/waldo/SourceCode/Community/waldo.WTF
 - [ ] Claude Desktop system prompt: "always check all accounts + both sources"
 - [ ] Live with it for a week, collect frustrations below
 
+### Teams endpoint rework — slice 1 ✅ (2026-04-13)
+- [x] Schema v4 `chat_cursors` table + `MessageStore.getChatCursor` / `setChatCursor` / `listChatCursors` on both impls. Storage-only slice; seam reshape + `HttpTeamsClient` rewrite + `syncTeams` rewrite are slice 2. Plan: [docs/plans/teams-endpoint-rework.md](docs/plans/teams-endpoint-rework.md).
+
+### Teams endpoint rework — slice 2 ✅ (2026-04-13)
+- [x] `TeamsClient` seam reshaped to `listChats` + `getChatMessages`; `HttpTeamsClient` rewritten to poll `/me/chats` + `/me/chats/{id}/messages` under delegated auth; `syncTeams` rewritten to enumerate chats and maintain per-chat cursors with per-chat error isolation; schema v5 renames `chat_cursors.last_modified_iso → cursor`. Live smoke on dev db: one account synced Teams successfully (96 messages, 13 chat cursors), the other returned `403 Forbidden — Missing scope permissions` (tenant-level policy, correctly logged). Outlook unaffected. Plan: [docs/plans/teams-endpoint-rework.md](docs/plans/teams-endpoint-rework.md).
+
 **Frustrations log:**
-- _add as you use it_
+- 2026-04-13 — First live smoke of Teams sync (two real accounts across two tenants) surfaced `HTTP 412 PreconditionFailed — Requested API is not supported in delegated context` on `/me/chats/getAllMessages/delta`. Pre-existing Graph constraint (the endpoint requires application permissions + RSC, not delegated device-code). Slices 4–6 used `FakeTeamsClient` end-to-end so it only showed up on the first real tick. Outlook unaffected and shipping. Fix plan: [docs/plans/teams-endpoint-rework.md](docs/plans/teams-endpoint-rework.md) — recommends polling `/me/chats` + `/me/chats/{id}/messages` under the existing delegated flow.
 
 ---
 

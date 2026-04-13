@@ -23,7 +23,7 @@ describe("schema / applyMigrations", () => {
     expect(userVersion(db)).toBe(0);
     applyMigrations(db);
     expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
-    expect(CURRENT_SCHEMA_VERSION).toBe(3);
+    expect(CURRENT_SCHEMA_VERSION).toBe(5);
   });
 
   it("creates all four tables and expected indices", () => {
@@ -324,11 +324,12 @@ describe("schema / Teams columns (migration 3)", () => {
       );
       INSERT INTO messages SELECT * FROM _msg_old;
       DROP TABLE _msg_old;
+      DROP TABLE IF EXISTS chat_cursors;
     `);
 
     applyMigrations(db);
 
-    expect(userVersion(db)).toBe(3);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
     expect(hasColumn(db, "messages", "chat_type")).toBe(true);
     const n = (
       db.prepare("SELECT COUNT(*) AS n FROM messages WHERE id = ?").get(
@@ -342,6 +343,144 @@ describe("schema / Teams columns (migration 3)", () => {
     const db = new Database(":memory:");
     applyMigrations(db);
     applyMigrations(db);
-    expect(userVersion(db)).toBe(3);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+});
+
+describe("schema / chat_cursors (migration 4)", () => {
+  function hasColumn(
+    db: Database.Database,
+    table: string,
+    column: string,
+  ): boolean {
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all() as {
+      name: string;
+    }[];
+    return rows.some((r) => r.name === column);
+  }
+
+  it("creates chat_cursors table with composite primary key on v3→v4", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const tables = objectNames(db, "table");
+    expect(tables).toContain("chat_cursors");
+    expect(hasColumn(db, "chat_cursors", "account")).toBe(true);
+    expect(hasColumn(db, "chat_cursors", "chat_id")).toBe(true);
+    expect(hasColumn(db, "chat_cursors", "cursor")).toBe(true);
+  });
+
+  it("chat_cursors primary key rejects a duplicate (account, chat_id)", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const insert = db.prepare(
+      "INSERT INTO chat_cursors (account, chat_id, cursor) VALUES (?, ?, ?)",
+    );
+    insert.run("a@example.test", "chat-1", "2026-04-13T10:00:00.000Z");
+    expect(() =>
+      insert.run("a@example.test", "chat-1", "2026-04-13T11:00:00.000Z"),
+    ).toThrow();
+  });
+
+  it("preserves v3 data across the v4 migration", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    insertMessageRow(db, { id: "survivor", body: "pre-v4" });
+    applyMigrations(db);
+    const n = (
+      db
+        .prepare("SELECT COUNT(*) AS n FROM messages WHERE id = ?")
+        .get("survivor") as { n: number }
+    ).n;
+    expect(n).toBe(1);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it("upgrades a pre-existing v3 database to v4 and keeps rows intact", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    insertMessageRow(db, { id: "before-v4", body: "rows survive" });
+    db.exec("PRAGMA user_version = 3");
+    // chat_cursors does not exist yet in this simulated v3 state.
+    db.exec("DROP TABLE IF EXISTS chat_cursors");
+
+    applyMigrations(db);
+
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+    const tables = objectNames(db, "table");
+    expect(tables).toContain("chat_cursors");
+    const n = (
+      db
+        .prepare("SELECT COUNT(*) AS n FROM messages WHERE id = ?")
+        .get("before-v4") as { n: number }
+    ).n;
+    expect(n).toBe(1);
+  });
+
+  it("is idempotent at v4", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    applyMigrations(db);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+});
+
+describe("schema / chat_cursors column rename (migration 5)", () => {
+  function hasColumn(
+    db: Database.Database,
+    table: string,
+    column: string,
+  ): boolean {
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all() as {
+      name: string;
+    }[];
+    return rows.some((r) => r.name === column);
+  }
+
+  it("renames last_modified_iso → cursor on v4→v5", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    expect(hasColumn(db, "chat_cursors", "cursor")).toBe(true);
+    expect(hasColumn(db, "chat_cursors", "last_modified_iso")).toBe(false);
+  });
+
+  it("preserves row data across the v4→v5 rename", () => {
+    const db = new Database(":memory:");
+    // Simulate v4 state: create the old table shape explicitly, seed data, set version.
+    db.exec(`
+      CREATE TABLE chat_cursors (
+        account TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        last_modified_iso TEXT NOT NULL,
+        PRIMARY KEY (account, chat_id)
+      );
+      PRAGMA user_version = 4;
+    `);
+    db.prepare(
+      "INSERT INTO chat_cursors (account, chat_id, last_modified_iso) VALUES (?, ?, ?)",
+    ).run("a@example.test", "chat-1", "2026-04-13T10:00:00.000Z");
+
+    // Fresh db with the rest of the schema so applyMigrations doesn't error out.
+    db.exec(`
+      CREATE TABLE messages (id TEXT PRIMARY KEY, source TEXT NOT NULL, account TEXT NOT NULL, native_id TEXT NOT NULL, thread_id TEXT, thread_name TEXT, sender_name TEXT, sender_email TEXT, sent_at INTEGER NOT NULL, imported_at INTEGER NOT NULL, is_read INTEGER, body TEXT, body_html TEXT, raw_json TEXT, chat_type TEXT, reply_to_id TEXT, mentions_json TEXT);
+      CREATE TABLE sync_state (account TEXT NOT NULL, source TEXT NOT NULL, delta_token TEXT, last_sync_at INTEGER, PRIMARY KEY (account, source));
+      CREATE TABLE sync_log (ts INTEGER NOT NULL, account TEXT NOT NULL, source TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('ok','error')), messages_added INTEGER, error_message TEXT);
+      CREATE TABLE accounts (username TEXT PRIMARY KEY, display_name TEXT, tenant_id TEXT, added_at INTEGER NOT NULL);
+    `);
+
+    applyMigrations(db);
+
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+    expect(hasColumn(db, "chat_cursors", "cursor")).toBe(true);
+    const row = db
+      .prepare("SELECT account, chat_id, cursor FROM chat_cursors")
+      .get() as { account: string; chat_id: string; cursor: string };
+    expect(row.cursor).toBe("2026-04-13T10:00:00.000Z");
+  });
+
+  it("is idempotent at v5", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    applyMigrations(db);
+    expect(userVersion(db)).toBe(5);
   });
 });

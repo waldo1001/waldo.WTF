@@ -1,86 +1,100 @@
 import { describe, expect, it } from "vitest";
 import {
-  DeltaTokenInvalidError,
   GraphRateLimitedError,
   TokenExpiredError,
-  type TeamsDeltaResponse,
-  type TeamsMessage,
+  type TeamsChatListPage,
+  type TeamsMessagesPage,
 } from "../sources/teams.js";
 import { FakeTeamsClient } from "./fake-teams-client.js";
 
-function okPage(id: string, deltaLink?: string): TeamsDeltaResponse {
-  const msg: TeamsMessage = {
-    id,
-    createdDateTime: "2026-04-13T09:00:00Z",
-    chatId: "chat-1",
-    messageType: "message",
-    from: { user: { displayName: "Alice", id: "u-1" } },
-    body: { contentType: "text", content: `body-${id}` },
-  };
-  return {
-    value: [msg],
-    ...(deltaLink ? { "@odata.deltaLink": deltaLink } : {}),
-  };
-}
-
 describe("FakeTeamsClient", () => {
-  it("getDelta returns the scripted response and records url + token", async () => {
-    const response: TeamsDeltaResponse = {
+  it("listChats returns the scripted page and records token + nextLink", async () => {
+    const page: TeamsChatListPage = {
+      value: [
+        { id: "chat-1", chatType: "oneOnOne", topic: null },
+        { id: "chat-2", chatType: "group", topic: "Hiking" },
+      ],
+    };
+    const client = new FakeTeamsClient({
+      steps: [{ kind: "listChatsOk", response: page }],
+    });
+    const got = await client.listChats("token-1");
+    expect(got).toBe(page);
+    expect(client.calls).toEqual([{ method: "listChats", token: "token-1" }]);
+  });
+
+  it("listChats records nextLink when present", async () => {
+    const page: TeamsChatListPage = { value: [] };
+    const client = new FakeTeamsClient({
+      steps: [{ kind: "listChatsOk", response: page }],
+    });
+    await client.listChats("t", "https://graph.microsoft.com/next");
+    expect(client.calls[0]).toEqual({
+      method: "listChats",
+      token: "t",
+      nextLink: "https://graph.microsoft.com/next",
+    });
+  });
+
+  it("getChatMessages returns scripted page and records chatId + sinceIso", async () => {
+    const page: TeamsMessagesPage = {
       value: [
         {
-          id: "1",
+          id: "msg-1",
           createdDateTime: "2026-04-13T09:00:00Z",
           chatId: "chat-1",
           messageType: "message",
-          replyToId: null,
-          from: {
-            user: {
-              displayName: "Alice",
-              id: "u-1",
-              userPrincipalName: "alice@example.test",
-            },
-          },
+          from: { user: { displayName: "Alice", id: "u-1" } },
           body: { contentType: "text", content: "hello" },
-          mentions: [
-            {
-              id: 0,
-              mentionText: "@bob",
-              mentioned: {
-                user: { displayName: "Bob", id: "u-2" },
-              },
-            },
-          ],
-          channelIdentity: null,
         },
       ],
-      "@odata.deltaLink":
-        "https://graph.microsoft.com/v1.0/me/chats/getAllMessages/delta?$deltatoken=abc",
     };
-    const client = new FakeTeamsClient({ steps: [{ kind: "ok", response }] });
-
-    const got = await client.getDelta(
-      "/me/chats/getAllMessages/delta",
-      "token-1",
-    );
-    expect(got).toBe(response);
+    const client = new FakeTeamsClient({
+      steps: [{ kind: "getChatMessagesOk", response: page }],
+    });
+    const got = await client.getChatMessages("t", "chat-1", {
+      sinceIso: "2026-04-13T00:00:00Z",
+    });
+    expect(got).toBe(page);
     expect(client.calls).toEqual([
-      { url: "/me/chats/getAllMessages/delta", token: "token-1" },
+      {
+        method: "getChatMessages",
+        token: "t",
+        chatId: "chat-1",
+        sinceIso: "2026-04-13T00:00:00Z",
+      },
     ]);
   });
 
+  it("getChatMessages records nextLink and omits sinceIso when not passed", async () => {
+    const page: TeamsMessagesPage = { value: [] };
+    const client = new FakeTeamsClient({
+      steps: [{ kind: "getChatMessagesOk", response: page }],
+    });
+    await client.getChatMessages("t", "chat-2", {
+      nextLink: "https://graph.microsoft.com/next",
+    });
+    expect(client.calls[0]).toEqual({
+      method: "getChatMessages",
+      token: "t",
+      chatId: "chat-2",
+      nextLink: "https://graph.microsoft.com/next",
+    });
+  });
+
   it("successive calls consume scripted steps in order", async () => {
-    const first = okPage("msg-1");
-    const second = okPage("msg-2", "https://graph.microsoft.com/delta?token=zz");
+    const chatsPage: TeamsChatListPage = { value: [{ id: "chat-1" }] };
+    const msgsPage: TeamsMessagesPage = { value: [] };
     const client = new FakeTeamsClient({
       steps: [
-        { kind: "ok", response: first },
-        { kind: "ok", response: second },
+        { kind: "listChatsOk", response: chatsPage },
+        { kind: "getChatMessagesOk", response: msgsPage },
       ],
     });
     expect(client.remainingSteps).toBe(2);
-    expect(await client.getDelta("/delta", "t")).toBe(first);
+    await client.listChats("t");
     expect(client.remainingSteps).toBe(1);
-    expect(await client.getDelta("/delta?page=2", "t")).toBe(second);
+    await client.getChatMessages("t", "chat-1", {});
     expect(client.remainingSteps).toBe(0);
   });
 
@@ -88,32 +102,35 @@ describe("FakeTeamsClient", () => {
     const client = new FakeTeamsClient({
       steps: [
         { kind: "error", error: new TokenExpiredError("401") },
-        { kind: "error", error: new DeltaTokenInvalidError("410") },
         { kind: "error", error: new GraphRateLimitedError(7) },
       ],
     });
-    await expect(client.getDelta("/delta", "t")).rejects.toBeInstanceOf(
+    await expect(client.listChats("t")).rejects.toBeInstanceOf(
       TokenExpiredError,
     );
-    await expect(client.getDelta("/delta", "t")).rejects.toBeInstanceOf(
-      DeltaTokenInvalidError,
-    );
-    await expect(client.getDelta("/delta", "t")).rejects.toBeInstanceOf(
-      GraphRateLimitedError,
-    );
+    await expect(
+      client.getChatMessages("t", "chat-1", {}),
+    ).rejects.toBeInstanceOf(GraphRateLimitedError);
   });
 
   it("throws an informative error when no scripted step remains", async () => {
     const client = new FakeTeamsClient({ steps: [] });
-    await expect(
-      client.getDelta("/me/chats/getAllMessages/delta", "t"),
-    ).rejects.toThrowError(
-      /no scripted response for call #1 to \/me\/chats\/getAllMessages\/delta/,
+    await expect(client.listChats("t")).rejects.toThrowError(
+      /no scripted response for call #1 \(listChats\)/,
     );
   });
 
-  it("supports @removed tombstones in the scripted response", async () => {
-    const response: TeamsDeltaResponse = {
+  it("rejects when step kind does not match the method called", async () => {
+    const client = new FakeTeamsClient({
+      steps: [{ kind: "getChatMessagesOk", response: { value: [] } }],
+    });
+    await expect(client.listChats("t")).rejects.toThrowError(
+      /expected listChatsOk step/,
+    );
+  });
+
+  it("supports @removed tombstones in messages pages", async () => {
+    const page: TeamsMessagesPage = {
       value: [
         {
           id: "removed-1",
@@ -122,8 +139,10 @@ describe("FakeTeamsClient", () => {
         },
       ],
     };
-    const client = new FakeTeamsClient({ steps: [{ kind: "ok", response }] });
-    const got = await client.getDelta("/delta", "t");
+    const client = new FakeTeamsClient({
+      steps: [{ kind: "getChatMessagesOk", response: page }],
+    });
+    const got = await client.getChatMessages("t", "chat-1", {});
     expect(got.value[0]?.["@removed"]).toEqual({ reason: "deleted" });
   });
 });

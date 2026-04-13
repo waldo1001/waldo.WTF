@@ -6,6 +6,7 @@ import type {
 } from "../store/message-store.js";
 import type {
   AccountRecord,
+  ChatCursorEntry,
   Message,
   MessageSource,
   SearchHit,
@@ -24,7 +25,10 @@ export type InMemoryMessageStoreCall =
   | { method: "listAccounts" }
   | { method: "searchMessages"; query: string; limit: number }
   | { method: "getRecentMessages"; opts: GetRecentMessagesOptions }
-  | { method: "getSyncStatus"; now: Date };
+  | { method: "getSyncStatus"; now: Date }
+  | { method: "getChatCursor"; account: string; chatId: string }
+  | { method: "setChatCursor"; entry: ChatCursorEntry }
+  | { method: "listChatCursors"; account: string };
 
 export interface InMemoryMessageStoreOptions {
   seed?: {
@@ -43,6 +47,7 @@ export class InMemoryMessageStore implements MessageStore {
   private readonly messages = new Map<string, Message>();
   private readonly syncState = new Map<string, SyncStateEntry>();
   private readonly accounts = new Map<string, AccountRecord>();
+  private readonly chatCursors = new Map<string, ChatCursorEntry>();
 
   constructor(opts: InMemoryMessageStoreOptions = {}) {
     for (const m of opts.seed?.messages ?? []) {
@@ -177,6 +182,28 @@ export class InMemoryMessageStore implements MessageStore {
       return c !== 0 ? c : a.source.localeCompare(b.source);
     });
     return rows;
+  }
+
+  async getChatCursor(
+    account: string,
+    chatId: string,
+  ): Promise<string | undefined> {
+    this.calls.push({ method: "getChatCursor", account, chatId });
+    return this.chatCursors.get(`${account}::${chatId}`)?.cursor;
+  }
+
+  async setChatCursor(entry: ChatCursorEntry): Promise<void> {
+    this.calls.push({ method: "setChatCursor", entry });
+    this.chatCursors.set(`${entry.account}::${entry.chatId}`, entry);
+  }
+
+  async listChatCursors(
+    account: string,
+  ): Promise<readonly ChatCursorEntry[]> {
+    this.calls.push({ method: "listChatCursors", account });
+    return [...this.chatCursors.values()]
+      .filter((c) => c.account === account)
+      .sort((a, b) => a.chatId.localeCompare(b.chatId));
   }
 
   async getRecentMessages(

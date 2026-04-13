@@ -1,15 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { syncTeams, DEFAULT_TEAMS_DELTA_ENDPOINT } from "./sync-teams.js";
+import { syncTeams } from "./sync-teams.js";
 import { FakeAuthClient } from "../testing/fake-auth-client.js";
 import { FakeTeamsClient } from "../testing/fake-teams-client.js";
 import { InMemoryMessageStore } from "../testing/in-memory-message-store.js";
 import { FakeClock } from "../testing/fake-clock.js";
 import type { Account, AccessToken } from "../auth/types.js";
 import {
-  DeltaTokenInvalidError,
+  GraphRateLimitedError,
   TokenExpiredError,
-  type TeamsDeltaResponse,
+  type TeamsChat,
+  type TeamsChatListPage,
   type TeamsMessage,
+  type TeamsMessagesPage,
 } from "../sources/teams.js";
 
 const account: Account = {
@@ -30,6 +32,22 @@ const authWithToken = () =>
     tokens: new Map([[account.homeAccountId, accessToken]]),
   });
 
+const chat = (id: string, overrides: Partial<TeamsChat> = {}): TeamsChat => ({
+  id,
+  chatType: "oneOnOne",
+  topic: null,
+  ...overrides,
+});
+
+const chatsPage = (value: TeamsChat[], nextLink?: string): TeamsChatListPage =>
+  nextLink !== undefined ? { value, "@odata.nextLink": nextLink } : { value };
+
+const msgsPage = (
+  value: TeamsMessage[],
+  nextLink?: string,
+): TeamsMessagesPage =>
+  nextLink !== undefined ? { value, "@odata.nextLink": nextLink } : { value };
+
 const makeTeamsMsg = (overrides: Partial<TeamsMessage> = {}): TeamsMessage => ({
   id: "tmsg-1",
   createdDateTime: "2026-04-13T10:00:00Z",
@@ -46,217 +64,213 @@ const makeTeamsMsg = (overrides: Partial<TeamsMessage> = {}): TeamsMessage => ({
   ...overrides,
 });
 
-const okResponse = (r: Partial<TeamsDeltaResponse>): TeamsDeltaResponse => ({
-  value: [],
-  ...r,
-});
-
-describe("syncTeams", () => {
-  it("first run uses default endpoint, upserts one message with teams id prefix + source, stores deltaLink", async () => {
+describe("syncTeams (polling)", () => {
+  it("enumerates chats via listChats, fetches messages per chat, upserts them", async () => {
     const store = new InMemoryMessageStore();
     const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
     const teams = new FakeTeamsClient({
       steps: [
-        {
-          kind: "ok",
-          response: okResponse({
-            value: [makeTeamsMsg()],
-            "@odata.deltaLink": "https://graph/teams/delta?token=d1",
-          }),
-        },
+        { kind: "listChatsOk", response: chatsPage([chat("chat-1"), chat("chat-2")]) },
+        { kind: "getChatMessagesOk", response: msgsPage([makeTeamsMsg({ id: "m1", chatId: "chat-1" })]) },
+        { kind: "getChatMessagesOk", response: msgsPage([makeTeamsMsg({ id: "m2", chatId: "chat-2" })]) },
       ],
     });
     const auth = authWithToken();
 
     const result = await syncTeams({ account, auth, teams, store, clock });
-    expect(result).toEqual({ added: 1, removed: 0 });
-    expect(teams.calls[0]?.url).toBe(DEFAULT_TEAMS_DELTA_ENDPOINT);
-    const upserted = store.calls
-      .flatMap((c) => (c.method === "upsertMessages" ? c.messages : []))
-      .find((m) => m.nativeId === "tmsg-1");
-    expect(upserted?.source).toBe("teams");
-    expect(upserted?.id).toBe(`teams:${account.username}:tmsg-1`);
-    expect(upserted?.threadId).toBe("chat-1");
-    expect(upserted?.senderName).toBe("Alice");
-    expect(upserted?.senderEmail).toBe("alice@example.invalid");
-    expect(upserted?.body).toBe("hi");
+    expect(result).toEqual({ added: 2, removed: 0 });
 
-    const state = await store.getSyncState(account.username, "teams");
-    expect(state?.deltaToken).toBe("https://graph/teams/delta?token=d1");
+    const upserted = store.calls.flatMap((c) =>
+      c.method === "upsertMessages" ? c.messages : [],
+    );
+    expect(upserted.map((m) => m.nativeId).sort()).toEqual(["m1", "m2"]);
+    expect(upserted[0]?.source).toBe("teams");
+    expect(upserted[0]?.id).toBe(`teams:${account.username}:m1`);
   });
 
-  it("subsequent run starts from stored deltaToken", async () => {
-    const store = new InMemoryMessageStore({
-      seed: {
-        syncState: [
-          {
-            account: account.username,
-            source: "teams",
-            deltaToken: "https://graph/teams/delta?token=prev",
-          },
-        ],
-      },
+  it("reads per-chat cursor, passes sinceIso on subsequent runs, and advances cursor", async () => {
+    const store = new InMemoryMessageStore();
+    await store.setChatCursor({
+      account: account.username,
+      chatId: "chat-1",
+      cursor: "2026-04-13T09:00:00.000Z",
     });
     const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
     const teams = new FakeTeamsClient({
       steps: [
+        { kind: "listChatsOk", response: chatsPage([chat("chat-1")]) },
         {
-          kind: "ok",
-          response: okResponse({
-            value: [],
-            "@odata.deltaLink": "https://graph/teams/delta?token=next",
-          }),
+          kind: "getChatMessagesOk",
+          response: msgsPage([
+            makeTeamsMsg({ id: "newer", createdDateTime: "2026-04-13T10:30:00Z" }),
+          ]),
         },
       ],
     });
     const auth = authWithToken();
 
     await syncTeams({ account, auth, teams, store, clock });
-    expect(teams.calls[0]?.url).toBe("https://graph/teams/delta?token=prev");
+
+    const getMsgsCall = teams.calls.find((c) => c.method === "getChatMessages");
+    expect(getMsgsCall).toMatchObject({
+      method: "getChatMessages",
+      chatId: "chat-1",
+      sinceIso: "2026-04-13T09:00:00.000Z",
+    });
+    const newCursor = await store.getChatCursor(account.username, "chat-1");
+    expect(newCursor).toBe("2026-04-13T10:30:00Z");
   });
 
-  it("follows @odata.nextLink across pages", async () => {
+  it("with backfillDays and no stored cursor, seeds sinceIso from clock.now() - N days", async () => {
+    const store = new InMemoryMessageStore();
+    const now = new Date("2026-04-13T12:00:00Z");
+    const clock = new FakeClock(now);
+    const teams = new FakeTeamsClient({
+      steps: [
+        { kind: "listChatsOk", response: chatsPage([chat("chat-1")]) },
+        { kind: "getChatMessagesOk", response: msgsPage([]) },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncTeams({ account, auth, teams, store, clock, backfillDays: 7 });
+
+    const expected = new Date(now.getTime() - 7 * 86_400_000).toISOString();
+    const getMsgsCall = teams.calls.find((c) => c.method === "getChatMessages");
+    expect(getMsgsCall).toMatchObject({
+      method: "getChatMessages",
+      chatId: "chat-1",
+      sinceIso: expected,
+    });
+  });
+
+  it("without backfillDays and no stored cursor, passes no sinceIso (full chat backfill)", async () => {
     const store = new InMemoryMessageStore();
     const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
     const teams = new FakeTeamsClient({
       steps: [
+        { kind: "listChatsOk", response: chatsPage([chat("chat-1")]) },
+        { kind: "getChatMessagesOk", response: msgsPage([]) },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncTeams({ account, auth, teams, store, clock });
+
+    const getMsgsCall = teams.calls.find((c) => c.method === "getChatMessages");
+    if (getMsgsCall?.method !== "getChatMessages") throw new Error("expected call");
+    expect(getMsgsCall.sinceIso).toBeUndefined();
+  });
+
+  it("follows @odata.nextLink across both chat-listing and per-chat pages", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const teams = new FakeTeamsClient({
+      steps: [
+        { kind: "listChatsOk", response: chatsPage([chat("chat-1")], "https://graph/chats?skip=1") },
+        { kind: "listChatsOk", response: chatsPage([chat("chat-2")]) },
         {
-          kind: "ok",
-          response: okResponse({
-            value: [makeTeamsMsg({ id: "a" })],
-            "@odata.nextLink": "https://graph/teams?skip=1",
-          }),
+          kind: "getChatMessagesOk",
+          response: msgsPage([makeTeamsMsg({ id: "a", chatId: "chat-1" })], "https://graph/c1?skip=1"),
         },
         {
-          kind: "ok",
-          response: okResponse({
-            value: [makeTeamsMsg({ id: "b" })],
-            "@odata.deltaLink": "https://graph/teams?token=final",
-          }),
+          kind: "getChatMessagesOk",
+          response: msgsPage([makeTeamsMsg({ id: "b", chatId: "chat-1" })]),
+        },
+        {
+          kind: "getChatMessagesOk",
+          response: msgsPage([makeTeamsMsg({ id: "c", chatId: "chat-2" })]),
         },
       ],
     });
     const auth = authWithToken();
-    const result = await syncTeams({ account, auth, teams, store, clock });
-    expect(result.added).toBe(2);
-    expect(teams.calls).toHaveLength(2);
-    expect(teams.calls[1]?.url).toBe("https://graph/teams?skip=1");
+
+    const res = await syncTeams({ account, auth, teams, store, clock });
+    expect(res.added).toBe(3);
+    expect(teams.calls.filter((c) => c.method === "listChats")).toHaveLength(2);
+    expect(teams.calls.filter((c) => c.method === "getChatMessages")).toHaveLength(3);
   });
 
-  it("routes @removed messages to deleteMessages with the teams id prefix", async () => {
+  it("maps oneOnOne → chatType=oneOnOne, group → group, topic → threadName", async () => {
     const store = new InMemoryMessageStore();
     const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
     const teams = new FakeTeamsClient({
       steps: [
         {
-          kind: "ok",
-          response: okResponse({
-            value: [
-              {
-                id: "to-remove",
-                createdDateTime: "2026-04-13T10:00:00Z",
-                "@removed": { reason: "deleted" },
-              },
-            ],
-            "@odata.deltaLink": "d",
-          }),
+          kind: "listChatsOk",
+          response: chatsPage([
+            chat("chat-1", { chatType: "oneOnOne" }),
+            chat("chat-2", { chatType: "group", topic: "Hiking" }),
+          ]),
         },
+        { kind: "getChatMessagesOk", response: msgsPage([makeTeamsMsg({ id: "p1", chatId: "chat-1" })]) },
+        { kind: "getChatMessagesOk", response: msgsPage([makeTeamsMsg({ id: "p2", chatId: "chat-2" })]) },
       ],
     });
     const auth = authWithToken();
-    const result = await syncTeams({ account, auth, teams, store, clock });
-    expect(result.removed).toBe(0); // empty store, nothing to delete
-    const delCall = store.calls.find((c) => c.method === "deleteMessages");
-    expect(delCall).toBeDefined();
-    if (delCall && delCall.method === "deleteMessages") {
-      expect(delCall.ids).toEqual([`teams:${account.username}:to-remove`]);
-    }
+    await syncTeams({ account, auth, teams, store, clock });
+    const msgs = store.calls.flatMap((c) =>
+      c.method === "upsertMessages" ? c.messages : [],
+    );
+    const p1 = msgs.find((m) => m.nativeId === "p1");
+    const p2 = msgs.find((m) => m.nativeId === "p2");
+    expect(p1?.chatType).toBe("oneOnOne");
+    expect(p2?.chatType).toBe("group");
+    expect(p2?.threadName).toBe("Hiking");
   });
 
-  it("maps text + html body, channelIdentity → chatType=channel, replyToId, mentions", async () => {
+  it("maps text + html body, replyToId, mentions", async () => {
     const store = new InMemoryMessageStore();
     const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
     const teams = new FakeTeamsClient({
       steps: [
+        { kind: "listChatsOk", response: chatsPage([chat("chat-1")]) },
         {
-          kind: "ok",
-          response: okResponse({
-            value: [
-              makeTeamsMsg({
-                id: "plain-text",
-                body: { contentType: "text", content: "plain" },
-              }),
-              makeTeamsMsg({
-                id: "rich",
-                body: { contentType: "html", content: "<p>rich</p>" },
-              }),
-              makeTeamsMsg({
-                id: "in-channel",
-                channelIdentity: { teamId: "team-1", channelId: "chan-1" },
-              }),
-              makeTeamsMsg({
-                id: "reply",
-                replyToId: "root",
-                mentions: [
-                  {
-                    id: 0,
-                    mentionText: "@bob",
-                    mentioned: {
-                      user: {
-                        id: "u-2",
-                        displayName: "Bob",
-                        userPrincipalName: "bob@example.invalid",
-                      },
+          kind: "getChatMessagesOk",
+          response: msgsPage([
+            makeTeamsMsg({ id: "plain", body: { contentType: "text", content: "plain" } }),
+            makeTeamsMsg({ id: "rich", body: { contentType: "html", content: "<p>rich</p>" } }),
+            makeTeamsMsg({
+              id: "reply",
+              replyToId: "root",
+              mentions: [
+                {
+                  id: 0,
+                  mentionText: "@bob",
+                  mentioned: {
+                    user: {
+                      id: "u-2",
+                      displayName: "Bob",
+                      userPrincipalName: "bob@example.invalid",
                     },
                   },
-                  {
-                    id: 1,
-                    mentionText: "@nameless",
-                  },
-                  {
-                    id: 2,
-                    mentioned: {
-                      user: {
-                        id: "u-3",
-                        displayName: "Carol",
-                      },
-                    },
-                  },
-                  {
-                    id: 3,
-                    mentioned: { user: { id: "u-4" } },
-                  },
-                ],
-              }),
-            ],
-            "@odata.deltaLink": "d",
-          }),
+                },
+                { id: 1, mentionText: "@nameless" },
+                { id: 2, mentioned: { user: { id: "u-3", displayName: "Carol" } } },
+                { id: 3, mentioned: { user: { id: "u-4" } } },
+              ],
+            }),
+          ]),
         },
       ],
     });
     const auth = authWithToken();
     await syncTeams({ account, auth, teams, store, clock });
-    const msgs = store.calls
-      .flatMap((c) => (c.method === "upsertMessages" ? c.messages : []));
-    const plain = msgs.find((m) => m.nativeId === "plain-text");
+    const msgs = store.calls.flatMap((c) =>
+      c.method === "upsertMessages" ? c.messages : [],
+    );
+    const plain = msgs.find((m) => m.nativeId === "plain");
     const rich = msgs.find((m) => m.nativeId === "rich");
-    const chan = msgs.find((m) => m.nativeId === "in-channel");
     const reply = msgs.find((m) => m.nativeId === "reply");
-
     expect(plain?.body).toBe("plain");
     expect(plain?.bodyHtml).toBeUndefined();
     expect(rich?.bodyHtml).toBe("<p>rich</p>");
     expect(rich?.body).toBeUndefined();
-    expect(chan?.chatType).toBe("channel");
     expect(reply?.replyToId).toBe("root");
-    expect(reply?.mentions).toEqual([
-      "bob@example.invalid",
-      "@nameless",
-      "Carol",
-    ]);
+    expect(reply?.mentions).toEqual(["bob@example.invalid", "@nameless", "Carol"]);
   });
 
-  it("propagates TokenExpiredError without updating syncState", async () => {
+  it("TokenExpiredError from listChats propagates without writing syncState", async () => {
     const store = new InMemoryMessageStore();
     const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
     const teams = new FakeTeamsClient({
@@ -274,28 +288,51 @@ describe("syncTeams", () => {
     ).toBe(false);
   });
 
-  it("propagates DeltaTokenInvalidError leaving stored deltaToken intact", async () => {
-    const store = new InMemoryMessageStore({
-      seed: {
-        syncState: [
-          {
-            account: account.username,
-            source: "teams",
-            deltaToken: "https://graph/teams/delta?token=stale",
-          },
-        ],
-      },
-    });
+  it("TokenExpiredError from getChatMessages propagates (hard stop)", async () => {
+    const store = new InMemoryMessageStore();
     const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
     const teams = new FakeTeamsClient({
-      steps: [{ kind: "error", error: new DeltaTokenInvalidError("410") }],
+      steps: [
+        { kind: "listChatsOk", response: chatsPage([chat("chat-1")]) },
+        { kind: "error", error: new TokenExpiredError("401") },
+      ],
     });
     const auth = authWithToken();
     await expect(
       syncTeams({ account, auth, teams, store, clock }),
-    ).rejects.toBeInstanceOf(DeltaTokenInvalidError);
+    ).rejects.toBeInstanceOf(TokenExpiredError);
+  });
+
+  it("GraphRateLimitedError from getChatMessages propagates (hard stop)", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const teams = new FakeTeamsClient({
+      steps: [
+        { kind: "listChatsOk", response: chatsPage([chat("chat-1")]) },
+        { kind: "error", error: new GraphRateLimitedError(30) },
+      ],
+    });
+    const auth = authWithToken();
+    await expect(
+      syncTeams({ account, auth, teams, store, clock }),
+    ).rejects.toBeInstanceOf(GraphRateLimitedError);
+  });
+
+  it("non-hard-stop error on one chat is isolated — other chats still sync", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const teams = new FakeTeamsClient({
+      steps: [
+        { kind: "listChatsOk", response: chatsPage([chat("chat-bad"), chat("chat-good")]) },
+        { kind: "error", error: new Error("teams request failed: HTTP 500") },
+        { kind: "getChatMessagesOk", response: msgsPage([makeTeamsMsg({ id: "ok", chatId: "chat-good" })]) },
+      ],
+    });
+    const auth = authWithToken();
+    const res = await syncTeams({ account, auth, teams, store, clock });
+    expect(res.added).toBe(1);
     const state = await store.getSyncState(account.username, "teams");
-    expect(state?.deltaToken).toBe("https://graph/teams/delta?token=stale");
+    expect(state?.lastSyncAt).toBeDefined();
   });
 
   it("persists rawJson as stringified Teams DTO on upsert", async () => {
@@ -304,7 +341,6 @@ describe("syncTeams", () => {
     const dto = makeTeamsMsg({
       id: "tmsg-raw",
       replyToId: "root-1",
-      channelIdentity: { teamId: "team-1", channelId: "chan-1" },
       mentions: [
         {
           id: 0,
@@ -321,127 +357,42 @@ describe("syncTeams", () => {
     });
     const teams = new FakeTeamsClient({
       steps: [
-        {
-          kind: "ok",
-          response: okResponse({
-            value: [dto],
-            "@odata.deltaLink": "d",
-          }),
-        },
+        { kind: "listChatsOk", response: chatsPage([chat("chat-1")]) },
+        { kind: "getChatMessagesOk", response: msgsPage([dto]) },
       ],
     });
     const auth = authWithToken();
-
     await syncTeams({ account, auth, teams, store, clock });
-
     const upserted = store.calls
       .flatMap((c) => (c.method === "upsertMessages" ? c.messages : []))
       .find((m) => m.nativeId === "tmsg-raw");
     expect(upserted?.rawJson).toBe(JSON.stringify(dto));
   });
 
-  it("first delta call with backfillDays composes a lastModifiedDateTime filter from clock.now() minus N days", async () => {
-    const store = new InMemoryMessageStore();
-    const now = new Date("2026-04-13T12:00:00Z");
-    const clock = new FakeClock(now);
-    const teams = new FakeTeamsClient({
-      steps: [
-        {
-          kind: "ok",
-          response: okResponse({ value: [], "@odata.deltaLink": "d" }),
-        },
-      ],
-    });
-    const auth = authWithToken();
-
-    await syncTeams({ account, auth, teams, store, clock, backfillDays: 7 });
-
-    const expectedIso = new Date(
-      now.getTime() - 7 * 86_400_000,
-    ).toISOString();
-    const expectedUrl =
-      `${DEFAULT_TEAMS_DELTA_ENDPOINT}?$filter=` +
-      encodeURIComponent(`lastModifiedDateTime ge ${expectedIso}`);
-    expect(teams.calls[0]?.url).toBe(expectedUrl);
-    expect(teams.calls[0]?.url).toContain("%3A");
-    expect(teams.calls[0]?.url).not.toContain(" ");
-  });
-
-  it("first delta call without backfillDays uses the unfiltered default Teams endpoint", async () => {
+  it("skips @removed entries (no upsert, cursor unaffected by tombstone)", async () => {
     const store = new InMemoryMessageStore();
     const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
     const teams = new FakeTeamsClient({
       steps: [
+        { kind: "listChatsOk", response: chatsPage([chat("chat-1")]) },
         {
-          kind: "ok",
-          response: okResponse({ value: [], "@odata.deltaLink": "d" }),
+          kind: "getChatMessagesOk",
+          response: msgsPage([
+            {
+              id: "gone",
+              createdDateTime: "2026-04-12T09:00:00Z",
+              messageType: "message",
+              "@removed": { reason: "deleted" },
+            },
+          ]),
         },
       ],
     });
     const auth = authWithToken();
-
     await syncTeams({ account, auth, teams, store, clock });
-
-    expect(teams.calls[0]?.url).toBe(DEFAULT_TEAMS_DELTA_ENDPOINT);
-  });
-
-  it("subsequent Teams delta call uses stored deltaLink and ignores backfillDays", async () => {
-    const store = new InMemoryMessageStore({
-      seed: {
-        syncState: [
-          {
-            account: account.username,
-            source: "teams",
-            deltaToken: "https://graph/teams/delta?token=prev",
-          },
-        ],
-      },
-    });
-    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
-    const teams = new FakeTeamsClient({
-      steps: [
-        {
-          kind: "ok",
-          response: okResponse({ value: [], "@odata.deltaLink": "d" }),
-        },
-      ],
-    });
-    const auth = authWithToken();
-
-    await syncTeams({ account, auth, teams, store, clock, backfillDays: 7 });
-
-    expect(teams.calls[0]?.url).toBe("https://graph/teams/delta?token=prev");
-    expect(teams.calls[0]?.url).not.toContain("$filter");
-  });
-
-  it("does not upsert rawJson for @removed Teams entries", async () => {
-    const store = new InMemoryMessageStore();
-    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
-    const teams = new FakeTeamsClient({
-      steps: [
-        {
-          kind: "ok",
-          response: okResponse({
-            value: [
-              {
-                id: "gone",
-                createdDateTime: "2026-04-12T09:00:00Z",
-                messageType: "message",
-                "@removed": { reason: "deleted" },
-              },
-            ],
-            "@odata.deltaLink": "d",
-          }),
-        },
-      ],
-    });
-    const auth = authWithToken();
-
-    await syncTeams({ account, auth, teams, store, clock });
-
-    const upsertedRows = store.calls.flatMap((c) =>
+    const upserted = store.calls.flatMap((c) =>
       c.method === "upsertMessages" ? c.messages : [],
     );
-    expect(upsertedRows).toHaveLength(0);
+    expect(upserted).toHaveLength(0);
   });
 });

@@ -2,6 +2,8 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createMcpHttpServer } from "./http-server.js";
 import { SqliteMessageStore } from "../store/sqlite-message-store.js";
 import { FakeClock } from "../testing/fake-clock.js";
@@ -20,18 +22,14 @@ const mkMessage = (
   ...overrides,
 });
 
-interface JsonRpcResult<T> {
-  readonly jsonrpc: "2.0";
-  readonly id: number;
-  readonly result: T;
-}
-
-describe("MCP HTTP server end-to-end (SQLite + real fetch)", () => {
+describe("MCP HTTP server end-to-end (SQLite + SDK client over HTTP)", () => {
   let db: Database.Database;
   let store: SqliteMessageStore;
   let clock: FakeClock;
   let server: Server;
   let baseUrl: string;
+  let client: Client;
+  let transport: StreamableHTTPClientTransport;
 
   beforeEach(async () => {
     db = new Database(":memory:");
@@ -82,120 +80,121 @@ describe("MCP HTTP server end-to-end (SQLite + real fetch)", () => {
     });
     const addr = server.address() as AddressInfo;
     baseUrl = `http://127.0.0.1:${addr.port}`;
+
+    transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/`), {
+      requestInit: {
+        headers: { Authorization: `Bearer ${BEARER}` },
+      },
+    });
+    client = new Client(
+      { name: "waldo-e2e", version: "0.0.0" },
+      { capabilities: {} },
+    );
+    await client.connect(transport);
   });
 
   afterEach(async () => {
+    await client.close();
     await new Promise<void>((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
     });
     db.close();
   });
 
-  const rpc = async <T,>(
-    method: string,
-    params?: unknown,
-    headers: Record<string, string> = {},
-  ): Promise<JsonRpcResult<T>> => {
-    const res = await fetch(`${baseUrl}/`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${BEARER}`,
-        ...headers,
-      },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-    });
-    expect(res.status).toBe(200);
-    return (await res.json()) as JsonRpcResult<T>;
-  };
+  const parse = <T>(text: string): T => JSON.parse(text) as T;
 
-  it("tools/list returns all three Weekend 3 tools", async () => {
-    const result = await rpc<{ tools: { name: string }[] }>("tools/list");
-    const names = result.result.tools.map((t) => t.name).sort();
-    expect(names).toEqual(["get_recent_activity", "get_sync_status", "search"]);
+  it("lists all three Weekend 3 tools via SDK transport", async () => {
+    const res = await client.listTools();
+    const names = res.tools.map((t) => t.name).sort();
+    expect(names).toEqual([
+      "get_recent_activity",
+      "get_sync_status",
+      "search",
+    ]);
   });
 
-  it("rejects unauthenticated tools/call at the e2e layer", async () => {
-    const res = await fetch(`${baseUrl}/`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "tools/call",
-        params: { name: "get_recent_activity", arguments: { hours: 24 } },
-      }),
-    });
-    expect(res.status).toBe(401);
+  it("rejects unauthenticated initialize at the transport boundary", async () => {
+    const badTransport = new StreamableHTTPClientTransport(
+      new URL(`${baseUrl}/`),
+    );
+    const badClient = new Client(
+      { name: "bad", version: "0.0.0" },
+      { capabilities: {} },
+    );
+    await expect(badClient.connect(badTransport)).rejects.toThrow();
   });
 
-  it("get_recent_activity over HTTP returns the in-window messages from SQLite", async () => {
-    const result = await rpc<{
-      count: number;
-      messages: {
-        id: string;
-        source: string;
-        account: string;
-        senderName?: string;
-        sentAt: string;
-        snippet?: string;
-        body?: string;
-        rawJson?: string;
-      }[];
-    }>("tools/call", {
+  it("get_recent_activity over HTTP returns in-window messages with no body/rawJson", async () => {
+    const res = await client.callTool({
       name: "get_recent_activity",
       arguments: { hours: 24 },
     });
-    const ids = result.result.messages.map((m) => m.id).sort();
-    expect(result.result.count).toBe(2);
+    const content = res.content as Array<{ type: string; text: string }>;
+    const parsed = parse<{
+      count: number;
+      messages: Array<{
+        id: string;
+        snippet?: string;
+        body?: string;
+        rawJson?: string;
+      }>;
+    }>(content[0]!.text);
+    const ids = parsed.messages.map((m) => m.id).sort();
+    expect(parsed.count).toBe(2);
     expect(ids).toEqual(["in-1", "in-2"]);
-    const boardMsg = result.result.messages.find((m) => m.id === "in-1");
+    const boardMsg = parsed.messages.find((m) => m.id === "in-1");
     expect(boardMsg?.snippet).toContain("Quarterly board meeting");
-    // body / rawJson must never leak.
     expect(boardMsg?.body).toBeUndefined();
     expect(boardMsg?.rawJson).toBeUndefined();
   });
 
   it("search over HTTP returns FTS5 hits with snippet and rank", async () => {
-    const result = await rpc<{
-      count: number;
-      hits: {
-        message: { id: string };
-        snippet: string;
-        rank: number;
-      }[];
-    }>("tools/call", {
+    const res = await client.callTool({
       name: "search",
       arguments: { query: "board" },
     });
-    expect(result.result.count).toBe(1);
-    const first = result.result.hits[0];
+    const content = res.content as Array<{ type: string; text: string }>;
+    const parsed = parse<{
+      count: number;
+      hits: Array<{
+        message: { id: string };
+        snippet: string;
+        rank: number;
+      }>;
+    }>(content[0]!.text);
+    expect(parsed.count).toBe(1);
+    const first = parsed.hits[0];
     expect(first?.message.id).toBe("in-1");
     expect(first?.snippet.length).toBeGreaterThan(0);
     expect(typeof first?.rank).toBe("number");
   });
 
   it("get_sync_status over HTTP surfaces the seeded sync_log row", async () => {
-    const result = await rpc<{
+    const res = await client.callTool({
+      name: "get_sync_status",
+      arguments: {},
+    });
+    const content = res.content as Array<{ type: string; text: string }>;
+    const parsed = parse<{
       generatedAt: string;
       accountsTracked: number;
       staleCount: number;
-      rows: {
+      rows: Array<{
         account: string;
         source: string;
         lastStatus?: string;
         messagesAddedLast24h: number;
         stale: boolean;
-      }[];
-    }>("tools/call", { name: "get_sync_status", arguments: {} });
-    expect(result.result.generatedAt).toBe("2026-04-13T12:00:00.000Z");
-    expect(result.result.accountsTracked).toBe(1);
-    const row = result.result.rows[0];
+      }>;
+    }>(content[0]!.text);
+    expect(parsed.generatedAt).toBe("2026-04-13T12:00:00.000Z");
+    expect(parsed.accountsTracked).toBe(1);
+    const row = parsed.rows[0];
     expect(row?.account).toBe("alice@example.test");
     expect(row?.source).toBe("outlook");
     expect(row?.lastStatus).toBe("ok");
     expect(row?.messagesAddedLast24h).toBe(3);
     expect(row?.stale).toBe(false);
-    expect(result.result.staleCount).toBe(0);
+    expect(parsed.staleCount).toBe(0);
   });
 });

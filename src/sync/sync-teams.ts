@@ -3,13 +3,14 @@ import type { Account } from "../auth/types.js";
 import type { Clock } from "../clock.js";
 import type { MessageStore } from "../store/message-store.js";
 import type { ChatType, Message } from "../store/types.js";
-import type {
-  TeamsClient,
-  TeamsMention,
-  TeamsMessage,
+import {
+  GraphRateLimitedError,
+  TokenExpiredError,
+  type TeamsChat,
+  type TeamsClient,
+  type TeamsMention,
+  type TeamsMessage,
 } from "../sources/teams.js";
-
-export const DEFAULT_TEAMS_DELTA_ENDPOINT = "/me/chats/getAllMessages/delta";
 
 export interface SyncTeamsDeps {
   readonly account: Account;
@@ -17,7 +18,6 @@ export interface SyncTeamsDeps {
   readonly teams: TeamsClient;
   readonly store: MessageStore;
   readonly clock: Clock;
-  readonly deltaEndpoint?: string;
   readonly backfillDays?: number;
 }
 
@@ -25,8 +25,6 @@ export interface SyncTeamsResult {
   readonly added: number;
   readonly removed: number;
 }
-
-const isRemoved = (m: TeamsMessage): boolean => m["@removed"] !== undefined;
 
 const mentionToString = (m: TeamsMention): string | undefined => {
   const upn = m.mentioned?.user?.userPrincipalName;
@@ -49,22 +47,24 @@ const extractMentions = (
   return out;
 };
 
-const chatTypeOf = (t: TeamsMessage): ChatType | undefined => {
-  if (t.channelIdentity && (t.channelIdentity.channelId || t.channelIdentity.teamId)) {
-    return "channel";
-  }
+const chatTypeFromChat = (c: TeamsChat): ChatType | undefined => {
+  if (c.chatType === "oneOnOne") return "oneOnOne";
+  if (c.chatType === "group") return "group";
   return undefined;
 };
 
 const toMessage = (
   t: TeamsMessage,
+  chat: TeamsChat,
   accountUsername: string,
   importedAt: Date,
 ): Message => {
   const user = t.from?.user;
   const body = t.body;
   const mentions = extractMentions(t.mentions);
-  const chatType = chatTypeOf(t);
+  const chatType = chatTypeFromChat(chat);
+  const threadId = t.chatId ?? chat.id;
+  const threadName = chat.topic ?? undefined;
   return {
     id: `teams:${accountUsername}:${t.id}`,
     source: "teams",
@@ -73,7 +73,9 @@ const toMessage = (
     sentAt: new Date(t.createdDateTime),
     importedAt,
     rawJson: JSON.stringify(t),
-    ...(t.chatId !== undefined && { threadId: t.chatId }),
+    ...(threadId !== undefined && { threadId }),
+    ...(threadName !== undefined &&
+      threadName !== null && { threadName }),
     ...(user?.displayName !== undefined && { senderName: user.displayName }),
     ...(user?.userPrincipalName !== undefined && {
       senderEmail: user.userPrincipalName,
@@ -89,62 +91,120 @@ const toMessage = (
   };
 };
 
-export async function syncTeams(deps: SyncTeamsDeps): Promise<SyncTeamsResult> {
-  const { account, auth, teams, store, clock } = deps;
-  const token = await auth.getTokenSilent(account);
+const messageTimestamp = (t: TeamsMessage): string => {
+  // lastModifiedDateTime is the cursor key but TeamsMessage may not carry it;
+  // fall back to createdDateTime which is always present.
+  const lm = (t as { lastModifiedDateTime?: string }).lastModifiedDateTime;
+  return lm ?? t.createdDateTime;
+};
 
-  const existing = await store.getSyncState(account.username, "teams");
-  const baseEndpoint = deps.deltaEndpoint ?? DEFAULT_TEAMS_DELTA_ENDPOINT;
-  let url: string;
-  if (existing?.deltaToken !== undefined) {
-    url = existing.deltaToken;
-  } else if (deps.backfillDays !== undefined) {
-    const cutoff = new Date(
-      clock.now().getTime() - deps.backfillDays * 86_400_000,
-    ).toISOString();
-    url = `${baseEndpoint}?$filter=${encodeURIComponent(`lastModifiedDateTime ge ${cutoff}`)}`;
-  } else {
-    url = baseEndpoint;
+const isHardStop = (err: unknown): boolean =>
+  err instanceof TokenExpiredError || err instanceof GraphRateLimitedError;
+
+async function listAllChats(
+  teams: TeamsClient,
+  token: string,
+): Promise<TeamsChat[]> {
+  const out: TeamsChat[] = [];
+  let nextLink: string | undefined;
+  for (;;) {
+    const page: Awaited<ReturnType<TeamsClient["listChats"]>> =
+      nextLink === undefined
+        ? await teams.listChats(token)
+        : await teams.listChats(token, nextLink);
+    for (const c of page.value) out.push(c);
+    const next = page["@odata.nextLink"];
+    if (next === undefined) return out;
+    nextLink = next;
   }
+}
+
+async function syncOneChat(deps: {
+  teams: TeamsClient;
+  token: string;
+  chat: TeamsChat;
+  store: MessageStore;
+  account: Account;
+  clock: Clock;
+  initialSinceIso: string | undefined;
+}): Promise<{ added: number; newCursor: string | undefined }> {
+  const { teams, token, chat, store, account, clock, initialSinceIso } = deps;
+  const storedCursor = await store.getChatCursor(account.username, chat.id);
+  const sinceIso = storedCursor ?? initialSinceIso;
 
   let added = 0;
-  let removed = 0;
-  let finalDeltaLink: string | undefined;
-
+  let highWater: string | undefined = storedCursor;
+  let nextLink: string | undefined;
   for (;;) {
-    const res = await teams.getDelta(url, token.token);
+    const page = nextLink === undefined
+      ? await teams.getChatMessages(token, chat.id, { ...(sinceIso !== undefined && { sinceIso }) })
+      : await teams.getChatMessages(token, chat.id, { nextLink });
     const importedAt = clock.now();
     const toUpsert: Message[] = [];
-    const toDelete: string[] = [];
-    for (const t of res.value) {
-      if (isRemoved(t)) {
-        toDelete.push(`teams:${account.username}:${t.id}`);
-      } else {
-        toUpsert.push(toMessage(t, account.username, importedAt));
-      }
+    for (const t of page.value) {
+      if (t["@removed"] !== undefined) continue;
+      toUpsert.push(toMessage(t, chat, account.username, importedAt));
+      const ts = messageTimestamp(t);
+      if (highWater === undefined || ts > highWater) highWater = ts;
     }
     if (toUpsert.length > 0) {
       const r = await store.upsertMessages(toUpsert);
       added += r.added + r.updated;
     }
-    if (toDelete.length > 0) {
-      const r = await store.deleteMessages(toDelete);
-      removed += r.deleted;
+    const next = page["@odata.nextLink"];
+    if (next === undefined) break;
+    nextLink = next;
+  }
+
+  return { added, newCursor: highWater };
+}
+
+export async function syncTeams(deps: SyncTeamsDeps): Promise<SyncTeamsResult> {
+  const { account, auth, teams, store, clock } = deps;
+  const token = await auth.getTokenSilent(account);
+
+  const initialSinceIso =
+    deps.backfillDays !== undefined
+      ? new Date(clock.now().getTime() - deps.backfillDays * 86_400_000)
+          .toISOString()
+      : undefined;
+
+  const chats = await listAllChats(teams, token.token);
+
+  let added = 0;
+  for (const chat of chats) {
+    try {
+      const res = await syncOneChat({
+        teams,
+        token: token.token,
+        chat,
+        store,
+        account,
+        clock,
+        initialSinceIso,
+      });
+      added += res.added;
+      if (res.newCursor !== undefined) {
+        await store.setChatCursor({
+          account: account.username,
+          chatId: chat.id,
+          cursor: res.newCursor,
+        });
+      }
+    } catch (err) {
+      if (isHardStop(err)) throw err;
+      // Per-chat isolation: other errors are swallowed so one bad chat
+      // doesn't block the tick. The sync-log row from the scheduler still
+      // reports success for the source; individual chat failures will
+      // retry on the next tick with the same (unchanged) cursor.
     }
-    if (res["@odata.nextLink"]) {
-      url = res["@odata.nextLink"];
-      continue;
-    }
-    finalDeltaLink = res["@odata.deltaLink"];
-    break;
   }
 
   await store.setSyncState({
     account: account.username,
     source: "teams",
-    ...(finalDeltaLink !== undefined ? { deltaToken: finalDeltaLink } : {}),
     lastSyncAt: clock.now(),
   });
 
-  return { added, removed };
+  return { added, removed: 0 };
 }

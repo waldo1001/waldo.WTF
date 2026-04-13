@@ -236,6 +236,28 @@ describe("SqliteMessageStore — sqlite-specific behavior", () => {
     expect(hits.map((h) => h.message.id)).toEqual(["1"]);
   });
 
+  it("chat cursors persist across store reconstruction", async () => {
+    const db = new Database(":memory:");
+    const a = new SqliteMessageStore(db);
+    await a.setChatCursor({
+      account: "a@example.test",
+      chatId: "chat-1",
+      cursor: "2026-04-13T10:00:00.000Z",
+    });
+    const b = new SqliteMessageStore(db);
+    expect(await b.getChatCursor("a@example.test", "chat-1")).toBe(
+      "2026-04-13T10:00:00.000Z",
+    );
+    const rows = await b.listChatCursors("a@example.test");
+    expect(rows).toEqual([
+      {
+        account: "a@example.test",
+        chatId: "chat-1",
+        cursor: "2026-04-13T10:00:00.000Z",
+      },
+    ]);
+  });
+
   it("isRead boolean round-trips through INTEGER column", async () => {
     const db = new Database(":memory:");
     const store = new SqliteMessageStore(db);

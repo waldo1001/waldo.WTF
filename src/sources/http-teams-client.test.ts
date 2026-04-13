@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  DeltaTokenInvalidError,
-  GraphRateLimitedError,
-  TokenExpiredError,
-} from "./teams.js";
+import { GraphRateLimitedError, TokenExpiredError } from "./teams.js";
 import type { FetchLike, FetchLikeResponse } from "./http-graph-client.js";
 import { HttpTeamsClient } from "./http-teams-client.js";
 
@@ -34,9 +30,10 @@ function response(init: {
   };
 }
 
-function scriptFetch(
-  steps: FetchLikeResponse[],
-): { fetch: FetchLike; calls: ScriptedCall[] } {
+function scriptFetch(steps: FetchLikeResponse[]): {
+  fetch: FetchLike;
+  calls: ScriptedCall[];
+} {
   const calls: ScriptedCall[] = [];
   let i = 0;
   const fetch: FetchLike = async (url, init) => {
@@ -48,34 +45,59 @@ function scriptFetch(
   return { fetch, calls };
 }
 
-describe("HttpTeamsClient", () => {
-  it("hits baseUrl + relative path with bearer token and Prefer header", async () => {
+describe("HttpTeamsClient.listChats", () => {
+  it("hits /me/chats with bearer + prefer, parses value + nextLink", async () => {
+    const payload = {
+      value: [{ id: "chat-1", chatType: "oneOnOne", topic: null }],
+      "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/chats?$skip=50",
+    };
     const { fetch, calls } = scriptFetch([
-      response({ status: 200, body: JSON.stringify({ value: [] }) }),
+      response({ status: 200, body: JSON.stringify(payload) }),
     ]);
     const client = new HttpTeamsClient({ fetch });
-    await client.getDelta("/me/chats/getAllMessages/delta", "tok-1");
+    const got = await client.listChats("tok-1");
+    expect(got).toEqual(payload);
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.url).toBe(
-      "https://graph.microsoft.com/v1.0/me/chats/getAllMessages/delta",
-    );
+    expect(calls[0]!.url).toContain("https://graph.microsoft.com/v1.0/me/chats");
     expect(calls[0]!.headers["Authorization"]).toBe("Bearer tok-1");
-    expect(calls[0]!.headers["Accept"]).toBe("application/json");
     expect(calls[0]!.headers["Prefer"]).toBe("odata.maxpagesize=50");
   });
 
-  it("uses absolute nextLink url as-is", async () => {
-    const nextLink =
-      "https://graph.microsoft.com/v1.0/me/chats/getAllMessages/delta?$skiptoken=abc";
+  it("uses absolute nextLink url as-is on subsequent pages", async () => {
+    const nextLink = "https://graph.microsoft.com/v1.0/me/chats?$skiptoken=abc";
     const { fetch, calls } = scriptFetch([
       response({ status: 200, body: JSON.stringify({ value: [] }) }),
     ]);
     const client = new HttpTeamsClient({ fetch });
-    await client.getDelta(nextLink, "tok");
+    await client.listChats("t", nextLink);
     expect(calls[0]!.url).toBe(nextLink);
   });
 
-  it("parses value + @odata.nextLink + @odata.deltaLink", async () => {
+  it("maps 401 → TokenExpiredError", async () => {
+    const { fetch } = scriptFetch([response({ status: 401, body: "no" })]);
+    const client = new HttpTeamsClient({ fetch });
+    await expect(client.listChats("t")).rejects.toBeInstanceOf(
+      TokenExpiredError,
+    );
+  });
+
+  it("maps 429 → GraphRateLimitedError with Retry-After", async () => {
+    const { fetch } = scriptFetch([
+      response({ status: 429, body: "", headers: { "Retry-After": "7" } }),
+    ]);
+    const client = new HttpTeamsClient({ fetch });
+    try {
+      await client.listChats("t");
+      expect.fail("expected throw");
+    } catch (caught) {
+      expect(caught).toBeInstanceOf(GraphRateLimitedError);
+      expect((caught as GraphRateLimitedError).retryAfterSeconds).toBe(7);
+    }
+  });
+});
+
+describe("HttpTeamsClient.getChatMessages", () => {
+  it("builds /me/chats/{id}/messages with $orderby and $filter from sinceIso", async () => {
     const payload = {
       value: [
         {
@@ -86,61 +108,85 @@ describe("HttpTeamsClient", () => {
         },
       ],
       "@odata.nextLink": "https://graph.microsoft.com/v1.0/next?skip=1",
-      "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta?token=z",
     };
-    const { fetch } = scriptFetch([
+    const { fetch, calls } = scriptFetch([
       response({ status: 200, body: JSON.stringify(payload) }),
     ]);
     const client = new HttpTeamsClient({ fetch });
-    const got = await client.getDelta("/me/chats/getAllMessages/delta", "t");
+    const got = await client.getChatMessages("t", "chat-1", {
+      sinceIso: "2026-04-13T00:00:00Z",
+    });
     expect(got).toEqual(payload);
+    const url = calls[0]!.url;
+    expect(url).toContain("/me/chats/chat-1/messages");
+    expect(url).toContain("%24orderby=lastModifiedDateTime+desc");
+    expect(url).toContain(
+      "%24filter=lastModifiedDateTime+gt+2026-04-13T00%3A00%3A00Z",
+    );
   });
 
-  it("throws TokenExpiredError on HTTP 401", async () => {
+  it("omits $filter when sinceIso is not provided", async () => {
+    const { fetch, calls } = scriptFetch([
+      response({ status: 200, body: JSON.stringify({ value: [] }) }),
+    ]);
+    const client = new HttpTeamsClient({ fetch });
+    await client.getChatMessages("t", "chat-2", {});
+    expect(calls[0]!.url).not.toContain("%24filter");
+    expect(calls[0]!.url).toContain("/me/chats/chat-2/messages");
+  });
+
+  it("url-encodes chatId with special characters", async () => {
+    const { fetch, calls } = scriptFetch([
+      response({ status: 200, body: JSON.stringify({ value: [] }) }),
+    ]);
+    const client = new HttpTeamsClient({ fetch });
+    await client.getChatMessages("t", "19:abc=thread.v2", {});
+    expect(calls[0]!.url).toContain(
+      "/me/chats/19%3Aabc%3Dthread.v2/messages",
+    );
+  });
+
+  it("uses absolute nextLink as-is", async () => {
+    const nextLink =
+      "https://graph.microsoft.com/v1.0/me/chats/chat-1/messages?$skip=50";
+    const { fetch, calls } = scriptFetch([
+      response({ status: 200, body: JSON.stringify({ value: [] }) }),
+    ]);
+    const client = new HttpTeamsClient({ fetch });
+    await client.getChatMessages("t", "chat-1", { nextLink });
+    expect(calls[0]!.url).toBe(nextLink);
+  });
+
+  it("maps 401 → TokenExpiredError", async () => {
     const { fetch } = scriptFetch([response({ status: 401, body: "no" })]);
     const client = new HttpTeamsClient({ fetch });
-    await expect(client.getDelta("/delta", "t")).rejects.toBeInstanceOf(
-      TokenExpiredError,
-    );
+    await expect(
+      client.getChatMessages("t", "chat-1", {}),
+    ).rejects.toBeInstanceOf(TokenExpiredError);
   });
 
-  it("throws DeltaTokenInvalidError on HTTP 410", async () => {
-    const { fetch } = scriptFetch([response({ status: 410, body: "gone" })]);
-    const client = new HttpTeamsClient({ fetch });
-    await expect(client.getDelta("/delta", "t")).rejects.toBeInstanceOf(
-      DeltaTokenInvalidError,
-    );
-  });
-
-  it("throws GraphRateLimitedError carrying Retry-After seconds (header / missing / bad)", async () => {
-    const cases: Array<{ header: Record<string, string>; expected: number }> = [
-      { header: { "Retry-After": "42" }, expected: 42 },
-      { header: {}, expected: 60 },
-      { header: { "Retry-After": "abc" }, expected: 60 },
-    ];
-    for (const tc of cases) {
+  it("maps 429 → GraphRateLimitedError, defaults 60s when header missing/bad", async () => {
+    for (const hdr of [{}, { "Retry-After": "abc" }]) {
       const { fetch } = scriptFetch([
-        response({ status: 429, body: "", headers: tc.header }),
+        response({ status: 429, body: "", headers: hdr }),
       ]);
       const client = new HttpTeamsClient({ fetch });
       try {
-        await client.getDelta("/delta", "t");
+        await client.getChatMessages("t", "chat-1", {});
         expect.fail("expected throw");
       } catch (caught) {
         expect(caught).toBeInstanceOf(GraphRateLimitedError);
-        expect((caught as GraphRateLimitedError).retryAfterSeconds).toBe(
-          tc.expected,
-        );
+        expect((caught as GraphRateLimitedError).retryAfterSeconds).toBe(60);
       }
     }
   });
 
-  it("throws a descriptive error on non-2xx (500, 403) with body ≤200 chars", async () => {
+  it("non-2xx error body truncated to ≤200 chars", async () => {
     const longBody = "x".repeat(500);
     const { fetch } = scriptFetch([response({ status: 500, body: longBody })]);
     const client = new HttpTeamsClient({ fetch });
     try {
-      await client.getDelta("/delta", "t");
+      await client.getChatMessages("t", "chat-1", {});
       expect.fail("expected throw");
     } catch (caught) {
       const err = caught as Error;
@@ -148,24 +194,17 @@ describe("HttpTeamsClient", () => {
       const excerpt = err.message.split("500: ")[1] ?? "";
       expect(excerpt.length).toBeLessThanOrEqual(200);
     }
-    const { fetch: f403 } = scriptFetch([
-      response({ status: 403, body: "forbidden" }),
-    ]);
-    await expect(
-      new HttpTeamsClient({ fetch: f403 }).getDelta("/delta", "t"),
-    ).rejects.toThrowError(/403/);
   });
 
   it("does not leak the bearer token into error messages", async () => {
     const secret = "tok-TEAMS-SECRET-do-not-leak";
-    const statuses = [401, 403, 410, 429, 500];
-    for (const status of statuses) {
+    for (const status of [401, 403, 429, 500]) {
       const { fetch } = scriptFetch([
         response({ status, body: `boom ${secret}` }),
       ]);
       const client = new HttpTeamsClient({ fetch });
       try {
-        await client.getDelta("/delta", secret);
+        await client.getChatMessages(secret, "chat-1", {});
         expect.fail("expected throw");
       } catch (caught) {
         expect((caught as Error).message).not.toContain(secret);
@@ -176,15 +215,20 @@ describe("HttpTeamsClient", () => {
   it("honours a custom baseUrl and preferMaxPageSize", async () => {
     const { fetch, calls } = scriptFetch([
       response({ status: 200, body: JSON.stringify({ value: [] }) }),
+      response({ status: 200, body: JSON.stringify({ value: [] }) }),
     ]);
     const client = new HttpTeamsClient({
       fetch,
       baseUrl: "https://custom.invalid/beta",
       preferMaxPageSize: 10,
     });
-    await client.getDelta("/me/chats/getAllMessages/delta", "t");
-    expect(calls[0]!.url).toBe(
-      "https://custom.invalid/beta/me/chats/getAllMessages/delta",
+    await client.listChats("t");
+    await client.getChatMessages("t", "chat-1", {});
+    expect(calls[0]!.url.startsWith("https://custom.invalid/beta/me/chats")).toBe(
+      true,
+    );
+    expect(calls[1]!.url).toContain(
+      "https://custom.invalid/beta/me/chats/chat-1/messages",
     );
     expect(calls[0]!.headers["Prefer"]).toBe("odata.maxpagesize=10");
   });

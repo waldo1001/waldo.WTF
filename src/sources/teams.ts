@@ -36,28 +36,39 @@ export interface TeamsMessage {
   readonly "@removed"?: { readonly reason: string };
 }
 
-export interface TeamsDeltaResponse {
+export interface TeamsChat {
+  readonly id: string;
+  readonly chatType?: string;
+  readonly topic?: string | null;
+  readonly lastUpdatedDateTime?: string;
+}
+
+export interface TeamsChatListPage {
+  readonly value: readonly TeamsChat[];
+  readonly "@odata.nextLink"?: string;
+}
+
+export interface TeamsMessagesPage {
   readonly value: readonly TeamsMessage[];
   readonly "@odata.nextLink"?: string;
-  readonly "@odata.deltaLink"?: string;
 }
 
 /**
- * Fetch a Teams delta page. `url` is either the initial endpoint
- * (`/me/chats/getAllMessages/delta`) or a nextLink/deltaLink from a
- * prior call. Implementations MUST NOT mutate `url`.
+ * Polling Teams client. `/me/chats/getAllMessages/delta` is dead for
+ * delegated auth (412 PreconditionFailed), so we enumerate chats and
+ * pull per-chat messages.
  *
- * Error mapping (real HTTP impl will translate; fakes throw directly):
+ * Error mapping (real HTTP impl translates; fakes throw directly):
  * - HTTP 401 → `TokenExpiredError`
  * - HTTP 429 → `GraphRateLimitedError`
- * - HTTP 410 → `DeltaTokenInvalidError`
  */
 export interface TeamsClient {
-  getDelta(url: string, token: string): Promise<TeamsDeltaResponse>;
+  listChats(token: string, nextLink?: string): Promise<TeamsChatListPage>;
+  getChatMessages(
+    token: string,
+    chatId: string,
+    opts: { sinceIso?: string; nextLink?: string },
+  ): Promise<TeamsMessagesPage>;
 }
 
-export {
-  TokenExpiredError,
-  GraphRateLimitedError,
-  DeltaTokenInvalidError,
-} from "./graph.js";
+export { TokenExpiredError, GraphRateLimitedError } from "./graph.js";

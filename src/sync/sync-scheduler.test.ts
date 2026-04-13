@@ -221,12 +221,7 @@ describe("SyncScheduler", () => {
       steps: [{ kind: "ok", response: ok({ "@odata.deltaLink": "do" }) }],
     });
     const teams = new FakeTeamsClient({
-      steps: [
-        {
-          kind: "ok",
-          response: { value: [], "@odata.deltaLink": "dt" },
-        },
-      ],
+      steps: [{ kind: "listChatsOk", response: { value: [] } }],
     });
     const auth = new FakeAuthClient({
       accounts: [a1],
@@ -359,10 +354,8 @@ describe("SyncScheduler", () => {
     });
     const teams = new FakeTeamsClient({
       steps: [
-        {
-          kind: "ok",
-          response: { value: [], "@odata.deltaLink": "dt" },
-        },
+        { kind: "listChatsOk", response: { value: [{ id: "chat-1" }] } },
+        { kind: "getChatMessagesOk", response: { value: [] } },
       ],
     });
     const auth = new FakeAuthClient({
@@ -385,9 +378,15 @@ describe("SyncScheduler", () => {
     await scheduler.runOnce();
 
     expect(graph.calls[0]?.url).toContain("$filter=receivedDateTime%20ge%20");
-    expect(teams.calls[0]?.url).toContain(
-      "$filter=lastModifiedDateTime%20ge%20",
-    );
+    const getMsgsCall = teams.calls.find((c) => c.method === "getChatMessages");
+    const expectedIso = new Date(
+      new Date("2026-04-13T12:00:00Z").getTime() - 14 * 86_400_000,
+    ).toISOString();
+    expect(getMsgsCall).toMatchObject({
+      method: "getChatMessages",
+      chatId: "chat-1",
+      sinceIso: expectedIso,
+    });
   });
 
   it("runOnce invokes onTickComplete with the tick summary after sync_log writes", async () => {

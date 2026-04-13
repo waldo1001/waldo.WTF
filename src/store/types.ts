@@ -51,6 +51,12 @@ export interface SyncStatusRow {
   readonly messagesAddedLast24h: number;
 }
 
+export interface ChatCursorEntry {
+  readonly account: string;
+  readonly chatId: string;
+  readonly cursor: string;
+}
+
 export interface AccountRecord {
   readonly username: string;
   readonly displayName?: string;

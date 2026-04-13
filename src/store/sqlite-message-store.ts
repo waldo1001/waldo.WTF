@@ -8,6 +8,7 @@ import type {
 import { applyMigrations } from "./schema.js";
 import type {
   AccountRecord,
+  ChatCursorEntry,
   ChatType,
   Message,
   MessageSource,
@@ -75,6 +76,9 @@ export class SqliteMessageStore implements MessageStore {
   >;
   private readonly listAccountsStmt: Statement<[]>;
   private readonly searchStmt: Statement<[string, number]>;
+  private readonly getChatCursorStmt: Statement<[string, string]>;
+  private readonly setChatCursorStmt: Statement<[string, string, string]>;
+  private readonly listChatCursorsStmt: Statement<[string]>;
 
   constructor(private readonly db: Database) {
     applyMigrations(db);
@@ -149,6 +153,18 @@ export class SqliteMessageStore implements MessageStore {
       ORDER BY rank
       LIMIT ?
     `);
+    this.getChatCursorStmt = db.prepare(
+      "SELECT cursor FROM chat_cursors WHERE account = ? AND chat_id = ?",
+    );
+    this.setChatCursorStmt = db.prepare(`
+      INSERT INTO chat_cursors (account, chat_id, cursor)
+      VALUES (?, ?, ?)
+      ON CONFLICT(account, chat_id) DO UPDATE SET
+        cursor = excluded.cursor
+    `);
+    this.listChatCursorsStmt = db.prepare(
+      "SELECT account, chat_id, cursor FROM chat_cursors WHERE account = ? ORDER BY chat_id ASC",
+    );
   }
 
   async upsertMessages(messages: readonly Message[]): Promise<UpsertResult> {
@@ -241,6 +257,35 @@ export class SqliteMessageStore implements MessageStore {
       ...(r.display_name !== null && { displayName: r.display_name }),
       ...(r.tenant_id !== null && { tenantId: r.tenant_id }),
       addedAt: new Date(r.added_at),
+    }));
+  }
+
+  async getChatCursor(
+    account: string,
+    chatId: string,
+  ): Promise<string | undefined> {
+    const row = this.getChatCursorStmt.get(account, chatId) as
+      | { cursor: string }
+      | undefined;
+    return row?.cursor;
+  }
+
+  async setChatCursor(entry: ChatCursorEntry): Promise<void> {
+    this.setChatCursorStmt.run(entry.account, entry.chatId, entry.cursor);
+  }
+
+  async listChatCursors(
+    account: string,
+  ): Promise<readonly ChatCursorEntry[]> {
+    const rows = this.listChatCursorsStmt.all(account) as {
+      account: string;
+      chat_id: string;
+      cursor: string;
+    }[];
+    return rows.map((r) => ({
+      account: r.account,
+      chatId: r.chat_id,
+      cursor: r.cursor,
     }));
   }
 

@@ -27,10 +27,33 @@
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8765/health)",
       "Bash(kill %1)",
       "Bash(pkill -f \"tsx src/index.ts\")",
-      "Bash(curl -s -o /dev/null -w \"health: %{http_code}\\\\n\" http://localhost:8765/health)"
+      "Bash(curl -s -o /dev/null -w \"health: %{http_code}\\\\n\" http://localhost:8765/health)",
+      "Bash(grep -E '^\\\\.env$|token-cache|accounts\\\\.json|lake\\\\.db|\\\\*\\\\.pem|\\\\*\\\\.key' .gitignore)",
+      "Read(//Users/waldo/Temp/waldo.WTF.dev/**)",
+      "Bash(cp /Users/waldo/Temp/waldo.WTF.dev/lake.db /Users/waldo/Temp/waldo.WTF.dev/lake.db.pre-v4.bak)",
+      "Bash(ls -la /Users/waldo/Temp/waldo.WTF.dev/lake.db*)",
+      "Bash(node -e 'const Database=require\\(\"better-sqlite3\"\\);const db=new Database\\(\"/Users/waldo/Temp/waldo.WTF.dev/lake.db\",{readonly:true}\\);console.log\\(\"user_version:\",db.prepare\\(\"PRAGMA user_version\"\\).get\\(\\)\\);console.log\\(\"tables:\",db.prepare\\(\"SELECT name FROM sqlite_master WHERE type=\\\\\"table\\\\\" AND name NOT LIKE \\\\\"sqlite_%\\\\\" ORDER BY name\"\\).all\\(\\).map\\(r=>r.name\\)\\);console.log\\(\"messages:\",db.prepare\\(\"SELECT COUNT\\(*\\) n FROM messages\"\\).get\\(\\)\\);db.close\\(\\);')",
+      "Bash(node /tmp/inspect-lake.mjs /Users/waldo/Temp/waldo.WTF.dev/lake.db)",
+      "Bash(node inspect-lake.mjs /Users/waldo/Temp/waldo.WTF.dev/lake.db)",
+      "Bash(python3 -c \"import json,sys;d=json.load\\(sys.stdin\\);[print\\(r['account'][:3]+'***','/',r['source'],'->',r.get\\('lastStatus'\\),'ok=',r.get\\('messagesAddedLastOk'\\),'err=',\\(r.get\\('lastError'\\) or ''\\)[:60]\\) for r in d['result']['rows']]\")",
+      "Bash(node /Users/waldo/SourceCode/Community/waldo.WTF/inspect-lake.mjs /Users/waldo/Temp/waldo.WTF.dev/lake.db)",
+      "Bash(node -e \"const D=require\\('better-sqlite3'\\);const db=new D\\('/Users/waldo/Temp/waldo.WTF.dev/lake.db',{readonly:true}\\);const rows=db.prepare\\(\\\\\"SELECT datetime\\(ts/1000,'unixepoch'\\) t, account, source, status, messages_added, substr\\(error_message,1,120\\) err FROM sync_log ORDER BY ts DESC LIMIT 6\\\\\"\\).all\\(\\);console.log\\(JSON.stringify\\(rows,null,2\\)\\);db.close\\(\\);\")",
+      "Bash(sqlite3 /Users/waldo/Temp/waldo.WTF.dev/lake.db \"SELECT source, account, COUNT\\(*\\) FROM messages GROUP BY source, account;\")",
+      "Bash(sqlite3 /Users/waldo/Temp/waldo.WTF.dev/lake.db \"SELECT source, account, status, messages_added, error_message FROM sync_log ORDER BY ts DESC LIMIT 20;\")",
+      "Bash(sqlite3 /Users/waldo/Temp/waldo.WTF.dev/lake.db \"SELECT account, source, delta_token IS NOT NULL, last_sync_at FROM sync_state;\")",
+      "Bash(WALDO_BACKFILL_DAYS=1 npx tsx src/index.ts)",
+      "Bash(sqlite3 /Users/waldo/Temp/waldo.WTF.dev/lake.db \"SELECT datetime\\(ts/1000,'unixepoch'\\),source,account,status,messages_added,substr\\(coalesce\\(error_message,''\\),1,60\\) FROM sync_log ORDER BY ts DESC LIMIT 10;\")",
+      "Bash(sqlite3 /Users/waldo/Temp/waldo.WTF.dev/lake.db \"SELECT account, COUNT\\(*\\) FROM chat_cursors GROUP BY account;\")",
+      "Bash(sqlite3 /Users/waldo/Temp/waldo.WTF.dev/lake.db \"SELECT account, source, last_sync_at, delta_token IS NOT NULL FROM sync_state;\")",
+      "Read(//Users/waldo/Library/Logs/Claude/**)",
+      "Read(//Users/waldo/Library/Application Support/Claude/**)",
+      "Bash(xargs kill:*)",
+      "Bash(curl -sS http://localhost:8765/health)",
+      "Bash(curl -sS -N http://localhost:8765/ -H \"Authorization: Bearer e2d95cb688939ef10f34b85be59fdf05664722e5837a3aa4afff7f0a09b5d1fa\" -H \"Content-Type: application/json\" -H \"Accept: application/json, text/event-stream\" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"curl\",\"version\":\"0\"}}}')"
     ],
     "additionalDirectories": [
-      "/tmp"
+      "/tmp",
+      "/Users/waldo/Library/Application Support/Claude"
     ]
   }
 }

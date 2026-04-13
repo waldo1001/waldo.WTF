@@ -1,6 +1,6 @@
 import type { Database } from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 const MIGRATION_1 = `
 CREATE TABLE IF NOT EXISTS messages (
@@ -86,6 +86,19 @@ ALTER TABLE messages ADD COLUMN reply_to_id TEXT;
 ALTER TABLE messages ADD COLUMN mentions_json TEXT;
 `;
 
+const MIGRATION_4 = `
+CREATE TABLE IF NOT EXISTS chat_cursors (
+  account TEXT NOT NULL,
+  chat_id TEXT NOT NULL,
+  last_modified_iso TEXT NOT NULL,
+  PRIMARY KEY (account, chat_id)
+);
+`;
+
+const MIGRATION_5 = `
+ALTER TABLE chat_cursors RENAME COLUMN last_modified_iso TO cursor;
+`;
+
 export function applyMigrations(db: Database): void {
   const current = (
     db.prepare("PRAGMA user_version").get() as { user_version: number }
@@ -102,6 +115,12 @@ export function applyMigrations(db: Database): void {
     }
     if (current < 3) {
       db.exec(MIGRATION_3);
+    }
+    if (current < 4) {
+      db.exec(MIGRATION_4);
+    }
+    if (current < 5) {
+      db.exec(MIGRATION_5);
     }
     db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
   });

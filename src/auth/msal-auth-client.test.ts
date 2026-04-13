@@ -105,7 +105,7 @@ describe("MsalAuthClient", () => {
     expect(await client.listAccounts()).toEqual([]);
   });
 
-  it("getTokenSilent requests Mail.Read scope and returns AccessToken", async () => {
+  it("getTokenSilent requests Mail.Read + Chat.Read scopes and returns AccessToken", async () => {
     const info = makeAccountInfo();
     const expires = new Date("2026-04-13T10:00:00Z");
     const pca = new FakePca({
@@ -125,7 +125,7 @@ describe("MsalAuthClient", () => {
     const token = await client.getTokenSilent(account);
     expect(token).toEqual({ token: "tok-123", expiresOn: expires, account });
     expect(pca.silentCalls).toHaveLength(1);
-    expect(pca.silentCalls[0]?.scopes).toEqual(["Mail.Read"]);
+    expect(pca.silentCalls[0]?.scopes).toEqual(["Mail.Read", "Chat.Read"]);
     expect(pca.silentCalls[0]?.account.homeAccountId).toBe("home-1");
   });
 
@@ -188,7 +188,7 @@ describe("MsalAuthClient", () => {
       homeAccountId: "h-new",
       tenantId: "tenant-1",
     });
-    expect(pca.deviceCodeCalls[0]?.scopes).toEqual(["Mail.Read"]);
+    expect(pca.deviceCodeCalls[0]?.scopes).toEqual(["Mail.Read", "Chat.Read"]);
   });
 
   it("loginWithDeviceCode wraps MSAL failure as AuthError('device-code-failed')", async () => {

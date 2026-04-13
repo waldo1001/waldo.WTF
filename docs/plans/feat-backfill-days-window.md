@@ -152,3 +152,20 @@ See plan preamble and methodology.md for full AC list. Highlights:
 9. `npm run typecheck` — clean.
 10. `/security-scan` — PASS.
 11. `/docs-update` — changelog updated.
+
+## Outcome (2026-04-13)
+
+Shipped. Live smoke on a clean dev db (`/Users/waldo/Temp/waldo.WTF.dev/`) with
+two real accounts across two tenants and `WALDO_BACKFILL_DAYS=14`:
+
+- Outlook both accounts **ok** on the first tick, seconds not minutes:
+  `messagesAddedLastOk` = 666 / 546. Window filter is holding.
+- Teams both accounts **error** with `HTTP 412 PreconditionFailed — Requested
+  API is not supported in delegated context`. **Pre-existing blocker**,
+  unrelated to this feature: `/me/chats/getAllMessages/delta` requires
+  application permissions + Resource-Specific Consent and is not available
+  under the delegated device-code flow waldo.WTF uses. Existed since Weekend 4
+  slice 4; first surfaced today on live smoke. Filed as a separate plan:
+  [teams-endpoint-rework.md](teams-endpoint-rework.md). The 412 correctly
+  lands in `sync_log` — that signal is what found the hole, and is left in
+  place as the regression guard.

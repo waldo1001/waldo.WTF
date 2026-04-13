@@ -1,9 +1,9 @@
 import {
-  DeltaTokenInvalidError,
   GraphRateLimitedError,
   TokenExpiredError,
+  type TeamsChatListPage,
   type TeamsClient,
-  type TeamsDeltaResponse,
+  type TeamsMessagesPage,
 } from "./teams.js";
 import type { FetchLike } from "./http-graph-client.js";
 
@@ -28,9 +28,36 @@ export class HttpTeamsClient implements TeamsClient {
       opts.preferMaxPageSize ?? DEFAULT_PREFER_MAX_PAGE_SIZE;
   }
 
-  async getDelta(url: string, token: string): Promise<TeamsDeltaResponse> {
-    const resolvedUrl = /^https?:\/\//i.test(url) ? url : `${this.#baseUrl}${url}`;
-    const res = await this.#fetch(resolvedUrl, {
+  async listChats(
+    token: string,
+    nextLink?: string,
+  ): Promise<TeamsChatListPage> {
+    const url = nextLink ?? `${this.#baseUrl}/me/chats`;
+    return this.#request<TeamsChatListPage>(url, token);
+  }
+
+  async getChatMessages(
+    token: string,
+    chatId: string,
+    opts: { sinceIso?: string; nextLink?: string },
+  ): Promise<TeamsMessagesPage> {
+    let url: string;
+    if (opts.nextLink !== undefined) {
+      url = opts.nextLink;
+    } else {
+      const encodedChatId = encodeURIComponent(chatId);
+      const params = new URLSearchParams();
+      params.set("$orderby", "lastModifiedDateTime desc");
+      if (opts.sinceIso !== undefined) {
+        params.set("$filter", `lastModifiedDateTime gt ${opts.sinceIso}`);
+      }
+      url = `${this.#baseUrl}/me/chats/${encodedChatId}/messages?${params.toString()}`;
+    }
+    return this.#request<TeamsMessagesPage>(url, token);
+  }
+
+  async #request<T>(url: string, token: string): Promise<T> {
+    const res = await this.#fetch(url, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -40,7 +67,6 @@ export class HttpTeamsClient implements TeamsClient {
     });
 
     if (res.status === 401) throw new TokenExpiredError();
-    if (res.status === 410) throw new DeltaTokenInvalidError();
     if (res.status === 429) {
       const header = res.headers.get("Retry-After");
       const parsed = header ? Number.parseInt(header, 10) : Number.NaN;
@@ -55,6 +81,6 @@ export class HttpTeamsClient implements TeamsClient {
     }
 
     const text = await res.text();
-    return JSON.parse(text) as TeamsDeltaResponse;
+    return JSON.parse(text) as T;
   }
 }

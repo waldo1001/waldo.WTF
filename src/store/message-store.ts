@@ -1,5 +1,6 @@
 import type {
   AccountRecord,
+  ChatCursorEntry,
   Message,
   MessageSource,
   SearchHit,
@@ -40,4 +41,10 @@ export interface MessageStore {
     opts: GetRecentMessagesOptions,
   ): Promise<readonly Message[]>;
   getSyncStatus(now: Date): Promise<readonly SyncStatusRow[]>;
+  getChatCursor(
+    account: string,
+    chatId: string,
+  ): Promise<string | undefined>;
+  setChatCursor(entry: ChatCursorEntry): Promise<void>;
+  listChatCursors(account: string): Promise<readonly ChatCursorEntry[]>;
 }

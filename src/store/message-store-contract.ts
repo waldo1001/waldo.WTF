@@ -607,6 +607,88 @@ export function runMessageStoreContract(
       expect(got[0]?.mentions).toEqual([]);
     });
 
+    it("getChatCursor returns undefined when no cursor is set", async () => {
+      const { store } = await factory();
+      expect(
+        await store.getChatCursor("a@example.test", "chat-1"),
+      ).toBeUndefined();
+    });
+
+    it("setChatCursor then getChatCursor round-trips the ISO value", async () => {
+      const { store } = await factory();
+      await store.setChatCursor({
+        account: "a@example.test",
+        chatId: "chat-1",
+        cursor: "2026-04-13T10:00:00.000Z",
+      });
+      expect(await store.getChatCursor("a@example.test", "chat-1")).toBe(
+        "2026-04-13T10:00:00.000Z",
+      );
+    });
+
+    it("setChatCursor overwrites an existing cursor for the same (account, chatId)", async () => {
+      const { store } = await factory();
+      await store.setChatCursor({
+        account: "a@example.test",
+        chatId: "chat-1",
+        cursor: "2026-04-13T10:00:00.000Z",
+      });
+      await store.setChatCursor({
+        account: "a@example.test",
+        chatId: "chat-1",
+        cursor: "2026-04-13T11:00:00.000Z",
+      });
+      expect(await store.getChatCursor("a@example.test", "chat-1")).toBe(
+        "2026-04-13T11:00:00.000Z",
+      );
+    });
+
+    it("listChatCursors returns [] when the account has no cursors", async () => {
+      const { store } = await factory();
+      expect(await store.listChatCursors("a@example.test")).toEqual([]);
+    });
+
+    it("listChatCursors returns all cursors for the given account", async () => {
+      const { store } = await factory();
+      await store.setChatCursor({
+        account: "a@example.test",
+        chatId: "chat-1",
+        cursor: "2026-04-13T10:00:00.000Z",
+      });
+      await store.setChatCursor({
+        account: "a@example.test",
+        chatId: "chat-2",
+        cursor: "2026-04-13T11:00:00.000Z",
+      });
+      const rows = await store.listChatCursors("a@example.test");
+      const map = new Map(rows.map((r) => [r.chatId, r.cursor]));
+      expect(map.get("chat-1")).toBe("2026-04-13T10:00:00.000Z");
+      expect(map.get("chat-2")).toBe("2026-04-13T11:00:00.000Z");
+      expect(rows).toHaveLength(2);
+    });
+
+    it("chat cursors are isolated by account", async () => {
+      const { store } = await factory();
+      await store.setChatCursor({
+        account: "a@example.test",
+        chatId: "chat-1",
+        cursor: "2026-04-13T10:00:00.000Z",
+      });
+      await store.setChatCursor({
+        account: "b@example.test",
+        chatId: "chat-1",
+        cursor: "2026-04-13T11:00:00.000Z",
+      });
+      expect(await store.getChatCursor("a@example.test", "chat-1")).toBe(
+        "2026-04-13T10:00:00.000Z",
+      );
+      expect(await store.getChatCursor("b@example.test", "chat-1")).toBe(
+        "2026-04-13T11:00:00.000Z",
+      );
+      expect(await store.listChatCursors("a@example.test")).toHaveLength(1);
+      expect(await store.listChatCursors("b@example.test")).toHaveLength(1);
+    });
+
     it("getRecentMessages honours the limit", async () => {
       const { store } = await factory();
       await store.upsertMessages([

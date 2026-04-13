@@ -29,19 +29,25 @@ curl -sS http://localhost:8765/health
 # → {"ok":true}
 ```
 
-**JSON-RPC `tools/list`** (bearer required):
+**MCP `initialize` + `tools/list`** (bearer required, Streamable HTTP
+Accept negotiation). The server now speaks the real MCP protocol via
+`@modelcontextprotocol/sdk`, so curl needs both `application/json` and
+`text/event-stream` in the `Accept` header:
 
 ```sh
 curl -sS http://localhost:8765/ \
   -H "Authorization: Bearer $BEARER_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
 ```
 
-You should see three tools: `get_recent_activity`, `get_sync_status`,
-`search`. That's everything shipped in Weekend 3. The other tools
-documented in [user-guide.md §2](user-guide.md) (`get_thread`,
-`list_accounts`) land in later weekends.
+You should see an `initialize` result advertising `tools` capability.
+A follow-up `tools/list` call (same headers) will list three tools:
+`get_recent_activity`, `get_sync_status`, `search`. That's everything
+shipped in Weekend 3. The other tools documented in
+[user-guide.md §2](user-guide.md) (`get_thread`, `list_accounts`) land
+in later weekends.
 
 ## 3. Claude Desktop config
 
@@ -50,24 +56,31 @@ Edit `claude_desktop_config.json`:
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
-Add the `waldo-wtf` server under `mcpServers`:
+Claude Desktop does not speak Streamable HTTP natively — it only
+launches stdio MCP servers. Use `mcp-remote` (from the MCP org) as a
+stdio↔HTTP bridge. Add the `waldo-wtf` server under `mcpServers`:
 
 ```json
 {
   "mcpServers": {
     "waldo-wtf": {
-      "transport": "http",
-      "url": "http://localhost:8765",
-      "headers": {
-        "Authorization": "Bearer YOUR_BEARER_TOKEN_FROM_DOT_ENV"
-      }
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "http://localhost:8765",
+        "--header",
+        "Authorization: Bearer YOUR_BEARER_TOKEN_FROM_DOT_ENV"
+      ]
     }
   }
 }
 ```
 
 Replace `YOUR_BEARER_TOKEN_FROM_DOT_ENV` with the exact value of
-`BEARER_TOKEN` in `.env`. **Never commit this file.**
+`BEARER_TOKEN` in `.env`. **Never commit this file.** The legacy
+`"transport": "http"` block that used to live here does not work —
+Claude Desktop ignores it and the handshake never starts.
 
 Restart Claude Desktop fully (quit + relaunch) — it reads the config
 once at startup.
@@ -90,6 +103,7 @@ keyword, that's expected.
 | Claude Desktop: "server not found" | Server not running | `npm run dev`; verify `/health` returns 200 |
 | Claude Desktop: 401 unauthorized in logs | Bearer mismatch | Compare `.env` `BEARER_TOKEN` to the `Authorization` header in config |
 | `tools/list` returns only `get_recent_activity` | Running a stale build | `git pull && npm run build` / restart `npm run dev` |
+| Claude Desktop: `initialize` never completes, or curl returns `406 Not Acceptable` | Stale `"transport": "http"` config block, or missing `Accept: text/event-stream` | Switch to the `mcp-remote` wrapper shown in §3; for curl, add `-H "Accept: application/json, text/event-stream"` |
 | `get_recent_activity` returns `count: 0` | First delta sync hasn't completed yet | Watch logs for `delta_sync_completed`; retry |
 | `get_sync_status` rows all `stale: true` | Sync loop crashed or account login expired | Check `sync_log` table; re-run device code login |
 | Empty `search` results but data exists | FTS5 index not populated | Restart; schema migration rebuilds the index on startup |
