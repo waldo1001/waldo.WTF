@@ -86,6 +86,9 @@ Scaffold **in-place** in this repo (`/Users/waldo/SourceCode/Community/waldo.WTF
 ### Slice 1 — Interactive login CLI ✅ (2026-04-13)
 - [x] `runCli(argv)` + `addAccount(opts)` in [src/cli.ts](src/cli.ts); `--add-account` drives `MsalAuthClient.loginWithDeviceCode` against the real `TokenCacheStore`. Live smoke still required per-account. Plan: [docs/plans/weekend-4-slice-1-interactive-login-cli.md](docs/plans/weekend-4-slice-1-interactive-login-cli.md).
 
+### Slice 2 — Teams message shape + schema v3 ✅ (2026-04-13)
+- [x] `Message.chatType` / `replyToId` / `mentions` (optional); schema v3 migration adds `chat_type`, `reply_to_id`, `mentions_json` columns; both store impls roundtrip the fields. FTS5 untouched. Plan: [docs/plans/weekend-4-slice-2-teams-schema-v3.md](docs/plans/weekend-4-slice-2-teams-schema-v3.md).
+
 - [ ] Remaining Microsoft accounts logged in (iFacto, customer tenants, personal) — uses `tsx src/cli.ts --add-account` (Slice 1)
 - [ ] Open Q: do all 4 support delegated `Mail.Read` without admin consent?
 - [ ] Teams source: `/me/chats/getAllMessages` with delta

@@ -8,6 +8,7 @@ import type {
 import { applyMigrations } from "./schema.js";
 import type {
   AccountRecord,
+  ChatType,
   Message,
   MessageSource,
   SearchHit,
@@ -31,6 +32,9 @@ interface MessageRow {
   body: string | null;
   body_html: string | null;
   raw_json: string | null;
+  chat_type: string | null;
+  reply_to_id: string | null;
+  mentions_json: string | null;
 }
 
 interface SyncStateRow {
@@ -80,11 +84,13 @@ export class SqliteMessageStore implements MessageStore {
       INSERT INTO messages (
         id, source, account, native_id,
         thread_id, thread_name, sender_name, sender_email,
-        sent_at, imported_at, is_read, body, body_html, raw_json
+        sent_at, imported_at, is_read, body, body_html, raw_json,
+        chat_type, reply_to_id, mentions_json
       ) VALUES (
         @id, @source, @account, @native_id,
         @thread_id, @thread_name, @sender_name, @sender_email,
-        @sent_at, @imported_at, @is_read, @body, @body_html, @raw_json
+        @sent_at, @imported_at, @is_read, @body, @body_html, @raw_json,
+        @chat_type, @reply_to_id, @mentions_json
       )
       ON CONFLICT(id) DO UPDATE SET
         source = excluded.source,
@@ -99,7 +105,10 @@ export class SqliteMessageStore implements MessageStore {
         is_read = excluded.is_read,
         body = excluded.body,
         body_html = excluded.body_html,
-        raw_json = excluded.raw_json
+        raw_json = excluded.raw_json,
+        chat_type = excluded.chat_type,
+        reply_to_id = excluded.reply_to_id,
+        mentions_json = excluded.mentions_json
     `);
     this.deleteStmt = db.prepare("DELETE FROM messages WHERE id = ?");
     this.getSyncStmt = db.prepare(
@@ -131,6 +140,7 @@ export class SqliteMessageStore implements MessageStore {
       SELECT m.id, m.source, m.account, m.native_id,
              m.thread_id, m.thread_name, m.sender_name, m.sender_email,
              m.sent_at, m.imported_at, m.is_read, m.body, m.body_html, m.raw_json,
+             m.chat_type, m.reply_to_id, m.mentions_json,
              snippet(messages_fts, 0, '[', ']', '…', 16) AS snippet,
              bm25(messages_fts) AS rank
       FROM messages_fts
@@ -255,7 +265,8 @@ export class SqliteMessageStore implements MessageStore {
     const sql = `
       SELECT id, source, account, native_id,
              thread_id, thread_name, sender_name, sender_email,
-             sent_at, imported_at, is_read, body, body_html, raw_json
+             sent_at, imported_at, is_read, body, body_html, raw_json,
+             chat_type, reply_to_id, mentions_json
       FROM messages
       WHERE ${clauses.join(" AND ")}
       ORDER BY sent_at DESC, id DESC
@@ -352,7 +363,21 @@ function toFts5Phrase(raw: string): string | null {
   return `"${trimmed.replace(/"/g, '""')}"`;
 }
 
+function parseMentions(raw: string | null): readonly string[] | undefined {
+  if (raw === null) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.every((v) => typeof v === "string")) {
+      return parsed as readonly string[];
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function fromRow(r: MessageRow): Message {
+  const mentions = parseMentions(r.mentions_json);
   return {
     id: r.id,
     source: r.source as MessageSource,
@@ -368,6 +393,9 @@ function fromRow(r: MessageRow): Message {
     ...(r.body !== null && { body: r.body }),
     ...(r.body_html !== null && { bodyHtml: r.body_html }),
     ...(r.raw_json !== null && { rawJson: r.raw_json }),
+    ...(r.chat_type !== null && { chatType: r.chat_type as ChatType }),
+    ...(r.reply_to_id !== null && { replyToId: r.reply_to_id }),
+    ...(mentions !== undefined && { mentions }),
   };
 }
 
@@ -387,5 +415,8 @@ function toRow(m: Message): MessageRow {
     body: nullable(m.body),
     body_html: nullable(m.bodyHtml),
     raw_json: nullable(m.rawJson),
+    chat_type: nullable(m.chatType),
+    reply_to_id: nullable(m.replyToId),
+    mentions_json: m.mentions === undefined ? null : JSON.stringify(m.mentions),
   };
 }

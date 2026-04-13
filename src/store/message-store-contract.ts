@@ -557,6 +557,56 @@ export function runMessageStoreContract(
       expect(rows[0]?.messagesAddedLastOk).toBe(2);
     });
 
+    it("upsertMessages round-trips Teams-specific fields (chatType/replyToId/mentions)", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({
+          id: "t1",
+          source: "teams",
+          chatType: "channel",
+          replyToId: "root-msg-1",
+          mentions: ["alice@example.test", "bob@example.test"],
+          sentAt: new Date("2026-04-13T10:00:00Z"),
+          body: "hi",
+        }),
+      ]);
+      const got = await store.getRecentMessages({
+        since: new Date("2026-04-01T00:00:00Z"),
+        limit: 10,
+      });
+      expect(got).toHaveLength(1);
+      const m = got[0]!;
+      expect(m.source).toBe("teams");
+      expect(m.chatType).toBe("channel");
+      expect(m.replyToId).toBe("root-msg-1");
+      expect(m.mentions).toEqual(["alice@example.test", "bob@example.test"]);
+    });
+
+    it("upsertMessages leaves Teams fields undefined when omitted", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([msg({ id: "plain", body: "plain" })]);
+      const got = await store.getRecentMessages({
+        since: new Date("2026-04-01T00:00:00Z"),
+        limit: 10,
+      });
+      const m = got[0]!;
+      expect(m.chatType).toBeUndefined();
+      expect(m.replyToId).toBeUndefined();
+      expect(m.mentions).toBeUndefined();
+    });
+
+    it("upsertMessages preserves an empty mentions array distinct from undefined", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({ id: "empty-mentions", source: "teams", mentions: [] }),
+      ]);
+      const got = await store.getRecentMessages({
+        since: new Date("2026-04-01T00:00:00Z"),
+        limit: 10,
+      });
+      expect(got[0]?.mentions).toEqual([]);
+    });
+
     it("getRecentMessages honours the limit", async () => {
       const { store } = await factory();
       await store.upsertMessages([

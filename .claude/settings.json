@@ -17,6 +17,7 @@
       "Bash(ls /Users/waldo/SourceCode/Community/waldo.WTF/src/**/__fixtures__)",
       "Bash(git add:*)",
       "Bash(git commit -m ':*)",
+      "Bash(git commit *)",
       "Bash(git push:*)"
     ],
     "additionalDirectories": [

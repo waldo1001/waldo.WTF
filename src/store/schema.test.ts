@@ -23,7 +23,7 @@ describe("schema / applyMigrations", () => {
     expect(userVersion(db)).toBe(0);
     applyMigrations(db);
     expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
-    expect(CURRENT_SCHEMA_VERSION).toBe(2);
+    expect(CURRENT_SCHEMA_VERSION).toBe(3);
   });
 
   it("creates all four tables and expected indices", () => {
@@ -213,7 +213,7 @@ describe("schema / FTS5 (migration 2)", () => {
 
     applyMigrations(db);
 
-    expect(userVersion(db)).toBe(2);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
     const count = (
       db.prepare("SELECT COUNT(*) AS n FROM messages_fts").get() as {
         n: number;
@@ -252,5 +252,96 @@ describe("schema / FTS5 (migration 2)", () => {
     );
     expect(ftsRowidsMatching(db, "kangaroo")).toHaveLength(0);
     expect(ftsRowidsMatching(db, "wombat")).toHaveLength(1);
+  });
+});
+
+describe("schema / Teams columns (migration 3)", () => {
+  function hasColumn(db: Database.Database, table: string, column: string): boolean {
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all() as {
+      name: string;
+    }[];
+    return rows.some((r) => r.name === column);
+  }
+
+  it("adds chat_type, reply_to_id, mentions_json columns to messages on v2→v3", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    expect(hasColumn(db, "messages", "chat_type")).toBe(true);
+    expect(hasColumn(db, "messages", "reply_to_id")).toBe(true);
+    expect(hasColumn(db, "messages", "mentions_json")).toBe(true);
+  });
+
+  it("preserves v2 data across the v3 migration", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    insertMessageRow(db, { id: "survivor", body: "pre-v3" });
+    applyMigrations(db);
+    const row = db
+      .prepare("SELECT id, body, chat_type, reply_to_id, mentions_json FROM messages WHERE id = ?")
+      .get("survivor") as {
+      id: string;
+      body: string;
+      chat_type: string | null;
+      reply_to_id: string | null;
+      mentions_json: string | null;
+    };
+    expect(row.id).toBe("survivor");
+    expect(row.body).toBe("pre-v3");
+    expect(row.chat_type).toBeNull();
+    expect(row.reply_to_id).toBeNull();
+    expect(row.mentions_json).toBeNull();
+  });
+
+  it("upgrades a pre-existing v2 database to v3 and keeps rows intact", () => {
+    const db = new Database(":memory:");
+    // Simulate a v2 db by running migrations, inserting, then dropping user_version back (cheat: use current schema).
+    applyMigrations(db);
+    insertMessageRow(db, { id: "before-v3", body: "rows survive" });
+    db.exec("PRAGMA user_version = 2");
+    // Also simulate lack of new columns by dropping and recreating messages without them.
+    db.exec(`
+      CREATE TABLE _msg_old AS SELECT
+        id, source, account, native_id, thread_id, thread_name,
+        sender_name, sender_email, sent_at, imported_at, is_read,
+        body, body_html, raw_json
+      FROM messages;
+      DROP TABLE messages;
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        source TEXT NOT NULL,
+        account TEXT NOT NULL,
+        native_id TEXT NOT NULL,
+        thread_id TEXT,
+        thread_name TEXT,
+        sender_name TEXT,
+        sender_email TEXT,
+        sent_at INTEGER NOT NULL,
+        imported_at INTEGER NOT NULL,
+        is_read INTEGER,
+        body TEXT,
+        body_html TEXT,
+        raw_json TEXT
+      );
+      INSERT INTO messages SELECT * FROM _msg_old;
+      DROP TABLE _msg_old;
+    `);
+
+    applyMigrations(db);
+
+    expect(userVersion(db)).toBe(3);
+    expect(hasColumn(db, "messages", "chat_type")).toBe(true);
+    const n = (
+      db.prepare("SELECT COUNT(*) AS n FROM messages WHERE id = ?").get(
+        "before-v3",
+      ) as { n: number }
+    ).n;
+    expect(n).toBe(1);
+  });
+
+  it("is idempotent at v3", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    applyMigrations(db);
+    expect(userVersion(db)).toBe(3);
   });
 });

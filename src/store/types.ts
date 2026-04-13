@@ -1,5 +1,7 @@
 export type MessageSource = "teams" | "outlook" | "whatsapp";
 
+export type ChatType = "oneOnOne" | "group" | "channel";
+
 export interface Message {
   readonly id: string;
   readonly source: MessageSource;
@@ -15,6 +17,9 @@ export interface Message {
   readonly body?: string;
   readonly bodyHtml?: string;
   readonly rawJson?: string;
+  readonly chatType?: ChatType;
+  readonly replyToId?: string;
+  readonly mentions?: readonly string[];
 }
 
 export interface SyncStateEntry {
