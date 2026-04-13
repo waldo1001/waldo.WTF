@@ -122,6 +122,33 @@ Scaffold **in-place** in this repo (`/Users/waldo/SourceCode/Community/waldo.WTF
 
 ---
 
+## Weekend 4.5 — Finish v1 MCP surface
+
+Brief §6 lists four tools in the v1 MCP surface. Weekend 3 shipped
+`get_recent_activity`, `get_sync_status`, and (bonus) `search`.
+`get_thread` and `list_accounts` were silently missing from the
+schedule — added here so the v1 surface is complete before Weekend 5
+moves the server to the Synology. Each is a self-contained TDD slice
+with its own plan file.
+
+- [ ] `get_thread(thread_id, limit?)` — pull a full conversation for
+  context. Backed by a new `MessageStore.getThread(...)` query (shape
+  TBD in the plan — Outlook threads key off `thread_name` + account,
+  Teams threads key off `chat_id`). Projects messages the same way
+  `get_recent_activity` does (no `body`/`rawJson` leak). Plan:
+  [docs/plans/weekend-4.5-slice-1-get-thread.md](docs/plans/weekend-4.5-slice-1-get-thread.md).
+- [ ] `list_accounts()` — return the known accounts so Claude can
+  enumerate what's available. Backed by the existing
+  `MessageStore.listAccounts()` (schema v1). Read-only, trivial. Plan:
+  [docs/plans/weekend-4.5-slice-2-list-accounts.md](docs/plans/weekend-4.5-slice-2-list-accounts.md).
+- [ ] User guide ([docs/user-guide.md](docs/user-guide.md)) and Claude
+  Desktop wiring ([docs/claude-desktop-wiring.md](docs/claude-desktop-wiring.md))
+  updated to advertise the two new tools.
+- [ ] Live smoke through Claude Desktop: *"show me the full thread
+  about X"* and *"which accounts do you have access to?"*.
+
+---
+
 ## Weekend 5 — Dockerize + Synology
 
 - [ ] `Dockerfile` (node:22-alpine)
