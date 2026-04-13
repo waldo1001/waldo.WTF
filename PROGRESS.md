@@ -131,21 +131,32 @@ schedule — added here so the v1 surface is complete before Weekend 5
 moves the server to the Synology. Each is a self-contained TDD slice
 with its own plan file.
 
-- [ ] `get_thread(thread_id, limit?)` — pull a full conversation for
-  context. Backed by a new `MessageStore.getThread(...)` query (shape
-  TBD in the plan — Outlook threads key off `thread_name` + account,
-  Teams threads key off `chat_id`). Projects messages the same way
-  `get_recent_activity` does (no `body`/`rawJson` leak). Plan:
+- [x] `get_thread(thread_id, limit?)` ✅ (2026-04-13) — Teams-only
+  scope. `MessageStore.getThread({threadId, limit?})` added to
+  contract + SqliteMessageStore + InMemoryMessageStore. SQL:
+  `WHERE thread_id = ? ORDER BY sent_at ASC, id ASC LIMIT ?`. Handler
+  at [src/mcp/tools/get-thread.ts](src/mcp/tools/get-thread.ts)
+  projects the same shape as `get_recent_activity` (no `body`,
+  no `rawJson`; `SNIPPET_MAX=280` fallback to `bodyHtml`). Default
+  limit 200, max 500. Covers Teams chats and (as of slice 3) Outlook
+  conversations. Plan:
   [docs/plans/weekend-4.5-slice-1-get-thread.md](docs/plans/weekend-4.5-slice-1-get-thread.md).
-- [ ] `list_accounts()` — return the known accounts so Claude can
-  enumerate what's available. Backed by the existing
-  `MessageStore.listAccounts()` (schema v1). Read-only, trivial. Plan:
+- [x] `list_accounts()` ✅ (2026-04-13) — handler at
+  [src/mcp/tools/list-accounts.ts](src/mcp/tools/list-accounts.ts),
+  backed by the existing `MessageStore.listAccounts()`. Projection is
+  `{username, displayName?, addedAt}`; `tenantId` omitted from the
+  wire shape. Plan:
   [docs/plans/weekend-4.5-slice-2-list-accounts.md](docs/plans/weekend-4.5-slice-2-list-accounts.md).
-- [ ] User guide ([docs/user-guide.md](docs/user-guide.md)) and Claude
-  Desktop wiring ([docs/claude-desktop-wiring.md](docs/claude-desktop-wiring.md))
-  updated to advertise the two new tools.
+- [x] [docs/user-guide.md](docs/user-guide.md) and
+  [docs/claude-desktop-wiring.md](docs/claude-desktop-wiring.md)
+  updated to advertise the two new tools and the 5-tool v1 surface.
+- [x] Outlook thread follow-up ✅ (2026-04-13) — `GraphMessage` gains
+  optional `conversationId`; `sync-inbox.toMessage` maps it to
+  `threadId` and `subject` to `threadName` (both defensively omitted
+  when absent). `get_thread` now resolves Outlook conversations. Plan:
+  [docs/plans/weekend-4.5-slice-3-outlook-thread-fields.md](docs/plans/weekend-4.5-slice-3-outlook-thread-fields.md).
 - [ ] Live smoke through Claude Desktop: *"show me the full thread
-  about X"* and *"which accounts do you have access to?"*.
+  about X"* (Teams) and *"which accounts do you have access to?"*.
 
 ---
 

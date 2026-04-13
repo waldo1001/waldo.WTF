@@ -46,10 +46,15 @@ Typical prompts:
 ### `get_thread(thread_id, limit?)`
 
 Pull a full conversation given a `thread_id` returned by one of the
-other tools. Used to get back-and-forth context.
+other tools. Used to get back-and-forth context. Resolves by the
+stored `thread_id` column (oldest→newest, `limit` default 200, max
+500). Covers both **Teams chats** (keyed on `chat.id`) and **Outlook
+conversations** (keyed on Graph's `conversationId`). Outlook rows
+synced before the slice-3 follow-up have `thread_id = NULL` until
+their next delta touch; clear the delta token for a forced resync.
 
 Typical flow: Claude calls `search` → picks a result → calls
-`get_thread` with the result's thread_id → reads the full exchange.
+`get_thread` with the result's `thread_id` → reads the full exchange.
 
 ### `list_accounts()`
 

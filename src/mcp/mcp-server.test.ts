@@ -39,14 +39,25 @@ describe("createMcpServer (SDK, in-memory transport)", () => {
     ]);
   });
 
-  it("lists the three Weekend 3 tools with their inputSchema", async () => {
+  it("lists the v1 MCP tools with their inputSchema", async () => {
     const res = await client.listTools();
     const names = res.tools.map((t) => t.name).sort();
-    expect(names).toEqual(["get_recent_activity", "get_sync_status", "search"]);
+    expect(names).toEqual([
+      "get_recent_activity",
+      "get_sync_status",
+      "get_thread",
+      "list_accounts",
+      "search",
+    ]);
     const rec = res.tools.find((t) => t.name === "get_recent_activity");
     expect(rec?.inputSchema).toMatchObject({
       type: "object",
       required: ["hours"],
+    });
+    const thread = res.tools.find((t) => t.name === "get_thread");
+    expect(thread?.inputSchema).toMatchObject({
+      type: "object",
+      required: ["thread_id"],
     });
   });
 

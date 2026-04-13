@@ -25,6 +25,14 @@ export interface GetRecentMessagesOptions {
   readonly limit: number;
 }
 
+export interface GetThreadOptions {
+  readonly threadId: string;
+  readonly limit?: number;
+}
+
+export const DEFAULT_GET_THREAD_LIMIT = 200;
+export const MAX_GET_THREAD_LIMIT = 500;
+
 export interface MessageStore {
   upsertMessages(messages: readonly Message[]): Promise<UpsertResult>;
   deleteMessages(ids: readonly string[]): Promise<DeleteResult>;
@@ -40,6 +48,7 @@ export interface MessageStore {
   getRecentMessages(
     opts: GetRecentMessagesOptions,
   ): Promise<readonly Message[]>;
+  getThread(opts: GetThreadOptions): Promise<readonly Message[]>;
   getSyncStatus(now: Date): Promise<readonly SyncStatusRow[]>;
   getChatCursor(
     account: string,

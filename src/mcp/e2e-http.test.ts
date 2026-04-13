@@ -103,14 +103,51 @@ describe("MCP HTTP server end-to-end (SQLite + SDK client over HTTP)", () => {
 
   const parse = <T>(text: string): T => JSON.parse(text) as T;
 
-  it("lists all three Weekend 3 tools via SDK transport", async () => {
+  it("lists the v1 MCP tools via SDK transport", async () => {
     const res = await client.listTools();
     const names = res.tools.map((t) => t.name).sort();
     expect(names).toEqual([
       "get_recent_activity",
       "get_sync_status",
+      "get_thread",
+      "list_accounts",
       "search",
     ]);
+  });
+
+  it("list_accounts over HTTP returns seeded accounts ordered by addedAt", async () => {
+    await store.upsertAccount({
+      username: "alice@example.test",
+      displayName: "Alice",
+      tenantId: "tenant-1",
+      addedAt: new Date("2026-04-13T08:00:00Z"),
+    });
+    await store.upsertAccount({
+      username: "bob@example.test",
+      addedAt: new Date("2026-04-13T09:00:00Z"),
+    });
+    const res = await client.callTool({
+      name: "list_accounts",
+      arguments: {},
+    });
+    const content = res.content as Array<{ type: string; text: string }>;
+    const parsed = parse<{
+      count: number;
+      accounts: Array<{
+        username: string;
+        displayName?: string;
+        addedAt: string;
+        tenantId?: string;
+      }>;
+    }>(content[0]!.text);
+    expect(parsed.count).toBe(2);
+    expect(parsed.accounts.map((a) => a.username)).toEqual([
+      "alice@example.test",
+      "bob@example.test",
+    ]);
+    expect(parsed.accounts[0]?.displayName).toBe("Alice");
+    expect(parsed.accounts[0]?.addedAt).toBe("2026-04-13T08:00:00.000Z");
+    expect(parsed.accounts[0]?.tenantId).toBeUndefined();
   });
 
   it("rejects unauthenticated initialize at the transport boundary", async () => {
@@ -167,6 +204,72 @@ describe("MCP HTTP server end-to-end (SQLite + SDK client over HTTP)", () => {
     expect(first?.message.id).toBe("in-1");
     expect(first?.snippet.length).toBeGreaterThan(0);
     expect(typeof first?.rank).toBe("number");
+  });
+
+  it("get_thread over HTTP returns a Teams chat ordered oldest→newest", async () => {
+    await store.upsertMessages([
+      mkMessage({
+        id: "teams:alice@example.test:m1",
+        source: "teams",
+        threadId: "chat-xyz",
+        chatType: "group",
+        senderName: "Carol",
+        body: "first",
+        sentAt: new Date("2026-04-13T09:00:00Z"),
+      }),
+      mkMessage({
+        id: "teams:alice@example.test:m2",
+        source: "teams",
+        threadId: "chat-xyz",
+        chatType: "group",
+        senderName: "Dave",
+        body: "second",
+        sentAt: new Date("2026-04-13T09:05:00Z"),
+      }),
+      mkMessage({
+        id: "teams:alice@example.test:other",
+        source: "teams",
+        threadId: "chat-other",
+        body: "unrelated",
+      }),
+    ]);
+    const res = await client.callTool({
+      name: "get_thread",
+      arguments: { thread_id: "chat-xyz" },
+    });
+    const content = res.content as Array<{ type: string; text: string }>;
+    const parsed = parse<{
+      count: number;
+      messages: Array<{
+        id: string;
+        snippet?: string;
+        body?: string;
+        rawJson?: string;
+        chatType?: string;
+      }>;
+    }>(content[0]!.text);
+    expect(parsed.count).toBe(2);
+    expect(parsed.messages.map((m) => m.id)).toEqual([
+      "teams:alice@example.test:m1",
+      "teams:alice@example.test:m2",
+    ]);
+    expect(parsed.messages[0]?.snippet).toBe("first");
+    expect(parsed.messages[0]?.chatType).toBe("group");
+    expect(parsed.messages[0]?.body).toBeUndefined();
+    expect(parsed.messages[0]?.rawJson).toBeUndefined();
+  });
+
+  it("get_thread returns empty for an unknown thread id", async () => {
+    const res = await client.callTool({
+      name: "get_thread",
+      arguments: { thread_id: "no-such-chat" },
+    });
+    const content = res.content as Array<{ type: string; text: string }>;
+    const parsed = parse<{ count: number; messages: unknown[] }>(
+      content[0]!.text,
+    );
+    expect(parsed.count).toBe(0);
+    expect(parsed.messages).toEqual([]);
   });
 
   it("get_sync_status over HTTP surfaces the seeded sync_log row", async () => {

@@ -39,6 +39,10 @@ const toMessage = (
     sentAt: new Date(g.receivedDateTime),
     importedAt,
     rawJson: JSON.stringify(g),
+    ...(g.conversationId !== undefined ? { threadId: g.conversationId } : {}),
+    ...(g.subject !== null && g.subject !== undefined
+      ? { threadName: g.subject }
+      : {}),
   };
   if (g.from) {
     return {

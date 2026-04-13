@@ -43,11 +43,12 @@ curl -sS http://localhost:8765/ \
 ```
 
 You should see an `initialize` result advertising `tools` capability.
-A follow-up `tools/list` call (same headers) will list three tools:
-`get_recent_activity`, `get_sync_status`, `search`. That's everything
-shipped in Weekend 3. The other tools documented in
-[user-guide.md §2](user-guide.md) (`get_thread`, `list_accounts`) land
-in later weekends.
+A follow-up `tools/list` call (same headers) will list the v1 MCP
+surface: `get_recent_activity`, `get_sync_status`, `search`,
+`get_thread`, `list_accounts`. See
+[user-guide.md §2](user-guide.md) for what each one does. `get_thread`
+currently resolves Teams chats only (Outlook `conversationId` capture
+is a follow-up slice).
 
 ## 3. Claude Desktop config
 
@@ -102,7 +103,7 @@ keyword, that's expected.
 |---|---|---|
 | Claude Desktop: "server not found" | Server not running | `npm run dev`; verify `/health` returns 200 |
 | Claude Desktop: 401 unauthorized in logs | Bearer mismatch | Compare `.env` `BEARER_TOKEN` to the `Authorization` header in config |
-| `tools/list` returns only `get_recent_activity` | Running a stale build | `git pull && npm run build` / restart `npm run dev` |
+| `tools/list` returns fewer than 5 tools | Running a stale build | `git pull && npm run build` / restart `npm run dev` |
 | Claude Desktop: `initialize` never completes, or curl returns `406 Not Acceptable` | Stale `"transport": "http"` config block, or missing `Accept: text/event-stream` | Switch to the `mcp-remote` wrapper shown in §3; for curl, add `-H "Accept: application/json, text/event-stream"` |
 | `get_recent_activity` returns `count: 0` | First delta sync hasn't completed yet | Watch logs for `delta_sync_completed`; retry |
 | `get_sync_status` rows all `stale: true` | Sync loop crashed or account login expired | Check `sync_log` table; re-run device code login |

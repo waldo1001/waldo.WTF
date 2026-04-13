@@ -18,6 +18,15 @@ import {
   handleGetSyncStatus,
 } from "./tools/get-sync-status.js";
 import {
+  GET_THREAD_TOOL,
+  handleGetThread,
+  type GetThreadParams,
+} from "./tools/get-thread.js";
+import {
+  LIST_ACCOUNTS_TOOL,
+  handleListAccounts,
+} from "./tools/list-accounts.js";
+import {
   SEARCH_TOOL,
   handleSearch,
   type SearchParams,
@@ -38,6 +47,8 @@ const TOOL_DESCRIPTORS = [
   GET_RECENT_ACTIVITY_TOOL,
   GET_SYNC_STATUS_TOOL,
   SEARCH_TOOL,
+  GET_THREAD_TOOL,
+  LIST_ACCOUNTS_TOOL,
 ] as const;
 
 const TOOL_HANDLERS: Record<string, ToolHandler> = {
@@ -47,6 +58,9 @@ const TOOL_HANDLERS: Record<string, ToolHandler> = {
     handleGetSyncStatus(store, clock),
   [SEARCH_TOOL.name]: (store, clock, args) =>
     handleSearch(store, clock, args as SearchParams),
+  [GET_THREAD_TOOL.name]: (store, clock, args) =>
+    handleGetThread(store, clock, args as GetThreadParams),
+  [LIST_ACCOUNTS_TOOL.name]: (store, clock) => handleListAccounts(store, clock),
 };
 
 export function createMcpServer(deps: McpServerDeps): Server {

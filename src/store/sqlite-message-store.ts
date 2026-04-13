@@ -1,9 +1,11 @@
 import type { Database, Statement } from "better-sqlite3";
-import type {
-  DeleteResult,
-  GetRecentMessagesOptions,
-  MessageStore,
-  UpsertResult,
+import {
+  DEFAULT_GET_THREAD_LIMIT,
+  type DeleteResult,
+  type GetRecentMessagesOptions,
+  type GetThreadOptions,
+  type MessageStore,
+  type UpsertResult,
 } from "./message-store.js";
 import { applyMigrations } from "./schema.js";
 import type {
@@ -287,6 +289,25 @@ export class SqliteMessageStore implements MessageStore {
       chatId: r.chat_id,
       cursor: r.cursor,
     }));
+  }
+
+  async getThread(opts: GetThreadOptions): Promise<readonly Message[]> {
+    const limit = opts.limit ?? DEFAULT_GET_THREAD_LIMIT;
+    const rows = this.db
+      .prepare(
+        `
+      SELECT id, source, account, native_id,
+             thread_id, thread_name, sender_name, sender_email,
+             sent_at, imported_at, is_read, body, body_html, raw_json,
+             chat_type, reply_to_id, mentions_json
+      FROM messages
+      WHERE thread_id = ?
+      ORDER BY sent_at ASC, id ASC
+      LIMIT ?
+    `,
+      )
+      .all(opts.threadId, limit) as MessageRow[];
+    return rows.map(fromRow);
   }
 
   async getRecentMessages(

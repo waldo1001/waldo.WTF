@@ -1,8 +1,10 @@
-import type {
-  DeleteResult,
-  GetRecentMessagesOptions,
-  MessageStore,
-  UpsertResult,
+import {
+  DEFAULT_GET_THREAD_LIMIT,
+  type DeleteResult,
+  type GetRecentMessagesOptions,
+  type GetThreadOptions,
+  type MessageStore,
+  type UpsertResult,
 } from "../store/message-store.js";
 import type {
   AccountRecord,
@@ -25,6 +27,7 @@ export type InMemoryMessageStoreCall =
   | { method: "listAccounts" }
   | { method: "searchMessages"; query: string; limit: number }
   | { method: "getRecentMessages"; opts: GetRecentMessagesOptions }
+  | { method: "getThread"; opts: GetThreadOptions }
   | { method: "getSyncStatus"; now: Date }
   | { method: "getChatCursor"; account: string; chatId: string }
   | { method: "setChatCursor"; entry: ChatCursorEntry }
@@ -204,6 +207,20 @@ export class InMemoryMessageStore implements MessageStore {
     return [...this.chatCursors.values()]
       .filter((c) => c.account === account)
       .sort((a, b) => a.chatId.localeCompare(b.chatId));
+  }
+
+  async getThread(opts: GetThreadOptions): Promise<readonly Message[]> {
+    this.calls.push({ method: "getThread", opts });
+    const limit = opts.limit ?? DEFAULT_GET_THREAD_LIMIT;
+    const rows: Message[] = [];
+    for (const m of this.messages.values()) {
+      if (m.threadId === opts.threadId) rows.push(m);
+    }
+    rows.sort((a, b) => {
+      const t = a.sentAt.getTime() - b.sentAt.getTime();
+      return t !== 0 ? t : a.id.localeCompare(b.id);
+    });
+    return rows.slice(0, limit);
   }
 
   async getRecentMessages(

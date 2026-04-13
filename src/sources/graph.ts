@@ -2,6 +2,7 @@ export interface GraphMessage {
   id: string;
   receivedDateTime: string;
   subject: string | null;
+  conversationId?: string;
   from?: { emailAddress: { name: string; address: string } };
   body?: { contentType: "text" | "html"; content: string };
   "@removed"?: { reason: string };

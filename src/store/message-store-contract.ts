@@ -689,6 +689,108 @@ export function runMessageStoreContract(
       expect(await store.listChatCursors("b@example.test")).toHaveLength(1);
     });
 
+    it("getThread returns [] for an unknown thread id", async () => {
+      const { store } = await factory();
+      expect(await store.getThread({ threadId: "nope" })).toEqual([]);
+    });
+
+    it("getThread resolves a Teams chat by thread_id, ordered sent_at ASC", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({
+          id: "teams:a@example.test:3",
+          source: "teams",
+          threadId: "chat-1",
+          sentAt: new Date("2026-04-13T12:00:00Z"),
+          body: "third",
+        }),
+        msg({
+          id: "teams:a@example.test:1",
+          source: "teams",
+          threadId: "chat-1",
+          sentAt: new Date("2026-04-13T10:00:00Z"),
+          body: "first",
+        }),
+        msg({
+          id: "teams:a@example.test:2",
+          source: "teams",
+          threadId: "chat-1",
+          sentAt: new Date("2026-04-13T11:00:00Z"),
+          body: "second",
+        }),
+        msg({
+          id: "teams:a@example.test:other",
+          source: "teams",
+          threadId: "chat-2",
+          body: "unrelated",
+        }),
+      ]);
+      const rows = await store.getThread({ threadId: "chat-1" });
+      expect(rows.map((m) => m.body)).toEqual(["first", "second", "third"]);
+    });
+
+    it("getThread respects an explicit limit and returns oldest rows first", async () => {
+      const { store } = await factory();
+      const seeded: Message[] = [];
+      for (let i = 0; i < 10; i++) {
+        seeded.push(
+          msg({
+            id: `teams:a@example.test:${i.toString().padStart(2, "0")}`,
+            source: "teams",
+            threadId: "chat-big",
+            sentAt: new Date(
+              Date.UTC(2026, 3, 13, 10, i, 0),
+            ),
+            body: `m${i}`,
+          }),
+        );
+      }
+      await store.upsertMessages(seeded);
+      const rows = await store.getThread({ threadId: "chat-big", limit: 3 });
+      expect(rows.map((m) => m.body)).toEqual(["m0", "m1", "m2"]);
+    });
+
+    it("getThread defaults to 200 when limit omitted", async () => {
+      const { store } = await factory();
+      const seeded: Message[] = [];
+      for (let i = 0; i < 205; i++) {
+        seeded.push(
+          msg({
+            id: `teams:a@example.test:${i.toString().padStart(3, "0")}`,
+            source: "teams",
+            threadId: "chat-huge",
+            sentAt: new Date(Date.UTC(2026, 3, 13, 0, 0, i)),
+            body: `m${i}`,
+          }),
+        );
+      }
+      await store.upsertMessages(seeded);
+      const rows = await store.getThread({ threadId: "chat-huge" });
+      expect(rows).toHaveLength(200);
+      expect(rows[0]?.body).toBe("m0");
+      expect(rows[199]?.body).toBe("m199");
+    });
+
+    it("getThread honours Teams-specific fields on the round-trip", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({
+          id: "teams:a@example.test:1",
+          source: "teams",
+          threadId: "chat-1",
+          chatType: "group",
+          replyToId: "root",
+          mentions: ["alice@example.test"],
+          body: "hi",
+        }),
+      ]);
+      const rows = await store.getThread({ threadId: "chat-1" });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.chatType).toBe("group");
+      expect(rows[0]?.replyToId).toBe("root");
+      expect(rows[0]?.mentions).toEqual(["alice@example.test"]);
+    });
+
     it("getRecentMessages honours the limit", async () => {
       const { store } = await factory();
       await store.upsertMessages([

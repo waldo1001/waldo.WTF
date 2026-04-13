@@ -33,6 +33,7 @@ const makeGraphMessage = (overrides: Partial<GraphMessage> = {}): GraphMessage =
   id: "msg-1",
   receivedDateTime: "2026-04-13T10:00:00Z",
   subject: "hello",
+  conversationId: "conv-1",
   from: { emailAddress: { name: "Alice", address: "alice@example.invalid" } },
   body: { contentType: "text", content: "body text" },
   ...overrides,
@@ -428,6 +429,136 @@ describe("syncInbox", () => {
 
     expect(graph.calls[0]?.url).toBe("https://graph/delta?token=prev");
     expect(graph.calls[0]?.url).not.toContain("$filter");
+  });
+
+  it("populates threadId/threadName from conversationId+subject", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const graph = new FakeGraphClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({
+            value: [
+              makeGraphMessage({
+                id: "msg-thread",
+                subject: "Weekend planning",
+                conversationId: "AAQkAD-conv-abc",
+              }),
+            ],
+            "@odata.deltaLink": "d",
+          }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncInbox({ account, auth, graph, store, clock });
+
+    const upserted = store.calls
+      .flatMap((c) => (c.method === "upsertMessages" ? c.messages : []))
+      .find((m) => m.nativeId === "msg-thread");
+    expect(upserted?.threadId).toBe("AAQkAD-conv-abc");
+    expect(upserted?.threadName).toBe("Weekend planning");
+  });
+
+  it("omits threadId when conversationId is missing", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const graph = new FakeGraphClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({
+            value: [
+              makeGraphMessage({
+                id: "msg-no-conv",
+                conversationId: undefined,
+              }),
+            ],
+            "@odata.deltaLink": "d",
+          }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncInbox({ account, auth, graph, store, clock });
+
+    const upserted = store.calls
+      .flatMap((c) => (c.method === "upsertMessages" ? c.messages : []))
+      .find((m) => m.nativeId === "msg-no-conv");
+    expect(upserted).toBeDefined();
+    expect(upserted?.threadId).toBeUndefined();
+    expect("threadId" in (upserted as object)).toBe(false);
+  });
+
+  it("omits threadName when subject is null", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const graph = new FakeGraphClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({
+            value: [
+              makeGraphMessage({
+                id: "msg-null-subject",
+                subject: null,
+                conversationId: "conv-x",
+              }),
+            ],
+            "@odata.deltaLink": "d",
+          }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncInbox({ account, auth, graph, store, clock });
+
+    const upserted = store.calls
+      .flatMap((c) => (c.method === "upsertMessages" ? c.messages : []))
+      .find((m) => m.nativeId === "msg-null-subject");
+    expect(upserted?.threadId).toBe("conv-x");
+    expect(upserted?.threadName).toBeUndefined();
+    expect("threadName" in (upserted as object)).toBe(false);
+  });
+
+  it("two synced messages with same conversationId are retrievable as a thread", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const graph = new FakeGraphClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({
+            value: [
+              makeGraphMessage({
+                id: "msg-a",
+                receivedDateTime: "2026-04-13T09:00:00Z",
+                conversationId: "conv-shared",
+                subject: "Topic",
+              }),
+              makeGraphMessage({
+                id: "msg-b",
+                receivedDateTime: "2026-04-13T10:00:00Z",
+                conversationId: "conv-shared",
+                subject: "Re: Topic",
+              }),
+            ],
+            "@odata.deltaLink": "d",
+          }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncInbox({ account, auth, graph, store, clock });
+
+    const thread = await store.getThread({ threadId: "conv-shared" });
+    expect(thread.map((m) => m.nativeId)).toEqual(["msg-a", "msg-b"]);
+    expect(thread[0]?.threadName).toBe("Topic");
   });
 
   it("does not upsert rawJson for @removed entries", async () => {
