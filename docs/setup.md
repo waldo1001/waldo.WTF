@@ -49,25 +49,26 @@ One-time, per developer. Required for MSAL device code flow.
 
 ## 3. Environment variables
 
-Create `.env` at the project root (gitignored from day one — see
-[../waldo.WTF-project-brief.md](../waldo.WTF-project-brief.md) §8):
+Copy [../.env.example](../.env.example) to `.env` at the project root
+(gitignored from day one — see [../waldo.WTF-project-brief.md](../waldo.WTF-project-brief.md) §8)
+and fill in the required values. The env contract is enforced by
+[`loadConfig`](../src/config.ts):
 
 ```env
-# Entra app from §2
+# Required — Entra app from §2
 MS_CLIENT_ID=your-client-id-guid-here
-MS_AUTHORITY=https://login.microsoftonline.com/common
 
-# Bearer token for the HTTP MCP endpoint (project only, not spike).
-# Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+# Required — bearer token for the HTTP MCP endpoint.
+# Generate with: openssl rand -hex 32
 BEARER_TOKEN=generate-a-long-random-hex-string
 
-# Paths (project only). Absolute paths preferred.
-DB_PATH=./data/lake.db
-TOKEN_CACHE_PATH=./data/token-cache.json
-
-# MCP HTTP server
-MCP_PORT=8765
+# Optional — paths. Defaults shown.
+# WALDO_DB_PATH=./data/lake.db
+# WALDO_AUTH_DIR=./data/auth
 ```
+
+`loadConfig` throws `ConfigError` listing every missing required key on
+startup, so a half-populated `.env` fails fast with a clear message.
 
 ## 4. Install (project, Weekend 2+)
 

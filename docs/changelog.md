@@ -13,6 +13,7 @@ skill.
 
 ## 2026-04-13
 
+- Landed Weekend 2 folder skeleton (`src/auth`, `src/store`, `src/sync`, `src/mcp`) + pure `loadConfig(env)` ([src/config.ts](../src/config.ts)) returning typed `Config` or throwing `ConfigError` listing all missing keys. 10 tests cover defaults, overrides, single/multi missing, empty-string, immutability. Stub `main()` in [src/index.ts](../src/index.ts). Env contract documented in [.env.example](../.env.example). Plan: [weekend-2-slice-4-folder-structure-and-config.md](plans/weekend-2-slice-4-folder-structure-and-config.md).
 - Landed `GraphClient` seam ([src/sources/graph.ts](../src/sources/graph.ts)) + scripted `FakeGraphClient` ([src/testing/fake-graph-client.ts](../src/testing/fake-graph-client.ts)). 5 contract tests cover scripted ok/error replay, script order, past-end diagnostics, and `GraphRateLimitedError.retryAfterSeconds`. Plan: [weekend-2-slice-3-fake-graph-client.md](plans/weekend-2-slice-3-fake-graph-client.md).
 - Landed `FileSystem` seam ([src/fs.ts](../src/fs.ts)) + `InMemoryFileSystem` trigger-driven fake ([src/testing/in-memory-file-system.ts](../src/testing/in-memory-file-system.ts)). 7 contract tests cover read/write/rename/listDir/watch incl. `"WhatsApp Chat*.txt"` glob. Plan: [weekend-2-slice-2-filesystem-seam.md](plans/weekend-2-slice-2-filesystem-seam.md).
 - Bootstrapped TypeScript project in-place: `package.json`, `tsconfig.json`, `tsconfig.test.json`, `vitest.config.ts`. Node 22, ESM, strict TS, per-file 90% coverage thresholds. See [PROGRESS.md](../PROGRESS.md) Weekend 2.
