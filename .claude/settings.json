@@ -9,7 +9,11 @@
       "Bash(npm audit:*)",
       "Bash(npx tsc:*)",
       "Bash(echo \"---exit $?\")",
-      "Read(//Users/waldo/Temp/waldo-wtf-spike/**)"
+      "Read(//Users/waldo/Temp/waldo-wtf-spike/**)",
+      "Bash(git stash:*)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
     ]
   }
 }
