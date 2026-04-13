@@ -165,6 +165,77 @@ describe("SqliteMessageStore — sqlite-specific behavior", () => {
     expect(count).toBe(1);
   });
 
+  it("ranks messages with more term occurrences higher (lower bm25)", async () => {
+    const db = new Database(":memory:");
+    const store = new SqliteMessageStore(db);
+    await store.upsertMessages([
+      baseMsg("once", { body: "kangaroo grass field" }),
+      baseMsg("thrice", { body: "kangaroo kangaroo kangaroo grass field" }),
+    ]);
+    const hits = await store.searchMessages("kangaroo", 10);
+    expect(hits.map((h) => h.message.id)).toEqual(["thrice", "once"]);
+    expect(hits[0]?.rank).toBeLessThan(hits[1]?.rank ?? 0);
+  });
+
+  it("returns a snippet wrapping the matched term", async () => {
+    const db = new Database(":memory:");
+    const store = new SqliteMessageStore(db);
+    await store.upsertMessages([
+      baseMsg("1", { body: "the quick brown kangaroo jumps" }),
+    ]);
+    const hits = await store.searchMessages("kangaroo", 10);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.snippet).toMatch(/\[kangaroo\]/i);
+  });
+
+  it("sanitises FTS5 metacharacters in user input", async () => {
+    const db = new Database(":memory:");
+    const store = new SqliteMessageStore(db);
+    await store.upsertMessages([
+      baseMsg("1", { body: "alpha bravo charlie" }),
+      baseMsg("2", { body: "completely unrelated content" }),
+    ]);
+    await expect(
+      store.searchMessages('foo" OR 1=1', 10),
+    ).resolves.toEqual([]);
+    await expect(store.searchMessages("alp*", 10)).resolves.toEqual([]);
+    await expect(store.searchMessages("alpha", 10)).resolves.toHaveLength(1);
+  });
+
+  it("searchMessages round-trips all optional fields on a hit", async () => {
+    const db = new Database(":memory:");
+    const store = new SqliteMessageStore(db);
+    const full: Message = {
+      id: "full",
+      source: "outlook",
+      account: "a@example.test",
+      nativeId: "n-full",
+      threadId: "thr-1",
+      threadName: "Project Falcon",
+      senderName: "Eric",
+      senderEmail: "eric@example.test",
+      sentAt: new Date("2026-04-13T10:00:00Z"),
+      importedAt: new Date("2026-04-13T10:05:00Z"),
+      isRead: true,
+      body: "kangaroo body",
+      bodyHtml: "<p>kangaroo</p>",
+      rawJson: '{"x":1}',
+    };
+    await store.upsertMessages([full]);
+    const hits = await store.searchMessages("kangaroo", 10);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.message).toEqual(full);
+  });
+
+  it("searchMessages survives store reconstruction", async () => {
+    const db = new Database(":memory:");
+    const a = new SqliteMessageStore(db);
+    await a.upsertMessages([baseMsg("1", { body: "kangaroo" })]);
+    const b = new SqliteMessageStore(db);
+    const hits = await b.searchMessages("kangaroo", 10);
+    expect(hits.map((h) => h.message.id)).toEqual(["1"]);
+  });
+
   it("isRead boolean round-trips through INTEGER column", async () => {
     const db = new Database(":memory:");
     const store = new SqliteMessageStore(db);

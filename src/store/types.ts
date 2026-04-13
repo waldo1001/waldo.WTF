@@ -42,6 +42,13 @@ export interface AccountRecord {
   readonly addedAt: Date;
 }
 
+export interface SearchHit {
+  readonly message: Message;
+  readonly snippet: string;
+  // bm25(messages_fts): lower score = better match (FTS5 convention).
+  readonly rank: number;
+}
+
 export type StoreErrorKind = "not-found" | "conflict" | "corrupt";
 
 export class StoreError extends Error {

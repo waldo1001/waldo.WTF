@@ -7,6 +7,7 @@ import type {
   AccountRecord,
   Message,
   MessageSource,
+  SearchHit,
   SyncLogEntry,
   SyncStateEntry,
 } from "../store/types.js";
@@ -18,7 +19,8 @@ export type InMemoryMessageStoreCall =
   | { method: "setSyncState"; entry: SyncStateEntry }
   | { method: "appendSyncLog"; entry: SyncLogEntry }
   | { method: "upsertAccount"; account: AccountRecord }
-  | { method: "listAccounts" };
+  | { method: "listAccounts" }
+  | { method: "searchMessages"; query: string; limit: number };
 
 export interface InMemoryMessageStoreOptions {
   seed?: {
@@ -100,5 +102,23 @@ export class InMemoryMessageStore implements MessageStore {
       const t = a.addedAt.getTime() - b.addedAt.getTime();
       return t !== 0 ? t : a.username.localeCompare(b.username);
     });
+  }
+
+  async searchMessages(
+    query: string,
+    limit: number,
+  ): Promise<readonly SearchHit[]> {
+    this.calls.push({ method: "searchMessages", query, limit });
+    const needle = query.trim().toLowerCase();
+    if (needle === "") return [];
+    const hits: SearchHit[] = [];
+    for (const m of this.messages.values()) {
+      const haystack = `${m.body ?? ""}\n${m.threadName ?? ""}\n${m.senderName ?? ""}`.toLowerCase();
+      if (haystack.includes(needle)) {
+        hits.push({ message: m, snippet: m.body ?? "", rank: 0 });
+      }
+    }
+    hits.sort((a, b) => b.message.sentAt.getTime() - a.message.sentAt.getTime());
+    return hits.slice(0, limit);
   }
 }

@@ -239,5 +239,58 @@ export function runMessageStoreContract(
       const { store } = await factory();
       expect(await store.listAccounts()).toEqual([]);
     });
+
+    it("searchMessages returns [] on an empty store", async () => {
+      const { store } = await factory();
+      expect(await store.searchMessages("anything", 10)).toEqual([]);
+    });
+
+    it("searchMessages finds a message by a body term", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({ id: "1", body: "lorem ipsum dolor" }),
+        msg({ id: "2", body: "completely unrelated text" }),
+      ]);
+      const hits = await store.searchMessages("ipsum", 10);
+      expect(hits.map((h) => h.message.id)).toEqual(["1"]);
+    });
+
+    it("searchMessages finds a message by a threadName term", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({ id: "1", threadName: "Project Falcon", body: "hello" }),
+      ]);
+      const hits = await store.searchMessages("Falcon", 10);
+      expect(hits.map((h) => h.message.id)).toEqual(["1"]);
+    });
+
+    it("searchMessages finds a message by a senderName term", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({ id: "1", senderName: "Eric Wauters", body: "hello" }),
+      ]);
+      const hits = await store.searchMessages("Wauters", 10);
+      expect(hits.map((h) => h.message.id)).toEqual(["1"]);
+    });
+
+    it("searchMessages respects the limit argument", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({ id: "1", body: "kangaroo" }),
+        msg({ id: "2", body: "kangaroo" }),
+        msg({ id: "3", body: "kangaroo" }),
+        msg({ id: "4", body: "kangaroo" }),
+        msg({ id: "5", body: "kangaroo" }),
+      ]);
+      const hits = await store.searchMessages("kangaroo", 2);
+      expect(hits).toHaveLength(2);
+    });
+
+    it("searchMessages returns [] for an empty query", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([msg({ id: "1", body: "lorem ipsum" })]);
+      expect(await store.searchMessages("", 10)).toEqual([]);
+      expect(await store.searchMessages("   ", 10)).toEqual([]);
+    });
   });
 }

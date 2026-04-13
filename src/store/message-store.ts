@@ -2,6 +2,7 @@ import type {
   AccountRecord,
   Message,
   MessageSource,
+  SearchHit,
   SyncLogEntry,
   SyncStateEntry,
 } from "./types.js";
@@ -26,4 +27,5 @@ export interface MessageStore {
   appendSyncLog(entry: SyncLogEntry): Promise<void>;
   upsertAccount(account: AccountRecord): Promise<void>;
   listAccounts(): Promise<readonly AccountRecord[]>;
+  searchMessages(query: string, limit: number): Promise<readonly SearchHit[]>;
 }

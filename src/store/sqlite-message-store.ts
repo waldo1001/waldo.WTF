@@ -9,6 +9,7 @@ import type {
   AccountRecord,
   Message,
   MessageSource,
+  SearchHit,
   SyncLogEntry,
   SyncStateEntry,
 } from "./types.js";
@@ -67,6 +68,7 @@ export class SqliteMessageStore implements MessageStore {
     [string, string | null, string | null, number]
   >;
   private readonly listAccountsStmt: Statement<[]>;
+  private readonly searchStmt: Statement<[string, number]>;
 
   constructor(private readonly db: Database) {
     applyMigrations(db);
@@ -123,6 +125,18 @@ export class SqliteMessageStore implements MessageStore {
     this.listAccountsStmt = db.prepare(
       "SELECT username, display_name, tenant_id, added_at FROM accounts ORDER BY added_at ASC, username ASC",
     );
+    this.searchStmt = db.prepare(`
+      SELECT m.id, m.source, m.account, m.native_id,
+             m.thread_id, m.thread_name, m.sender_name, m.sender_email,
+             m.sent_at, m.imported_at, m.is_read, m.body, m.body_html, m.raw_json,
+             snippet(messages_fts, 0, '[', ']', '…', 16) AS snippet,
+             bm25(messages_fts) AS rank
+      FROM messages_fts
+      JOIN messages m ON m.rowid = messages_fts.rowid
+      WHERE messages_fts MATCH ?
+      ORDER BY rank
+      LIMIT ?
+    `);
   }
 
   async upsertMessages(messages: readonly Message[]): Promise<UpsertResult> {
@@ -217,6 +231,48 @@ export class SqliteMessageStore implements MessageStore {
       addedAt: new Date(r.added_at),
     }));
   }
+
+  async searchMessages(
+    query: string,
+    limit: number,
+  ): Promise<readonly SearchHit[]> {
+    const phrase = toFts5Phrase(query);
+    if (phrase === null) return [];
+    const rows = this.searchStmt.all(phrase, limit) as (MessageRow & {
+      snippet: string;
+      rank: number;
+    })[];
+    return rows.map((r) => ({
+      message: fromRow(r),
+      snippet: r.snippet,
+      rank: r.rank,
+    }));
+  }
+}
+
+function toFts5Phrase(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  return `"${trimmed.replace(/"/g, '""')}"`;
+}
+
+function fromRow(r: MessageRow): Message {
+  return {
+    id: r.id,
+    source: r.source as MessageSource,
+    account: r.account,
+    nativeId: r.native_id,
+    ...(r.thread_id !== null && { threadId: r.thread_id }),
+    ...(r.thread_name !== null && { threadName: r.thread_name }),
+    ...(r.sender_name !== null && { senderName: r.sender_name }),
+    ...(r.sender_email !== null && { senderEmail: r.sender_email }),
+    sentAt: new Date(r.sent_at),
+    importedAt: new Date(r.imported_at),
+    ...(r.is_read !== null && { isRead: r.is_read === 1 }),
+    ...(r.body !== null && { body: r.body }),
+    ...(r.body_html !== null && { bodyHtml: r.body_html }),
+    ...(r.raw_json !== null && { rawJson: r.raw_json }),
+  };
 }
 
 function toRow(m: Message): MessageRow {

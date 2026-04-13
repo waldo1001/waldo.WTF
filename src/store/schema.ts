@@ -1,6 +1,6 @@
 import type { Database } from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 const MIGRATION_1 = `
 CREATE TABLE IF NOT EXISTS messages (
@@ -49,6 +49,37 @@ CREATE TABLE IF NOT EXISTS accounts (
 );
 `;
 
+const MIGRATION_2 = `
+CREATE VIRTUAL TABLE messages_fts USING fts5(
+  body,
+  thread_name,
+  sender_name,
+  content='messages',
+  content_rowid='rowid',
+  tokenize='unicode61 remove_diacritics 2'
+);
+
+CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
+  INSERT INTO messages_fts(rowid, body, thread_name, sender_name)
+  VALUES (new.rowid, new.body, new.thread_name, new.sender_name);
+END;
+
+CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
+  INSERT INTO messages_fts(messages_fts, rowid, body, thread_name, sender_name)
+  VALUES ('delete', old.rowid, old.body, old.thread_name, old.sender_name);
+END;
+
+CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
+  INSERT INTO messages_fts(messages_fts, rowid, body, thread_name, sender_name)
+  VALUES ('delete', old.rowid, old.body, old.thread_name, old.sender_name);
+  INSERT INTO messages_fts(rowid, body, thread_name, sender_name)
+  VALUES (new.rowid, new.body, new.thread_name, new.sender_name);
+END;
+
+INSERT INTO messages_fts(rowid, body, thread_name, sender_name)
+  SELECT rowid, body, thread_name, sender_name FROM messages;
+`;
+
 export function applyMigrations(db: Database): void {
   const current = (
     db.prepare("PRAGMA user_version").get() as { user_version: number }
@@ -59,6 +90,9 @@ export function applyMigrations(db: Database): void {
   const run = db.transaction(() => {
     if (current < 1) {
       db.exec(MIGRATION_1);
+    }
+    if (current < 2) {
+      db.exec(MIGRATION_2);
     }
     db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
   });

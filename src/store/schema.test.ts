@@ -23,7 +23,7 @@ describe("schema / applyMigrations", () => {
     expect(userVersion(db)).toBe(0);
     applyMigrations(db);
     expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
-    expect(CURRENT_SCHEMA_VERSION).toBe(1);
+    expect(CURRENT_SCHEMA_VERSION).toBe(2);
   });
 
   it("creates all four tables and expected indices", () => {
@@ -53,7 +53,7 @@ describe("schema / applyMigrations", () => {
     ).run("a@example.test", "A", "t1", 1_700_000_000_000);
 
     expect(() => applyMigrations(db)).not.toThrow();
-    expect(userVersion(db)).toBe(1);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
 
     const count = (
       db.prepare("SELECT COUNT(*) AS n FROM accounts").get() as { n: number }
@@ -86,5 +86,171 @@ describe("schema / applyMigrations", () => {
     );
     insert.run("a@example.test", "A", "t1", 1);
     expect(() => insert.run("a@example.test", "A2", "t1", 2)).toThrow();
+  });
+});
+
+function insertMessageRow(
+  db: Database.Database,
+  overrides: {
+    id: string;
+    body?: string | null;
+    threadName?: string | null;
+    senderName?: string | null;
+  },
+): void {
+  db.prepare(
+    `INSERT INTO messages (
+      id, source, account, native_id, thread_name, sender_name,
+      sent_at, imported_at, body
+    ) VALUES (?, 'outlook', 'a@example.test', ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    overrides.id,
+    `native-${overrides.id}`,
+    overrides.threadName ?? null,
+    overrides.senderName ?? null,
+    1_700_000_000_000,
+    1_700_000_000_000,
+    overrides.body ?? null,
+  );
+}
+
+function ftsRowidsMatching(db: Database.Database, query: string): number[] {
+  return (
+    db
+      .prepare("SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?")
+      .all(query) as { rowid: number }[]
+  ).map((r) => r.rowid);
+}
+
+describe("schema / FTS5 (migration 2)", () => {
+  it("creates messages_fts virtual table and ai/ad/au triggers", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+
+    const tables = objectNames(db, "table");
+    expect(tables).toContain("messages_fts");
+
+    const triggers = (
+      db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name",
+        )
+        .all() as { name: string }[]
+    ).map((r) => r.name);
+    expect(triggers).toEqual(
+      expect.arrayContaining(["messages_ai", "messages_ad", "messages_au"]),
+    );
+  });
+
+  it("is idempotent at v2 — second call leaves the FTS index unchanged", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    insertMessageRow(db, { id: "1", body: "lorem ipsum dolor" });
+
+    const before = (
+      db.prepare("SELECT COUNT(*) AS n FROM messages_fts").get() as {
+        n: number;
+      }
+    ).n;
+    expect(() => applyMigrations(db)).not.toThrow();
+    const after = (
+      db.prepare("SELECT COUNT(*) AS n FROM messages_fts").get() as {
+        n: number;
+      }
+    ).n;
+    expect(after).toBe(before);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it("backfills existing messages rows when upgrading from v1 to v2", () => {
+    const db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        source TEXT NOT NULL,
+        account TEXT NOT NULL,
+        native_id TEXT NOT NULL,
+        thread_id TEXT,
+        thread_name TEXT,
+        sender_name TEXT,
+        sender_email TEXT,
+        sent_at INTEGER NOT NULL,
+        imported_at INTEGER NOT NULL,
+        is_read INTEGER,
+        body TEXT,
+        body_html TEXT,
+        raw_json TEXT
+      );
+      CREATE TABLE sync_state (
+        account TEXT NOT NULL,
+        source TEXT NOT NULL,
+        delta_token TEXT,
+        last_sync_at INTEGER,
+        PRIMARY KEY (account, source)
+      );
+      CREATE TABLE sync_log (
+        ts INTEGER NOT NULL,
+        account TEXT NOT NULL,
+        source TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('ok','error')),
+        messages_added INTEGER,
+        error_message TEXT
+      );
+      CREATE TABLE accounts (
+        username TEXT PRIMARY KEY,
+        display_name TEXT,
+        tenant_id TEXT,
+        added_at INTEGER NOT NULL
+      );
+      PRAGMA user_version = 1;
+    `);
+    insertMessageRow(db, {
+      id: "preexisting",
+      body: "alpha bravo charlie",
+      threadName: "Project Delta",
+      senderName: "Eric",
+    });
+
+    applyMigrations(db);
+
+    expect(userVersion(db)).toBe(2);
+    const count = (
+      db.prepare("SELECT COUNT(*) AS n FROM messages_fts").get() as {
+        n: number;
+      }
+    ).n;
+    expect(count).toBe(1);
+    expect(ftsRowidsMatching(db, "bravo")).toHaveLength(1);
+    expect(ftsRowidsMatching(db, "Delta")).toHaveLength(1);
+    expect(ftsRowidsMatching(db, "Eric")).toHaveLength(1);
+  });
+
+  it("insert trigger reflects new messages into the FTS index", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    insertMessageRow(db, { id: "1", body: "kangaroo platypus" });
+    expect(ftsRowidsMatching(db, "kangaroo")).toHaveLength(1);
+    expect(ftsRowidsMatching(db, "platypus")).toHaveLength(1);
+    expect(ftsRowidsMatching(db, "absent")).toHaveLength(0);
+  });
+
+  it("delete trigger removes rows from the FTS index", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    insertMessageRow(db, { id: "1", body: "kangaroo platypus" });
+    db.prepare("DELETE FROM messages WHERE id = ?").run("1");
+    expect(ftsRowidsMatching(db, "kangaroo")).toHaveLength(0);
+  });
+
+  it("update trigger refreshes the FTS index when body changes", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    insertMessageRow(db, { id: "1", body: "kangaroo platypus" });
+    db.prepare("UPDATE messages SET body = ? WHERE id = ?").run(
+      "wombat echidna",
+      "1",
+    );
+    expect(ftsRowidsMatching(db, "kangaroo")).toHaveLength(0);
+    expect(ftsRowidsMatching(db, "wombat")).toHaveLength(1);
   });
 });
