@@ -92,6 +92,9 @@ Scaffold **in-place** in this repo (`/Users/waldo/SourceCode/Community/waldo.WTF
 ### Slice 3 — `TeamsClient` seam + `FakeTeamsClient` ✅ (2026-04-13)
 - [x] Interface + DTOs in [src/sources/teams.ts](src/sources/teams.ts); scripted fake in [src/testing/fake-teams-client.ts](src/testing/fake-teams-client.ts). Plan: [docs/plans/weekend-4-slice-3-teams-client-seam.md](docs/plans/weekend-4-slice-3-teams-client-seam.md).
 
+### Slice 4 — `HttpTeamsClient` ✅ (2026-04-13)
+- [x] Fetch-backed adapter [src/sources/http-teams-client.ts](src/sources/http-teams-client.ts); 401/410/429 mapping + token-redacted errors. Plan: [docs/plans/weekend-4-slice-4-http-teams-client.md](docs/plans/weekend-4-slice-4-http-teams-client.md).
+
 - [ ] Remaining Microsoft accounts logged in (iFacto, customer tenants, personal) — uses `tsx src/cli.ts --add-account` (Slice 1)
 - [ ] Open Q: do all 4 support delegated `Mail.Read` without admin consent?
 - [ ] Teams source: `/me/chats/getAllMessages` with delta
