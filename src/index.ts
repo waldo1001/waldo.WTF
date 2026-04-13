@@ -145,10 +145,10 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
     clock,
   });
   await new Promise<void>((resolve) => {
-    httpServer.listen(config.port, "127.0.0.1", () => resolve());
+    httpServer.listen(config.port, config.bindHost, () => resolve());
   });
   logger.info(
-    `waldo.WTF MCP server listening on http://127.0.0.1:${config.port}`,
+    `waldo.WTF MCP server listening on http://${config.bindHost}:${config.port}`,
   );
   logger.info("starting initial sync tick (this may take a while on first run)");
 

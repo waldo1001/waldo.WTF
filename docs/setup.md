@@ -130,9 +130,11 @@ block and the first test prompt.
 
 ## 9. Deployment to Synology (project, Weekend 5+)
 
-See [user-guide.md §5](user-guide.md) for the Docker + Container Manager
-+ Tailscale recipe. Do **not** attempt before the local setup works
-end-to-end for one full week.
+Full step-by-step recipe: [deploy-synology.md](deploy-synology.md).
+Covers Docker build on the Mac, Container Manager + Tailscale on the
+NAS, first-run MSAL login inside the container, and repointing Claude
+Desktop to the tailnet host. Do **not** attempt before the local
+`npm test` + `tsx src/cli.ts` flow works end-to-end for one full week.
 
 ---
 

@@ -1,0 +1,57 @@
+# waldo.WTF — docker compose
+#
+# Two bind mounts:
+#   ./data/db   -> /data/db     (SQLite lake + WAL/SHM sidecar files)
+#   ./data/auth -> /data/auth   (MSAL token cache + delta-state.json)
+#
+# On the Synology NAS, replace the LEFT side of each mount with an absolute
+# path on the INTERNAL SSD (e.g. /volume1/docker/waldo-wtf/db). NEVER put the
+# db volume on an SMB / network share — SQLite + WAL over SMB corrupts.
+#
+# First-run MSAL login (attach an interactive terminal):
+#   docker compose run --rm waldo --add-account
+#
+# Long-running server:
+#   docker compose up -d
+#
+# Tail logs:
+#   docker compose logs -f
+
+services:
+  waldo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # DS223 = arm64. Set explicitly so cross-arch builds on an M-series Mac
+      # don't silently produce an amd64 image.
+      platforms:
+        - linux/arm64
+    image: waldo-wtf:local
+    container_name: waldo-wtf
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Override loopback default so the published port is reachable from the host.
+      WALDO_BIND_HOST: "0.0.0.0"
+      WALDO_DB_PATH: "/data/db/lake.db"
+      WALDO_AUTH_DIR: "/data/auth"
+    ports:
+      # Host port : container port. Keep 8765 on both sides so Claude Desktop's
+      # MCP config can use http://<tailnet-host>:8765 unchanged.
+      - "8765:8765"
+    volumes:
+      - ./data/db:/data/db
+      - ./data/auth:/data/auth
+    healthcheck:
+      # /health is unauthenticated and returns {ok:true}. Uses node's built-in
+      # fetch so we don't need curl/wget in the image.
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "fetch('http://127.0.0.1:8765/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

@@ -162,13 +162,48 @@ with its own plan file.
 
 ## Weekend 5 — Dockerize + Synology
 
-- [ ] `Dockerfile` (node:22-alpine)
-- [ ] Volume mounts: `/data/db`, `/data/auth`
-- [ ] Local container test on Mac
-- [ ] Synology: Container Manager + Tailscale installed
-- [ ] Deploy container (internal SSD bind mounts — **not** SMB)
-- [ ] Reachable via tailnet hostname
-- [ ] Claude Desktop repointed from `localhost` → `waldo-nas.tailnet.ts.net`
+- [x] `WALDO_BIND_HOST` config knob ✅ (2026-04-14) — default
+  `127.0.0.1`; containers override to `0.0.0.0`. Plumbed through
+  `loadConfig` → `main()` → `httpServer.listen`. 4 new tests, 384
+  total.
+- [x] `Dockerfile` ✅ (2026-04-14) — `node:22-bookworm-slim` (not
+  alpine; `better-sqlite3` + musl not worth the fight). Multi-stage,
+  non-root `node` user, `apt-get python3 make g++` in deps stage for
+  the from-source fallback.
+- [x] `.dockerignore`, `docker-compose.yml`, `.env.example`
+  update ✅ (2026-04-14) — compose targets `linux/arm64` for the
+  DS223, publishes `8765:8765`, healthcheck hits the existing
+  unauthenticated `/health` endpoint.
+- [x] Volume mounts: `/data/db`, `/data/auth` ✅ (2026-04-14) —
+  declared as VOLUME in the Dockerfile; compose bind-mounts
+  `./data/*` locally, `/volume1/docker/waldo-wtf/*` on the NAS.
+- [x] Operator manual [docs/deploy-synology.md](docs/deploy-synology.md)
+  ✅ (2026-04-14) — end-to-end recipe for DS223 + Tailscale +
+  Container Manager, including first-run `--add-account` device code
+  flow and Claude Desktop repoint. Plan:
+  [docs/plans/weekend-5-dockerize-and-synology.md](docs/plans/weekend-5-dockerize-and-synology.md).
+- [x] **Local container smoke test on Mac** ✅ (2026-04-14) — Part A
+  of [docs/deploy-synology.md](docs/deploy-synology.md) executed end
+  to end with OrbStack as the Docker engine. `docker buildx build
+  --platform linux/arm64 --load` completes in 34s (prebuilt
+  `better-sqlite3` available for arm64, from-source fallback not
+  needed). Container comes up `(healthy)`, `/health` returns
+  `{"ok":true}`, `WALDO_BIND_HOST=0.0.0.0` override reaches the
+  server, `./data/db/lake.db` + WAL/SHM files land on the host via
+  the bind mount, `docker compose down` shuts down cleanly.
+  Dockerfile + compose file are validated against a live engine;
+  manual is trustworthy for Parts B–G. Two findings flagged for
+  follow-up (not blocking): (1) Dockerfile lint warning
+  `SecretsUsedInArgOrEnv` on `ENV WALDO_AUTH_DIR` — false positive,
+  noisy; (2) suspicious startup log line `◇ injected env (0) from
+  .env // tip: ⌁ auth for agents [www.vestauth.com]` — NOT from
+  waldo.WTF code, likely an ad/promo injection from a transitive
+  `node_modules` dep; deferred as a separate security investigation.
+- [ ] Synology: Container Manager + Tailscale installed (manual Part B)
+- [ ] Deploy container (internal SSD bind mounts — **not** SMB) (manual Part D)
+- [ ] First-run MSAL login against NAS volume (manual Part E)
+- [ ] Reachable via tailnet hostname (manual Part F)
+- [ ] Claude Desktop repointed from `localhost` → `waldo-nas.tailnet.ts.net` (manual Part G)
 
 ---
 

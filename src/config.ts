@@ -2,6 +2,7 @@ export const DEFAULT_DB_PATH = "./data/lake.db";
 export const DEFAULT_AUTH_DIR = "./data/auth";
 export const DEFAULT_PORT = 8765;
 export const DEFAULT_SYNC_INTERVAL_MS = 300_000;
+export const DEFAULT_BIND_HOST = "127.0.0.1";
 
 export type Config = Readonly<{
   msClientId: string;
@@ -10,6 +11,7 @@ export type Config = Readonly<{
   authDir: string;
   port: number;
   syncIntervalMs: number;
+  bindHost: string;
   backfillDays?: number;
 }>;
 
@@ -60,6 +62,7 @@ export function loadConfig(env: Env): Config {
     authDir: present(env.WALDO_AUTH_DIR) ? env.WALDO_AUTH_DIR : DEFAULT_AUTH_DIR,
     port,
     syncIntervalMs,
+    bindHost: present(env.WALDO_BIND_HOST) ? env.WALDO_BIND_HOST : DEFAULT_BIND_HOST,
     ...(backfillDays !== undefined ? { backfillDays } : {}),
   };
 }

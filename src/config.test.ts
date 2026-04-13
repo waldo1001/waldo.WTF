@@ -6,6 +6,7 @@ import {
   DEFAULT_AUTH_DIR,
   DEFAULT_PORT,
   DEFAULT_SYNC_INTERVAL_MS,
+  DEFAULT_BIND_HOST,
 } from "./config.js";
 
 const validEnv = () => ({
@@ -27,7 +28,25 @@ describe("loadConfig", () => {
       authDir: "/tmp/auth",
       port: DEFAULT_PORT,
       syncIntervalMs: DEFAULT_SYNC_INTERVAL_MS,
+      bindHost: DEFAULT_BIND_HOST,
     });
+  });
+
+  it("defaults bindHost to 127.0.0.1", () => {
+    expect(DEFAULT_BIND_HOST).toBe("127.0.0.1");
+    expect(loadConfig(validEnv()).bindHost).toBe("127.0.0.1");
+  });
+
+  it("uses WALDO_BIND_HOST when provided", () => {
+    expect(
+      loadConfig({ ...validEnv(), WALDO_BIND_HOST: "0.0.0.0" }).bindHost,
+    ).toBe("0.0.0.0");
+  });
+
+  it("treats empty WALDO_BIND_HOST as unset", () => {
+    expect(
+      loadConfig({ ...validEnv(), WALDO_BIND_HOST: "" }).bindHost,
+    ).toBe(DEFAULT_BIND_HOST);
   });
 
   it("port defaults to 8765 when WALDO_PORT is unset", () => {

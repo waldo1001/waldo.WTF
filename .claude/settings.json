@@ -49,7 +49,12 @@
       "Read(//Users/waldo/Library/Application Support/Claude/**)",
       "Bash(xargs kill:*)",
       "Bash(curl -sS http://localhost:8765/health)",
-      "Bash(curl -sS -N http://localhost:8765/ -H \"Authorization: Bearer e2d95cb688939ef10f34b85be59fdf05664722e5837a3aa4afff7f0a09b5d1fa\" -H \"Content-Type: application/json\" -H \"Accept: application/json, text/event-stream\" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"curl\",\"version\":\"0\"}}}')"
+      "Bash(curl -sS -N http://localhost:8765/ -H \"Authorization: Bearer e2d95cb688939ef10f34b85be59fdf05664722e5837a3aa4afff7f0a09b5d1fa\" -H \"Content-Type: application/json\" -H \"Accept: application/json, text/event-stream\" -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"curl\",\"version\":\"0\"}}}')",
+      "Bash(open /Applications/OrbStack.app)",
+      "Bash(docker version:*)",
+      "Bash(exit 0)",
+      "Bash(docker compose:*)",
+      "Bash(curl -sS http://127.0.0.1:8765/health)"
     ],
     "additionalDirectories": [
       "/tmp",

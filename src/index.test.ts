@@ -99,6 +99,21 @@ describe("main", () => {
     await result.shutdown();
   });
 
+  it("binds http server to configured WALDO_BIND_HOST", async () => {
+    const h = makeHarness();
+    const overrides = makeOverrides();
+    const result = await main({
+      env: { ...makeEnv(), WALDO_BIND_HOST: "0.0.0.0" },
+      loadDotenv: false,
+      overrides: { ...overrides, setTimer: h.setTimer, logger: h.logger },
+    });
+    const addr = result.httpServer.address();
+    expect(addr).not.toBeNull();
+    expect(typeof addr).toBe("object");
+    expect((addr as { address: string }).address).toBe("0.0.0.0");
+    await result.shutdown();
+  });
+
   it("shutdown() stops the scheduler, closes the server, and is safe to call twice", async () => {
     const h = makeHarness();
     const overrides = makeOverrides();
