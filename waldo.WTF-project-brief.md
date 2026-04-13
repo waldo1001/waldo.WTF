@@ -318,6 +318,8 @@ Goal: prove delta queries and multi-account work on the same single-file spike. 
 - [ ] Retention policy: keep everything forever, or prune after N months?
 - [ ] Does Claude mobile's current remote-MCP connector support work cleanly on Android, or is a PWA fallback needed?
 - [ ] Will waldo want a daily/weekly digest *pushed* somewhere (email, Slack, another Teams channel), or is pull-via-Claude enough?
+- [ ] **Attachments & documents in scope?** Mail attachments, Teams/SharePoint documents, files shared in chat threads — none are currently ingested. `raw_json` preserves references but nothing indexes or fetches the content. Decide post-v1 whether the triage answer is materially worse without them.
+- [ ] **Steering memory / "not interested" topics.** waldo needs a way to mark certain topics, threads, senders, or projects as low-signal ("not interested") so Claude can down-weight or skip them when answering *"wtf is going on?"*. Shape TBD — could be a `preferences` table exposed via an MCP tool (`get_steering`?), a static file Claude reads, or tags on `messages`. Key requirement: **the LLM must be able to take it into account at query time**, not just at sync time (so nothing is deleted — steering is a lens, not a filter).
 
 ---
 
