@@ -7,6 +7,7 @@ import {
 } from "./sync-scheduler.js";
 import { FakeAuthClient } from "../testing/fake-auth-client.js";
 import { FakeGraphClient } from "../testing/fake-graph-client.js";
+import { FakeTeamsClient } from "../testing/fake-teams-client.js";
 import { InMemoryMessageStore } from "../testing/in-memory-message-store.js";
 import { FakeClock } from "../testing/fake-clock.js";
 import type { Account, AccessToken } from "../auth/types.js";
@@ -183,6 +184,8 @@ describe("SyncScheduler", () => {
     expect(store.syncLog).toHaveLength(1);
     expect(timer.timers).toHaveLength(1);
     expect(timer.timers[0]?.ms).toBe(42_000);
+    // Fire the armed timer so the callback body is exercised.
+    timer.fire(0);
   });
 
   it("stop() clears the active timer", async () => {
@@ -209,6 +212,105 @@ describe("SyncScheduler", () => {
     await scheduler.start();
     scheduler.stop();
     expect(timer.timers[0]?.cleared).toBe(true);
+  });
+
+  it("with teams dep: runOnce appends one outlook + one teams row per account", async () => {
+    const a1 = acc("alice");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [{ kind: "ok", response: ok({ "@odata.deltaLink": "do" }) }],
+    });
+    const teams = new FakeTeamsClient({
+      steps: [
+        {
+          kind: "ok",
+          response: { value: [], "@odata.deltaLink": "dt" },
+        },
+      ],
+    });
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      teams,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+    expect(store.syncLog).toHaveLength(2);
+    expect(store.syncLog.map((e) => e.source).sort()).toEqual([
+      "outlook",
+      "teams",
+    ]);
+    expect(store.syncLog.every((e) => e.status === "ok")).toBe(true);
+  });
+
+  it("without teams dep: only outlook rows are appended (backwards-compat)", async () => {
+    const a1 = acc("alice");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [{ kind: "ok", response: ok({ "@odata.deltaLink": "do" }) }],
+    });
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+    expect(store.syncLog).toHaveLength(1);
+    expect(store.syncLog[0]?.source).toBe("outlook");
+  });
+
+  it("teams error does not block outlook: both rows appended, teams row is error", async () => {
+    const a1 = acc("alice");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [{ kind: "ok", response: ok({ "@odata.deltaLink": "do" }) }],
+    });
+    const teams = new FakeTeamsClient({
+      steps: [{ kind: "error", error: new Error("teams-boom") }],
+    });
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      teams,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+    expect(store.syncLog).toHaveLength(2);
+    const outlookRow = store.syncLog.find((e) => e.source === "outlook");
+    const teamsRow = store.syncLog.find((e) => e.source === "teams");
+    expect(outlookRow?.status).toBe("ok");
+    expect(teamsRow?.status).toBe("error");
+    expect(teamsRow?.errorMessage).toContain("teams-boom");
   });
 
   it("timer firing during an in-flight run is skipped and onSkip is invoked", async () => {

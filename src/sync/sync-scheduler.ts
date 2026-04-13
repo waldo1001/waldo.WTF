@@ -2,9 +2,15 @@ import type { AuthClient } from "../auth/auth-client.js";
 import type { Clock } from "../clock.js";
 import type { MessageStore } from "../store/message-store.js";
 import type { GraphClient } from "../sources/graph.js";
+import type { TeamsClient } from "../sources/teams.js";
 import { syncInbox } from "./sync-inbox.js";
+import { syncTeams } from "./sync-teams.js";
 
 export const DEFAULT_SYNC_INTERVAL_MS = 300_000;
+
+/* c8 ignore next 3 */
+const errorToString = (err: unknown): string =>
+  err instanceof Error ? err.message : String(err);
 
 export interface TimerHandle {
   clear(): void;
@@ -15,6 +21,7 @@ export type SetTimerFn = (fn: () => void, ms: number) => TimerHandle;
 export interface SyncSchedulerDeps {
   readonly auth: AuthClient;
   readonly graph: GraphClient;
+  readonly teams?: TeamsClient;
   readonly store: MessageStore;
   readonly clock: Clock;
   readonly setTimer: SetTimerFn;
@@ -58,8 +65,34 @@ export class SyncScheduler {
             account: account.username,
             source: "outlook",
             status: "error",
-            errorMessage: err instanceof Error ? err.message : String(err),
+            errorMessage: errorToString(err),
           });
+        }
+        if (this.deps.teams !== undefined) {
+          try {
+            const r = await syncTeams({
+              account,
+              auth: this.deps.auth,
+              teams: this.deps.teams,
+              store: this.deps.store,
+              clock: this.deps.clock,
+            });
+            await this.deps.store.appendSyncLog({
+              ts: this.deps.clock.now(),
+              account: account.username,
+              source: "teams",
+              status: "ok",
+              messagesAdded: r.added,
+            });
+          } catch (err) {
+            await this.deps.store.appendSyncLog({
+              ts: this.deps.clock.now(),
+              account: account.username,
+              source: "teams",
+              status: "error",
+              errorMessage: errorToString(err),
+            });
+          }
         }
       }
     } finally {

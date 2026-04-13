@@ -10,6 +10,8 @@ import type { AuthClient } from "./auth/auth-client.js";
 import type { MessageStore } from "./store/message-store.js";
 import type { GraphClient } from "./sources/graph.js";
 import { HttpGraphClient } from "./sources/http-graph-client.js";
+import type { TeamsClient } from "./sources/teams.js";
+import { HttpTeamsClient } from "./sources/http-teams-client.js";
 import { openDatabase } from "./store/open-database.js";
 import { SqliteMessageStore } from "./store/sqlite-message-store.js";
 import {
@@ -77,10 +79,14 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
   const graph: GraphClient = new HttpGraphClient({
     fetch: (input, init) => globalThis.fetch(input, init),
   });
+  const teams: TeamsClient = new HttpTeamsClient({
+    fetch: (input, init) => globalThis.fetch(input, init),
+  });
 
   const scheduler = new SyncScheduler({
     auth,
     graph,
+    teams,
     store,
     clock,
     setTimer: nodeSetTimer,

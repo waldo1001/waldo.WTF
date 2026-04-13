@@ -95,6 +95,9 @@ Scaffold **in-place** in this repo (`/Users/waldo/SourceCode/Community/waldo.WTF
 ### Slice 4 — `HttpTeamsClient` ✅ (2026-04-13)
 - [x] Fetch-backed adapter [src/sources/http-teams-client.ts](src/sources/http-teams-client.ts); 401/410/429 mapping + token-redacted errors. Plan: [docs/plans/weekend-4-slice-4-http-teams-client.md](docs/plans/weekend-4-slice-4-http-teams-client.md).
 
+### Slice 5 — `syncTeams` + scheduler wiring ✅ (2026-04-13)
+- [x] [src/sync/sync-teams.ts](src/sync/sync-teams.ts) walks Teams delta, maps → `Message`, routes `@removed`, persists `setSyncState({source:"teams"})`. `SyncScheduler` now takes optional `teams: TeamsClient` and emits a second `sync_log` row per account per tick. `src/index.ts` wires real `HttpTeamsClient`. Plan: [docs/plans/weekend-4-slice-5-sync-teams.md](docs/plans/weekend-4-slice-5-sync-teams.md).
+
 - [ ] Remaining Microsoft accounts logged in (iFacto, customer tenants, personal) — uses `tsx src/cli.ts --add-account` (Slice 1)
 - [ ] Open Q: do all 4 support delegated `Mail.Read` without admin consent?
 - [ ] Teams source: `/me/chats/getAllMessages` with delta
