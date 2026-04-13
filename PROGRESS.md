@@ -29,11 +29,16 @@ Keep notes terse — one line per surprise, gotcha, or decision worth rememberin
 - `Prefer: odata.maxpagesize=50` keeps pages reasonable.
 - Delta endpoint ignores `$orderby`; only `$select` + `receivedDateTime ge ...` filter honored on first call.
 
-### Second account
-- [ ] Trigger a second `acquireTokenByDeviceCode` (force interactive even when cache has one account)
-- [ ] Verify MSAL routes silent refresh per-account correctly
-- [ ] Loop `syncInbox` over all cached accounts
-- [ ] Confirm `delta-state.json` has one entry per account after run
+### Second account ✅ (2026-04-13)
+- [x] Trigger a second `acquireTokenByDeviceCode` (force interactive even when cache has one account)
+- [x] Verify MSAL routes silent refresh per-account correctly
+- [x] Loop `syncInbox` over all cached accounts
+- [x] Confirm `delta-state.json` has one entry per account after run
+
+**Notes:**
+- Authority must be `common` (not a specific tenant GUID) for cross-tenant accounts to log in.
+- `--add-account` flag on spike.js forces interactive login even when cache is non-empty.
+- Verified with eric.wauters@dynex.be + waldo@turnhoutbasketbal.onmicrosoft.com: run 1 = +162 for new account, +0/-0 for existing.
 
 ### Learning log (edge cases to note as they appear)
 - _add findings here during the weekend_
