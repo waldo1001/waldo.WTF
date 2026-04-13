@@ -1,0 +1,30 @@
+# Secrets — NEVER commit these. See .claude/skills/security-scan/SKILL.md
+.env
+.env.*
+!.env.example
+token-cache.json
+accounts.json
+
+# Private keys / certs
+*.pem
+*.key
+*.pfx
+*.p12
+
+# The lake (SQLite + WAL sidecars)
+data/
+lake.db
+lake.db-wal
+lake.db-shm
+
+# Node
+node_modules/
+coverage/
+dist/
+build/
+*.tsbuildinfo
+
+# Editor / OS
+.vscode/settings.json
+.DS_Store
+Thumbs.db

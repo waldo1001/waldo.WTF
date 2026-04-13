@@ -1,0 +1,18 @@
+{
+  "_comment": "Merge these blocks into the project's package.json at Weekend 2. Versions are intentionally loose (caret ranges) — tighten when the project is first built and lockfile is created.",
+  "scripts": {
+    "test": "vitest run --coverage",
+    "test:watch": "vitest",
+    "test:unit": "vitest run --coverage src",
+    "test:integration": "vitest run src/**/__integration__",
+    "test:contract": "vitest run src/**/__contract__",
+    "typecheck": "tsc -p tsconfig.test.json"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0",
+    "@vitest/coverage-v8": "^2.1.0",
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0"
+  }
+}
