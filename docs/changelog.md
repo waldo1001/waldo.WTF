@@ -13,6 +13,10 @@ skill.
 
 ## 2026-04-13
 
+- Bootstrapped TypeScript project in-place: `package.json`, `tsconfig.json`, `tsconfig.test.json`, `vitest.config.ts`. Node 22, ESM, strict TS, per-file 90% coverage thresholds. See [PROGRESS.md](../PROGRESS.md) Weekend 2.
+- Landed first seam: `Clock` interface + `systemClock` ([src/clock.ts](../src/clock.ts)) and `FakeClock` test double ([src/testing/fake-clock.ts](../src/testing/fake-clock.ts)). 4 tests, 100% coverage on `clock.ts`.
+- Added mandatory **Step 0 PLAN** to the TDD loop ([CLAUDE.md](../CLAUDE.md), [.claude/skills/tdd-cycle/SKILL.md](../.claude/skills/tdd-cycle/SKILL.md)): every task now writes an approvable md plan under [docs/plans/](plans/) before any FRAME/RED/code. First plan: [weekend-2-slice-1-bootstrap-and-clock.md](plans/weekend-2-slice-1-bootstrap-and-clock.md).
+- Weekend 2 scaffolds in-place at `/Users/waldo/SourceCode/Community/waldo.WTF/`; spike at `/Users/waldo/Temp/waldo-wtf-spike` is reference-only.
 - Added [.github/copilot-instructions.md](../.github/copilot-instructions.md) — GitHub Copilot follows the same TDD toolchain as Claude, via references (no duplication).
 - Added `/security-scan` skill (gitignore baseline, secret patterns, real-data scan, log hygiene, error-message interpolation, snapshot/fixture scan, `npm audit`). Wired into the TDD cycle between COVER and UPDATE DOCS. Added root `.gitignore` with the secrets baseline.
 - Added root [README.md](../README.md) as the project's front door; wired maintenance into `/docs-update` so scope / status / architecture changes update it automatically.

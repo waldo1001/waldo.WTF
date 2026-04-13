@@ -49,13 +49,14 @@ Keep notes terse — one line per surprise, gotcha, or decision worth rememberin
 
 TDD toolkit is ready — see [CLAUDE.md](CLAUDE.md), [docs/tdd/](docs/tdd/), [testing/](testing/). Every code change from Weekend 2 onward runs through `/tdd-cycle` (`.claude/skills/tdd-cycle/SKILL.md`).
 
-- [ ] Create `~/code/waldo.WTF/` (keep spike folder intact for reference)
-- [ ] `npm init`, `tsconfig.json`, `tsx` for dev
-- [ ] Copy [testing/vitest.config.ts](testing/vitest.config.ts) + merge [testing/package.deps.json](testing/package.deps.json) into `package.json`
-- [ ] Port example fakes from [testing/examples/](testing/examples/) into `src/testing/`
-- [ ] First RED test before any production code (run `/tdd-cycle`)
+Scaffold **in-place** in this repo (`/Users/waldo/SourceCode/Community/waldo.WTF/`). The spike stays untouched at `/Users/waldo/Temp/waldo-wtf-spike` and is **reference only** — never copy-paste.
+
+- [x] `npm init`, `tsconfig.json`, `tsx` for dev (at repo root) — 2026-04-13
+- [x] Copy [testing/vitest.config.ts](testing/vitest.config.ts) + merge [testing/package.deps.json](testing/package.deps.json) into `package.json` — 2026-04-13
+- [ ] Port example fakes from [testing/examples/](testing/examples/) into `src/testing/` (clock done; fs/graph pending)
+- [x] First RED test before any production code (run `/tdd-cycle`) — 2026-04-13 (`FakeClock` contract tests)
 - [ ] Folder structure (`src/auth`, `src/sources`, `src/store`, `src/sync`, `src/mcp`, `src/config.ts`, `src/index.ts`)
-- [ ] Port spike logic — **reference, don't copy-paste**
+- [ ] Port spike logic from `/Users/waldo/Temp/waldo-wtf-spike` — **reference, don't copy-paste**
 - [ ] Real schema (full `messages` table incl. `raw_json`, `sync_state`, `sync_log`, `accounts`, FTS5)
 - [ ] 5-minute sync loop writing to `sync_log`
 - [ ] Skeleton HTTP MCP server (transport only, no tools yet)

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(npx vitest:*)",
+      "Bash(npm test:*)",
+      "Bash(npm run:*)",
+      "Bash(grep -E '\\(^|/\\)\\(\\\\.env\\($|\\\\.\\)|token-cache\\\\.json|accounts\\\\.json|.*\\\\.pem|.*\\\\.key|.*\\\\.pfx|.*\\\\.p12|lake\\\\.db\\)')",
+      "Bash(npm audit:*)"
+    ]
+  }
+}

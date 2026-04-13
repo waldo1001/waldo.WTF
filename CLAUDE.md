@@ -10,29 +10,35 @@ the TDD cycle defined in [docs/tdd/methodology.md](docs/tdd/methodology.md).
 
 **The loop** (never skip a step, never merge steps):
 
-0. **FRAME** — post a ≤150-word framing: goal of this step, where it stands
+0. **PLAN** — write a markdown plan under [docs/plans/](docs/plans/) for the
+   next task: goal, scope boundary, files to touch, seams, RED test list,
+   risks, out-of-scope. **Stop and wait for explicit user approval of the
+   plan before doing anything else.** No FRAME, no RED, no code until the
+   plan is acknowledged. This exists so the agent surfaces decisions
+   instead of silently assuming them.
+1. **FRAME** — post a ≤150-word framing: goal of this step, where it stands
    in the project, why it is needed, what it contributes. See
    [docs/tdd/methodology.md §2.0](docs/tdd/methodology.md).
-1. **RED** — write a failing test that encodes the requirement.
-2. **PROVE RED** — run it, observe the failure, confirm the failure message is
+2. **RED** — write a failing test that encodes the requirement.
+3. **PROVE RED** — run it, observe the failure, confirm the failure message is
    about the thing under test (not a typo, not a missing import).
-3. **SCAFFOLD** — add only the minimum shape (files, exports, types, seams) so
+4. **SCAFFOLD** — add only the minimum shape (files, exports, types, seams) so
    the test *can* fail for the right reason. Return stubs, throw `not
    implemented`. This step exists so code is born testable.
-4. **GREEN** — write the smallest implementation that turns the test green.
-5. **REFACTOR** — clean up with the tests as a safety net. Tests stay green.
-6. **COVER** — verify ≥90% line + branch coverage on touched files and that
+5. **GREEN** — write the smallest implementation that turns the test green.
+6. **REFACTOR** — clean up with the tests as a safety net. Tests stay green.
+7. **COVER** — verify ≥90% line + branch coverage on touched files and that
    every acceptance criterion from the task has at least one named test.
-7. **SECURITY SCAN** — run [`/security-scan`](.claude/skills/security-scan/SKILL.md).
+8. **SECURITY SCAN** — run [`/security-scan`](.claude/skills/security-scan/SKILL.md).
    A finding blocks the cycle. Never "note and continue".
-8. **UPDATE DOCS** — run [`/docs-update`](.claude/skills/docs-update/SKILL.md)
+9. **UPDATE DOCS** — run [`/docs-update`](.claude/skills/docs-update/SKILL.md)
    to update the [changelog](docs/changelog.md) and any user-visible docs.
-9. **REVIEW** — run the self-review checklist in
-   [docs/tdd/methodology.md §2.8](docs/tdd/methodology.md).
+10. **REVIEW** — run the self-review checklist in
+    [docs/tdd/methodology.md §2.8](docs/tdd/methodology.md).
 
-Before writing any implementation code, **post the FRAME and then the RED
-test list** in chat. Before calling a task done, **cite the test names that
-cover each requirement**.
+Before writing any implementation code, **post the PLAN (and get approval),
+then the FRAME, then the RED test list** in chat. Before calling a task
+done, **cite the test names that cover each requirement**.
 
 ## Supporting documents
 

@@ -22,6 +22,35 @@ Re-read these before you write anything:
 If the task is a bug fix, also read §7 of methodology.md.
 If the task is a refactor, also read §8 of methodology.md.
 
+## Step 0.5 — PLAN (write a md file, then STOP for approval)
+
+**Non-negotiable, before anything else in this cycle.**
+
+Write a markdown plan file at `docs/plans/<weekend>-<slice>.md` (e.g.
+`docs/plans/weekend-2-slice-1-project-init.md`) with the following
+sections:
+
+1. **Task** — one sentence.
+2. **Scope boundary** — what is IN this slice and what is explicitly OUT
+   (deferred to later slices). Be ruthless: a slice is one TDD cycle,
+   not a weekend.
+3. **Files to create / touch** — exact paths.
+4. **Seams involved** — msal | graph | store | clock | fs | http | logger | none.
+5. **RED test list** — draft of Step 3 (ACs + test file + test name + edge cases).
+6. **Open questions / assumptions** — anything the agent would otherwise
+   silently decide. Each entry is either a question for the user or a
+   stated assumption flagged for confirmation.
+7. **Risks** — what could go wrong, what would force a rollback.
+8. **Out-of-scope follow-ups** — bullet list of things this plan deliberately
+   defers, so they don't get lost.
+
+After writing the file, **post its path in chat and stop. Do not proceed
+to Step 1 until the user has explicitly approved the plan** (words like
+"go", "approved", "looks good", "yes proceed"). Silence is not approval.
+
+If the user requests changes, edit the plan file and re-ask. Never start
+FRAME / RED / code from an unapproved plan.
+
 ## Step 1 — Situate the step in the project (≤150 words)
 
 Before anything else, post in chat a short framing that answers all four
