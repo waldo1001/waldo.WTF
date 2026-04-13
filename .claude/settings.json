@@ -8,7 +8,8 @@
       "Bash(grep -E '\\(^|/\\)\\(\\\\.env\\($|\\\\.\\)|token-cache\\\\.json|accounts\\\\.json|.*\\\\.pem|.*\\\\.key|.*\\\\.pfx|.*\\\\.p12|lake\\\\.db\\)')",
       "Bash(npm audit:*)",
       "Bash(npx tsc:*)",
-      "Bash(echo \"---exit $?\")"
+      "Bash(echo \"---exit $?\")",
+      "Read(//Users/waldo/Temp/waldo-wtf-spike/**)"
     ]
   }
 }

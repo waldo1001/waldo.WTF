@@ -57,6 +57,7 @@ Scaffold **in-place** in this repo (`/Users/waldo/SourceCode/Community/waldo.WTF
 - [x] First RED test before any production code (run `/tdd-cycle`) — 2026-04-13 (`FakeClock` contract tests)
 - [x] Folder structure (`src/auth`, `src/sources`, `src/store`, `src/sync`, `src/mcp`, `src/config.ts`, `src/index.ts`) — 2026-04-13 (pure `loadConfig` + stub `main()`; 11 tests, 100% coverage)
 - [ ] Port spike logic from `/Users/waldo/Temp/waldo-wtf-spike` — **reference, don't copy-paste**
+  - [x] Auth seam: `AuthClient` interface, `FakeAuthClient`, `TokenCacheStore` (fs-backed, atomic write, mode 0o600) — 2026-04-13. Real MSAL adapter still pending.
 - [ ] Real schema (full `messages` table incl. `raw_json`, `sync_state`, `sync_log`, `accounts`, FTS5)
 - [ ] 5-minute sync loop writing to `sync_log`
 - [ ] Skeleton HTTP MCP server (transport only, no tools yet)

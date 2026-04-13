@@ -13,11 +13,22 @@ type Watcher = {
   onEvent: (path: string) => void;
 };
 
+export type InMemoryFsOp =
+  | { kind: "readFile"; path: string }
+  | { kind: "writeFile"; path: string; mode?: number }
+  | { kind: "rename"; from: string; to: string };
+
 export class InMemoryFileSystem implements FileSystem {
   private readonly files = new Map<string, Buffer>();
+  private readonly modes = new Map<string, number>();
+  private readonly readErrors = new Map<string, Error>();
   private readonly watchers = new Set<Watcher>();
+  readonly ops: InMemoryFsOp[] = [];
 
   async readFile(path: string): Promise<Buffer> {
+    this.ops.push({ kind: "readFile", path });
+    const injected = this.readErrors.get(path);
+    if (injected) throw injected;
     const buf = this.files.get(path);
     if (!buf) throw new ENOENTError(path);
     return buf;
@@ -26,17 +37,39 @@ export class InMemoryFileSystem implements FileSystem {
   async writeFile(
     path: string,
     data: Buffer | string,
-    _mode?: number,
+    mode?: number,
   ): Promise<void> {
+    this.ops.push(
+      mode === undefined
+        ? { kind: "writeFile", path }
+        : { kind: "writeFile", path, mode },
+    );
     const buf = typeof data === "string" ? Buffer.from(data, "utf8") : data;
     this.files.set(path, Buffer.from(buf));
+    if (mode !== undefined) this.modes.set(path, mode);
   }
 
   async rename(from: string, to: string): Promise<void> {
+    this.ops.push({ kind: "rename", from, to });
     const buf = this.files.get(from);
     if (!buf) throw new ENOENTError(from);
     this.files.set(to, buf);
     this.files.delete(from);
+    const mode = this.modes.get(from);
+    if (mode !== undefined) {
+      this.modes.set(to, mode);
+      this.modes.delete(from);
+    }
+  }
+
+  /** Test-only: read back the mode last written for a path. */
+  modeOf(path: string): number | undefined {
+    return this.modes.get(path);
+  }
+
+  /** Test-only: make readFile at `path` throw the given error. */
+  injectReadError(path: string, error: Error): void {
+    this.readErrors.set(path, error);
   }
 
   watch(
