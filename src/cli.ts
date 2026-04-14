@@ -124,7 +124,16 @@ if (isMain) {
       }
     })
     .catch((err) => {
-      console.error(err instanceof Error ? err.message : String(err));
+      if (err instanceof Error) {
+        console.error(err.message);
+        let c: unknown = (err as { cause?: unknown }).cause;
+        while (c instanceof Error) {
+          console.error(`  caused by: ${c.message}`);
+          c = (c as { cause?: unknown }).cause;
+        }
+      } else {
+        console.error(String(err));
+      }
       process.exit(1);
     });
 }

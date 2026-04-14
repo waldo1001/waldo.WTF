@@ -172,10 +172,40 @@ SSH to the NAS and run:
 
 ```sh
 sudo mkdir -p /volume1/docker/waldo-wtf/db /volume1/docker/waldo-wtf/auth
-sudo chown -R 1000:1000 /volume1/docker/waldo-wtf
+sudo chown -R 1000:1000 /volume1/docker/waldo-wtf/db /volume1/docker/waldo-wtf/auth
+sudo chmod -R u+rwX /volume1/docker/waldo-wtf/db /volume1/docker/waldo-wtf/auth
 # UID 1000 = the `node` user inside the image. Matches the non-root USER in
 # the Dockerfile so the container can write into the bind mounts.
 ```
+
+> **Do NOT create these directories through DSM's File Station or SMB.**
+> DSM applies extended ACLs on shared-folder paths that can override the UNIX
+> owner set by `chown`, leaving the container with `EACCES` on first write
+> even though `ls -la` shows the right owner. Always create the bind-mount
+> directories over SSH.
+>
+> Also: if you ran `docker compose` before creating these directories, Docker
+> will have auto-created them as `root:root`. Re-run the `chown` + `chmod`
+> above to fix, then verify with `ls -la /volume1/docker/waldo-wtf/` — both
+> `db/` and `auth/` must show owner `1000`.
+
+### B4a. Verify the container can write to the bind mounts
+
+Before Part E (first-run MSAL login), sanity-check the permissions from
+*inside* the container so you don't waste a device-code flow on a perms bug:
+
+```sh
+cd /volume1/docker/waldo-wtf
+sudo /usr/local/bin/docker compose run --rm --entrypoint sh waldo -c \
+  'touch /data/auth/.write-test /data/db/.write-test && rm /data/auth/.write-test /data/db/.write-test && echo OK'
+```
+
+Expected output: `OK`. If you see `Permission denied`, re-run the `chown` +
+`chmod` from B4 and try again. Do not proceed to Part E until this prints
+`OK` — the MSAL device-code flow writes `token-cache.json` to `/data/auth`
+on success, and a perms failure there manifests as a confusing
+`MSAL device-code login failed / caused by: EACCES` error *after* you've
+already burned the code in the browser.
 
 ---
 

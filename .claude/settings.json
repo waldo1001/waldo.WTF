@@ -54,7 +54,11 @@
       "Bash(docker version:*)",
       "Bash(exit 0)",
       "Bash(docker compose:*)",
-      "Bash(curl -sS http://127.0.0.1:8765/health)"
+      "Bash(curl -sS http://127.0.0.1:8765/health)",
+      "Bash(docker image:*)",
+      "Bash(ls package*.json pnpm-lock* yarn.lock bun.lock*)",
+      "Bash(docker buildx:*)",
+      "Bash(./deploy-to-nas.sh)"
     ],
     "additionalDirectories": [
       "/tmp",
