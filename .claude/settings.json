@@ -58,7 +58,9 @@
       "Bash(docker image:*)",
       "Bash(ls package*.json pnpm-lock* yarn.lock bun.lock*)",
       "Bash(docker buildx:*)",
-      "Bash(./deploy-to-nas.sh)"
+      "Bash(./deploy-to-nas.sh)",
+      "Bash(git status:*)",
+      "Bash(git check-ignore:*)"
     ],
     "additionalDirectories": [
       "/tmp",

@@ -392,29 +392,45 @@ Edit Claude Desktop's MCP config. On macOS that's usually:
 ~/Library/Application Support/Claude/claude_desktop_config.json
 ```
 
-Find the waldo entry (previously pointed at `http://127.0.0.1:8765`) and
-replace the URL:
+Claude Desktop's `claude_desktop_config.json` only speaks **stdio** to MCP
+servers — it does NOT have a native remote-HTTP transport. To talk to a
+remote MCP server you run [`mcp-remote`](https://www.npmjs.com/package/mcp-remote)
+as a stdio-to-HTTP bridge:
 
 ```json
 {
   "mcpServers": {
     "waldo-wtf": {
-      "type": "http",
-      "url": "http://waldo-nas:8765/mcp",
-      "headers": {
-        "Authorization": "Bearer <the-same-BEARER_TOKEN>"
-      }
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "http://waldo-nas.<tailnet-name>.ts.net:8765/mcp",
+        "--allow-http",
+        "--header",
+        "Authorization: Bearer <the-same-BEARER_TOKEN>"
+      ]
     }
   }
 }
 ```
 
-If you use the full MagicDNS name, prefer it — a short hostname can collide
-with LAN mDNS resolution:
+Three non-obvious things that will bite you:
 
-```json
-"url": "http://waldo-nas.<tailnet-name>.ts.net:8765/mcp"
-```
+1. **`--allow-http` is required.** `mcp-remote` refuses plaintext URLs by
+   default and exits with `Non-HTTPS URLs are only allowed for localhost or
+   when --allow-http flag is provided`. This is safe over Tailscale because
+   the tailnet link is WireGuard-encrypted end-to-end — but on pure LAN or
+   public internet, set up real TLS instead.
+
+2. **Use the full MagicDNS name**, not a short hostname — a bare `waldo-nas`
+   can collide with LAN mDNS resolution and `mcp-remote` will then hit the
+   wrong host (or `ECONNREFUSED` on a stale loopback entry).
+
+3. **`--header` takes a single `Name: value` string**, not a JSON object.
+   Claude Desktop's documented `"headers": { ... }` form does NOT work with
+   `mcp-remote` — it's a hypothetical future native-HTTP transport that
+   doesn't exist in the current Claude Desktop build.
 
 Fully quit Claude Desktop (`Cmd+Q`, not just close the window) and reopen.
 Ask it something like *"what's the last message I got from my boss?"* to
@@ -472,8 +488,22 @@ unreachable. Two usual causes:
 Expected on first run — the cache doesn't exist until you complete Part E.
 
 ### Claude Desktop says `MCP server disconnected`
-Usually the bearer token in `claude_desktop_config.json` doesn't match the
-one in `/volume1/docker/waldo-wtf/.env`. Copy it verbatim, no whitespace.
+Tail `~/Library/Logs/Claude/mcp-server-waldo-wtf.log` on the Mac — the real
+error is almost always in there. Common causes, in order of likelihood:
+
+1. **`Non-HTTPS URLs are only allowed for localhost or when --allow-http
+   flag is provided`** → add `--allow-http` to the `mcp-remote` args (see
+   Part G). `mcp-remote` rejects plaintext URLs by default.
+2. **Bearer token mismatch** — the token in `claude_desktop_config.json`
+   doesn't match `/volume1/docker/waldo-wtf/.env`. Copy verbatim, no
+   whitespace.
+3. **`ECONNREFUSED`** — DNS resolved but the container isn't listening on
+   that host/port. Test from the Mac: `curl http://<tailnet-host>:8765/health`
+   should return `{"ok":true}`. If it times out, check the container is up
+   on the NAS (`sudo /usr/local/bin/docker compose ps`) and that
+   `WALDO_BIND_HOST=0.0.0.0` is set in the compose environment — without it
+   the server binds to loopback only and the published port forwards to a
+   dead listener.
 
 ### `exec /app/node_modules/.bin/tsx: no such file or directory`
 The runtime stage's `npm install tsx` didn't land. Rebuild without cache:
