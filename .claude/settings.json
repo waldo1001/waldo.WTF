@@ -75,7 +75,11 @@
       "Bash(ssh waldo@waldonas3 \"sudo ls /volume1/docker/waldo-wtf/data/whatsapp-inbox/ /volume1/docker/waldo-wtf/data/whatsapp-archive/2026-04/ 2>&1; sudo docker logs waldo-wtf --tail=10 2>&1\")",
       "Read(//Users/waldo/WaldoInbox/**)",
       "Bash(osacompile -o '__TRACKED_VAR__/Library/Scripts/Folder Action Scripts/wtf-whatsapp-relay.scpt' '__TRACKED_VAR__/Library/Scripts/Folder Action Scripts/wtf-whatsapp-relay.applescript')",
-      "Bash(:)"
+      "Bash(:)",
+      "Bash(ssh -G waldonas3)",
+      "Bash(getent hosts *)",
+      "Bash(dscacheutil -q host -a name waldonas3)",
+      "Bash(tailscale status *)"
     ],
     "additionalDirectories": [
       "/tmp",
