@@ -64,7 +64,15 @@
       "Bash(node -e \"console.log\\(require\\('node-html-parser/package.json'\\).version\\)\")",
       "Edit(/.claude/skills/deploy-nas/**)",
       "Bash(grep -n \"InMemoryMessageStore\\\\|FakeClock\" src/testing/*.ts)",
-      "Bash(chmod +x /Users/waldo/SourceCode/Community/waldo.WTF/bin/wtf-whatsapp-push)"
+      "Bash(chmod +x /Users/waldo/SourceCode/Community/waldo.WTF/bin/wtf-whatsapp-push)",
+      "Read(//Users/waldo/Downloads/**)",
+      "Read(//Users/waldo/WhatsAppArchive/2026-04/**)",
+      "Bash(mkdir -p ~/WaldoInbox)",
+      "Bash(launchctl unload *)",
+      "Bash(sed 's|__HOME__|__TRACKED_VAR__|g' bin/com.waldo.wtf.whatsapp-push.plist)",
+      "Bash(launchctl load *)",
+      "Bash(launchctl list *)",
+      "Bash(ssh waldo@waldonas3 \"sudo ls /volume1/docker/waldo-wtf/data/whatsapp-inbox/ /volume1/docker/waldo-wtf/data/whatsapp-archive/2026-04/ 2>&1; sudo docker logs waldo-wtf --tail=10 2>&1\")"
     ],
     "additionalDirectories": [
       "/tmp",

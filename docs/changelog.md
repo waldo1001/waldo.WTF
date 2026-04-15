@@ -11,6 +11,48 @@ skill.
 
 ---
 
+## 2026-04-15 — Weekend 6 follow-up: auto-push + EXDEV fix + launchd
+
+- **Auto-push from Mac to NAS via launchd.** New
+  [../bin/com.waldo.wtf.whatsapp-push.plist](../bin/com.waldo.wtf.whatsapp-push.plist)
+  is a `WatchPaths` LaunchAgent that fires `bin/wtf-whatsapp-push`
+  within ~1s of any file landing in the watched folder. Survives
+  reboot, zero typing after setup. One-time install commands in
+  [user-guide §6b](user-guide.md#6b-one-time-setup).
+- **`~/WaldoInbox` instead of `~/Downloads`.** Pivoted away from
+  watching `~/Downloads` because macOS TCC silently blocks
+  launchd-spawned shells from reading the protected folders
+  (Downloads, Documents, Desktop) even with Full Disk Access granted
+  to the script itself (the kernel attributes TCC to the interpreter,
+  not the script path). A dedicated folder outside those three
+  locations sidesteps the whole permission dance. Documented in
+  [user-guide §6a](user-guide.md#6a-why-waldoinbox-and-not-downloads).
+- **`nodeFileSystem.rename()` now handles EXDEV.** When archiving a
+  file across two bind mounts inside the container, `fs.rename()`
+  fails with `EXDEV: cross-device link not permitted`. Added a
+  copy+unlink fallback in [../src/fs-node.ts](../src/fs-node.ts)
+  behind a small exported `moveAcrossDevices()` helper so the
+  fallback is unit-testable without mocking `fs/promises`
+  ([../src/fs-node.test.ts](../src/fs-node.test.ts)).
+- **NAS bind-mount layout.** Whatsapp inbox and archive now live at
+  `/volume1/docker/waldo-wtf/data/whatsapp-{inbox,archive}`
+  (previously directly under `waldo-wtf/`). The direct-under-share
+  location inherited DSM's share-level ACL (`drwxrwxrwx+`), which
+  overrode the Unix mode inside the bind mount and made the
+  container see `dr-xr-xr-x` — `mkdir` failed with `EACCES` despite
+  UID 1000 ownership. Fix: `synoacltool -del` to strip the inherited
+  ACL, then `chown waldo:1000` + `chmod 775` so both the host user
+  (for scp) and the container `node` user (UID 1000, for archive
+  moves) have write access. Documented in [user-guide §6d](user-guide.md#6d-troubleshooting-the-auto-push).
+- **SSH key auth.** `ssh-copy-id waldo@waldonas3` one-time setup so
+  `wtf-whatsapp-push` runs without prompting for a password. DSM
+  gotcha: `~` and `~/.ssh` must be chmod 700 or pubkey auth is
+  refused. Covered in the setup section.
+- Suite stays green: 10 tests in `fs-node.test.ts` (1 new
+  EXDEV-fallback case), overall 451 / 451.
+
+---
+
 ## 2026-04-15 — Weekend 6 follow-up: real watcher + NAS deployment
 
 - `nodeFileSystem.watch()` is now a real chokidar-backed implementation

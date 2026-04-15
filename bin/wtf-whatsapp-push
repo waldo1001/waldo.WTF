@@ -4,17 +4,30 @@
 # within ~500ms of the scp landing, imports, and archives. No further action.
 #
 # Configurable via env:
-#   WTF_WHATSAPP_SRC   source dir on the Mac        (default: ~/Downloads)
+#   WTF_WHATSAPP_SRC   source dir on the Mac        (default: ~/WaldoInbox)
 #   WTF_WHATSAPP_TRASH mac-side archive after push  (default: ~/WhatsAppArchive)
 #   WTF_NAS_HOST       ssh host for the NAS         (default: waldonas3)
-#   WTF_NAS_INBOX      inbox path on the NAS        (default: /volume1/docker/waldo-wtf/whatsapp-inbox)
+#   WTF_NAS_INBOX      inbox path on the NAS        (default: /volume1/docker/waldo-wtf/data/whatsapp-inbox)
+#
+# Why ~/WaldoInbox and not ~/Downloads: macOS TCC blocks launchd-spawned
+# scripts from reading ~/Downloads silently, even with Full Disk Access
+# granted to the script itself. A dedicated folder outside the three
+# protected locations (Downloads, Documents, Desktop) avoids the whole
+# permission dance.
 
 set -euo pipefail
 
-SRC_DIR="${WTF_WHATSAPP_SRC:-$HOME/Downloads}"
+# launchd WatchPaths fires on the first FSEvent in the inbox, which may be a
+# partially-written file (AirDrop tempfile, Finder rename mid-drop). Sleep
+# briefly so the final filename is present before we glob. 2s covers small
+# chat zips; larger exports still settle under chokidar's awaitWriteFinish
+# on the NAS side.
+sleep 2
+
+SRC_DIR="${WTF_WHATSAPP_SRC:-$HOME/WaldoInbox}"
 TRASH_DIR="${WTF_WHATSAPP_TRASH:-$HOME/WhatsAppArchive}"
 SSH_HOST="${WTF_NAS_HOST:-waldonas3}"
-INBOX="${WTF_NAS_INBOX:-/volume1/docker/waldo-wtf/whatsapp-inbox}"
+INBOX="${WTF_NAS_INBOX:-/volume1/docker/waldo-wtf/data/whatsapp-inbox}"
 
 shopt -s nullglob
 files=("$SRC_DIR"/WhatsApp\ Chat\ *.txt "$SRC_DIR"/WhatsApp\ Chat\ *.zip)
@@ -28,7 +41,7 @@ for f in "${files[@]}"; do echo "  $(basename "$f")"; done
 
 echo
 echo "→ scp to $SSH_HOST:$INBOX/"
-scp "${files[@]}" "$SSH_HOST:$INBOX/"
+scp -O "${files[@]}" "$SSH_HOST:$INBOX/"
 
 ym="$(date -u +%Y-%m)"
 dest="$TRASH_DIR/$ym"

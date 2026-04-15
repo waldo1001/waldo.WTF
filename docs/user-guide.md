@@ -139,23 +139,151 @@ tick (within 5 minutes). No restart needed.
 
 ## 6. Adding WhatsApp exports (Weekend 6+)
 
-1. In WhatsApp → chat → Export chat → Without media.
-2. Save or AirDrop to your Mac's `~/Downloads/`. iOS WhatsApp produces
-   a `.zip` containing `_chat.txt`; Android usually produces the `.txt`
-   directly. Both are supported — the importer handles either.
-3. The watcher picks up `WhatsApp Chat*.txt` or `WhatsApp Chat*.zip`
-   within seconds, parses it, inserts into the lake under
+The end-to-end flow, once set up:
+
+1. In WhatsApp → chat → **Export chat → Without media**.
+2. Save (or Share → "Save to Files") the resulting file to
+   **`~/WaldoInbox/`** on your Mac. iOS WhatsApp produces a `.zip`
+   containing `_chat.txt`; Android usually produces a `.txt` directly.
+   Both are supported — the importer handles either.
+3. Within ~2s, a launchd agent fires `bin/wtf-whatsapp-push`, which
+   scp's the file to the NAS inbox bind mount and moves the local copy
+   to `~/WhatsAppArchive/YYYY-MM/`.
+4. On the NAS, the running container has a chokidar watcher on the
+   inbox folder. It picks up the new file within ~500ms of the scp
+   finishing, parses it, inserts into the lake under
    `source='whatsapp'`, and moves the original to
-   `~/WhatsAppArchive/YYYY-MM/`.
-4. Ask Claude about it.
+   `/volume1/docker/waldo-wtf/data/whatsapp-archive/YYYY-MM/`.
+5. Ask Claude about it.
 
-Re-exporting the same chat is idempotent (dedup hash on primary key) —
-re-import as often as you like.
+No terminal command after step 2. Re-exporting the same chat is
+idempotent (sha256 dedup on primary key) — re-import as often as you
+like. If the export contains 1170 new messages and 50 old ones,
+you'll see 1170 new rows land.
 
-**NAS deployment**: Mac drops zips into `~/Downloads/`, then
-`bin/wtf-whatsapp-push` scps them into the NAS inbox bind mount. The
-container's chokidar watcher picks up each file within a second of
-the scp finishing, imports, and archives. No second command needed.
+### 6a. Why `~/WaldoInbox` and not `~/Downloads`
+
+macOS **TCC** (Transparency, Consent, Control) blocks launchd-spawned
+shells from reading the protected user folders (`Downloads`,
+`Documents`, `Desktop`) even when you grant the script Full Disk
+Access. Interactive Terminal.app has the grant and works; the same
+script under launchd silently sees an empty directory and reports
+"no exports found". Attributing TCC to a shell script is unreliable
+because the kernel sometimes checks the interpreter (`/bin/bash`)
+instead of the script path.
+
+The clean fix: use a dedicated folder outside the three protected
+locations. `~/WaldoInbox/` is not TCC-gated, so launchd reads it
+without any permission dance. The cost: one extra click in the
+WhatsApp share sheet ("Save to Files → WaldoInbox" instead of
+"Downloads").
+
+### 6b. One-time setup
+
+You only do these steps once per Mac.
+
+**Create the inbox folder:**
+
+```sh
+mkdir -p ~/WaldoInbox
+```
+
+**Install an SSH key for passwordless scp to the NAS.**
+`wtf-whatsapp-push` uses `scp -O` (Synology's SFTP subsystem is
+disabled, so we force the legacy protocol). Key auth avoids a password
+prompt on every export:
+
+```sh
+ssh-keygen -t ed25519 -C "waldo-mac"    # skip if ~/.ssh/id_ed25519 exists
+ssh-copy-id waldo@waldonas3              # prompts for NAS password once
+ssh waldo@waldonas3 "echo ok"            # verify: must print "ok" with no prompt
+```
+
+If `ssh-copy-id` succeeds but key auth still prompts — DSM refuses
+pubkey auth when the home dir or `.ssh` is group-writable:
+
+```sh
+ssh waldo@waldonas3
+chmod 700 ~ ~/.ssh
+chmod 600 ~/.ssh/authorized_keys
+exit
+```
+
+**Install the launchd WatchPaths agent.** It watches `~/WaldoInbox`
+and fires the push script within ~1s of any file landing there. The
+agent survives reboot. The script is a no-op on empty scans, so
+stray non-WhatsApp files in the inbox are harmless.
+
+```sh
+sed "s|__HOME__|$HOME|g" \
+  bin/com.waldo.wtf.whatsapp-push.plist \
+  > ~/Library/LaunchAgents/com.waldo.wtf.whatsapp-push.plist
+
+launchctl unload ~/Library/LaunchAgents/com.waldo.wtf.whatsapp-push.plist 2>/dev/null
+launchctl load   ~/Library/LaunchAgents/com.waldo.wtf.whatsapp-push.plist
+launchctl list | grep waldo.wtf
+```
+
+Last line should read `-\t0\tcom.waldo.wtf.whatsapp-push` — second
+column `0` = loaded, no launch errors. If it's anything else, check
+`/tmp/wtf-whatsapp-push.err`.
+
+**Smoke-test** by moving any `WhatsApp Chat*.zip` you still have in
+`~/Downloads` into `~/WaldoInbox`, then:
+
+```sh
+tail -f /tmp/wtf-whatsapp-push.log /tmp/wtf-whatsapp-push.err
+```
+
+Within ~2s you should see "Found 1 file(s)", an scp progress line, and
+"moving local copies to ~/WhatsAppArchive/…". On the NAS:
+
+```sh
+sudo docker logs waldo-wtf --tail=10
+sudo ls /volume1/docker/waldo-wtf/data/whatsapp-inbox \
+        /volume1/docker/waldo-wtf/data/whatsapp-archive/$(date +%Y-%m)/
+```
+
+Inbox empty, file in archive, no error lines in the logs = end-to-end
+working. The watcher logs only on failures, not successes — silent
+success is the design.
+
+### 6c. Daily use
+
+Export a WhatsApp chat → share-sheet → **Save to Files → WaldoInbox →
+Save**. Done. You can close the window, move on with your day, and
+ask Claude Desktop *"What did my mom send me this weekend?"* five
+minutes later.
+
+### 6d. Troubleshooting the auto-push
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `launchctl list` shows non-zero in col 2 | Script failed to launch | `cat /tmp/wtf-whatsapp-push.err` for the error |
+| "No WhatsApp exports found" but file is present | Filename doesn't start with `WhatsApp Chat ` (e.g. you renamed it) | Rename it back, or run the push script manually |
+| "Permission denied" on scp | NAS dir perms regressed | On NAS: `sudo chown waldo:1000 data/whatsapp-inbox data/whatsapp-archive && sudo chmod 775 data/whatsapp-*` |
+| "subsystem request failed on channel 0" | Using plain `scp` instead of `scp -O` | Script already passes `-O`; check you haven't shadowed it |
+| scp prompts for password | Key not installed / wrong perms on NAS `~/.ssh` | Redo §6b step "Install an SSH key" |
+| Agent doesn't fire on new files | Plist points at wrong `WatchPaths` | Inspect `~/Library/LaunchAgents/com.waldo.wtf.whatsapp-push.plist` |
+| `EXDEV: cross-device link` in container logs | Archive and inbox are on different mounts — should be handled | Check `src/fs-node.ts` has the copy+unlink fallback |
+| Launchd agent silently reads empty dir | You're watching a TCC-protected folder (`Downloads`, `Documents`, `Desktop`) | Don't. Use `~/WaldoInbox` |
+
+**Uninstall:**
+
+```sh
+launchctl unload ~/Library/LaunchAgents/com.waldo.wtf.whatsapp-push.plist
+rm             ~/Library/LaunchAgents/com.waldo.wtf.whatsapp-push.plist
+```
+
+### 6c. Working from anywhere (Tailscale)
+
+Both your Mac and the NAS are on your tailnet, so `waldonas3` resolves
+and routes the same way from home, a hotel, or cellular. The push
+script and the Claude Desktop MCP endpoint both keep working — no VPN
+toggle, no port forwarding, no DDNS. If you ever disable MagicDNS, use
+the full FQDN `waldonas3.<tailnet>.ts.net` instead. **Do not expose
+port 8765 on the public internet** — Tailscale is the authentication
+boundary.
 
 **One-shot import** (bypasses the watcher, useful for backfilling):
 

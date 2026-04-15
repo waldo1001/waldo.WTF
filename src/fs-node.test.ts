@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { nodeFileSystem } from "./fs-node.js";
+import { moveAcrossDevices, nodeFileSystem } from "./fs-node.js";
 
 describe("nodeFileSystem passthrough methods", () => {
   let tmpDir: string;
@@ -52,6 +52,27 @@ describe("nodeFileSystem passthrough methods", () => {
     await nodeFileSystem.rename(from, to);
     expect(await nodeFileSystem.exists(from)).toBe(false);
     expect(await nodeFileSystem.exists(to)).toBe(true);
+  });
+
+  it("moveAcrossDevices falls back to copy+unlink on EXDEV", async () => {
+    const from = path.join(tmpDir, "payload.bin");
+    const to = path.join(tmpDir, "moved.bin");
+    await fs.writeFile(from, "cross-device-bytes");
+
+    let calls = 0;
+    const fakeRename = async (): Promise<void> => {
+      calls++;
+      const err = new Error("EXDEV: cross-device link not permitted") as NodeJS.ErrnoException;
+      err.code = "EXDEV";
+      throw err;
+    };
+
+    await moveAcrossDevices(from, to, fakeRename);
+
+    expect(calls).toBe(1);
+    await expect(fs.stat(from)).rejects.toThrow();
+    const buf = await fs.readFile(to);
+    expect(buf.toString("utf8")).toBe("cross-device-bytes");
   });
 
   it("listDir returns filenames in the directory", async () => {

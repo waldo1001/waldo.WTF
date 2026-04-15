@@ -3,8 +3,8 @@
 # Bind mounts:
 #   ./data/db            -> /data/db             (SQLite lake + WAL/SHM sidecars)
 #   ./data/auth          -> /data/auth           (MSAL token cache + delta-state)
-#   ./whatsapp-inbox     -> /data/whatsapp-inbox   (drop zip/txt exports here)
-#   ./whatsapp-archive   -> /data/whatsapp-archive (imported files archived here)
+#   ./data/whatsapp-inbox   -> /data/whatsapp-inbox   (drop zip/txt exports here)
+#   ./data/whatsapp-archive -> /data/whatsapp-archive (imported files archived here)
 #
 # On the Synology NAS these resolve under /volume1/docker/waldo-wtf/. NEVER put
 # the db volume on an SMB / network share — SQLite + WAL over SMB corrupts.
@@ -50,8 +50,8 @@ services:
     volumes:
       - ./data/db:/data/db
       - ./data/auth:/data/auth
-      - ./whatsapp-inbox:/data/whatsapp-inbox
-      - ./whatsapp-archive:/data/whatsapp-archive
+      - ./data/whatsapp-inbox:/data/whatsapp-inbox
+      - ./data/whatsapp-archive:/data/whatsapp-archive
     healthcheck:
       # /health is unauthenticated and returns {ok:true}. Uses node's built-in
       # fetch so we don't need curl/wget in the image.

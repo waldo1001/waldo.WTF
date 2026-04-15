@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  waldo.WTF — launchd WatchPaths agent
+
+  Fires bin/wtf-whatsapp-push whenever a file lands in ~/WaldoInbox. Using
+  a dedicated folder (not ~/Downloads) sidesteps macOS TCC, which blocks
+  launchd-spawned shells from reading the protected folders (Downloads,
+  Documents, Desktop) even with Full Disk Access granted to the script.
+  The push script is a no-op on empty scans, so stray files are harmless.
+
+  Install (one-time):
+    1. Edit the two __HOME__ placeholders below to your absolute $HOME,
+       or generate the final copy with:
+         sed "s|__HOME__|$HOME|g" bin/com.waldo.wtf.whatsapp-push.plist \
+           > ~/Library/LaunchAgents/com.waldo.wtf.whatsapp-push.plist
+    2. launchctl unload ~/Library/LaunchAgents/com.waldo.wtf.whatsapp-push.plist 2>/dev/null
+    3. launchctl load   ~/Library/LaunchAgents/com.waldo.wtf.whatsapp-push.plist
+
+  Inspect / debug:
+    tail -f /tmp/wtf-whatsapp-push.log /tmp/wtf-whatsapp-push.err
+    launchctl list | grep waldo.wtf
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.waldo.wtf.whatsapp-push.plist
+    rm ~/Library/LaunchAgents/com.waldo.wtf.whatsapp-push.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.waldo.wtf.whatsapp-push</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/SourceCode/Community/waldo.WTF/bin/wtf-whatsapp-push</string>
+    </array>
+
+    <key>WatchPaths</key>
+    <array>
+        <string>__HOME__/WaldoInbox</string>
+    </array>
+
+    <key>ThrottleInterval</key>
+    <integer>1</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/wtf-whatsapp-push.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/wtf-whatsapp-push.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>WTF_NAS_HOST</key>
+        <string>waldonas3</string>
+        <key>WTF_NAS_INBOX</key>
+        <string>/volume1/docker/waldo-wtf/data/whatsapp-inbox</string>
+    </dict>
+</dict>
+</plist>

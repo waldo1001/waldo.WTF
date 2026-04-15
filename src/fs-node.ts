@@ -3,6 +3,20 @@ import * as path from "node:path";
 import chokidar from "chokidar";
 import type { FileSystem } from "./fs.js";
 
+export async function moveAcrossDevices(
+  from: string,
+  to: string,
+  rename: (from: string, to: string) => Promise<void>,
+): Promise<void> {
+  try {
+    await rename(from, to);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EXDEV") throw err;
+    await fs.copyFile(from, to);
+    await fs.unlink(from);
+  }
+}
+
 function compileGlob(glob: string): (name: string) => boolean {
   const escaped = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&");
   const regex = new RegExp("^" + escaped.replace(/\*/g, ".*") + "$");
@@ -18,7 +32,7 @@ export const nodeFileSystem: FileSystem = {
     await fs.writeFile(p, data, { mode });
   },
   async rename(from, to) {
-    await fs.rename(from, to);
+    await moveAcrossDevices(from, to, fs.rename);
   },
   async mkdir(p) {
     await fs.mkdir(p, { recursive: true });
