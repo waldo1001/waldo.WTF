@@ -13,6 +13,18 @@ skill.
 
 ## 2026-04-15
 
+- New `/deploy-nas` skill + migration registry. [.claude/skills/deploy-nas/SKILL.md](../.claude/skills/deploy-nas/SKILL.md)
+  drives the recurring NAS deploy loop step-by-step — build image on
+  Mac → ship → stop container → optionally run a one-shot migration
+  → verify → restart → smoke. Prompts the operator one command at a
+  time, interprets output, decides next step. Flags: `--migrate
+  <name>`, `--dry-run`. Registry lives at
+  [docs/migrations/INDEX.md](migrations/INDEX.md); first recipe is
+  [body-backfill](migrations/body-backfill.md) captured from today's
+  production run (service name `waldo` not `waldo-wtf`, don't
+  override entrypoint, `immutable=1` SQLite URI workaround for the
+  WAL/UID-mismatch readonly error, etc.). CLAUDE.md references the
+  new skill. Plan: [docs/plans/deploy-nas-skill.md](plans/deploy-nas-skill.md).
 - Message-body backfill (Slice A of the "make Claude read mail" fix) —
   new pure helper [src/text/html-to-text.ts](../src/text/html-to-text.ts)
   (backed by `node-html-parser`), new

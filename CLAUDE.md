@@ -63,8 +63,17 @@ done, **cite the test names that cover each requirement**.
   [changelog](docs/changelog.md), [setup](docs/setup.md),
   [getting-started](docs/getting-started.md), and [user guide](docs/user-guide.md)
   in sync with reality.
+- [`/deploy-nas`](.claude/skills/deploy-nas/SKILL.md) — invoke when
+  shipping code changes to the running Synology container, or when
+  running any one-shot data migration from [docs/migrations/](docs/migrations/).
+  Drives the full build → ship → stop → migrate → verify → restart →
+  smoke loop one command at a time. `--migrate <name>` inserts a
+  registered migration; `--dry-run` prints the plan without executing.
 
-A task is not done until all three skills have been run.
+A task is not done until all three coding skills (tdd-cycle,
+security-scan, docs-update) have been run. `/deploy-nas` is a separate
+operator workflow, invoked when you want to deploy — not part of the
+coding-task definition-of-done.
 
 GitHub Copilot uses the **same** toolchain via
 [.github/copilot-instructions.md](.github/copilot-instructions.md), which
