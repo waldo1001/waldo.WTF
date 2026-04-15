@@ -62,7 +62,9 @@
       "Bash(git status:*)",
       "Bash(git check-ignore:*)",
       "Bash(node -e \"console.log\\(require\\('node-html-parser/package.json'\\).version\\)\")",
-      "Edit(/.claude/skills/deploy-nas/**)"
+      "Edit(/.claude/skills/deploy-nas/**)",
+      "Bash(grep -n \"InMemoryMessageStore\\\\|FakeClock\" src/testing/*.ts)",
+      "Bash(chmod +x /Users/waldo/SourceCode/Community/waldo.WTF/bin/wtf-whatsapp-push)"
     ],
     "additionalDirectories": [
       "/tmp",

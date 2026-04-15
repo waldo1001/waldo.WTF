@@ -1,13 +1,12 @@
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { config as loadDotenv } from "dotenv";
-import { loadConfig } from "./config.js";
+import { loadConfig, type Config } from "./config.js";
 import { MsalAuthClient } from "./auth/msal-auth-client.js";
 import { TokenCacheStore } from "./auth/token-cache-store.js";
 import type { AuthClient } from "./auth/auth-client.js";
 import type { Account } from "./auth/types.js";
-import type { FileSystem } from "./fs.js";
 import { main, type MainOptions, type MainResult } from "./index.js";
+import { nodeFileSystem } from "./fs-node.js";
 
 export type Env = Readonly<Record<string, string | undefined>>;
 export type PrintFn = (message: string) => void;
@@ -30,17 +29,36 @@ export interface BackfillCliResult {
   readonly processed: number;
 }
 
+export interface ImportWhatsAppCliResult {
+  readonly files: number;
+  readonly imported: number;
+}
+
+export type ImportWhatsAppImpl = (
+  config: Config,
+) => Promise<ImportWhatsAppCliResult>;
+
 export interface RunCliOptions extends AddAccountOptions {
   readonly mainImpl?: (opts: MainOptions) => Promise<MainResult>;
   readonly backfillImpl?: (dbPath: string) => Promise<BackfillCliResult>;
+  readonly importWhatsAppImpl?: ImportWhatsAppImpl;
 }
 
 export type RunCliResult =
   | { readonly mode: "add-account"; readonly account: Account }
   | { readonly mode: "backfill"; readonly processed: number }
+  | {
+      readonly mode: "import-whatsapp";
+      readonly files: number;
+      readonly imported: number;
+    }
   | { readonly mode: "server"; readonly main: MainResult };
 
-const KNOWN_FLAGS = new Set(["--add-account", "--backfill-bodies"]);
+const KNOWN_FLAGS = new Set([
+  "--add-account",
+  "--backfill-bodies",
+  "--import-whatsapp",
+]);
 
 function resolveEnv(opts: AddAccountOptions): Env {
   /* c8 ignore next -- dotenv side-effect, loaded only in production */
@@ -48,25 +66,48 @@ function resolveEnv(opts: AddAccountOptions): Env {
   return opts.env ?? process.env;
 }
 
-/* c8 ignore start -- real filesystem + MSAL adapter, exercised only via live smoke */
-const nodeFileSystem: FileSystem = {
-  async readFile(p) {
-    return fs.readFile(p);
-  },
-  async writeFile(p, data, mode) {
-    await fs.mkdir(path.dirname(p), { recursive: true });
-    await fs.writeFile(p, data, { mode });
-  },
-  async rename(from, to) {
-    await fs.rename(from, to);
-  },
-  watch() {
-    throw new Error("not implemented: FileSystem.watch (cli stub)");
-  },
-  async listDir(p) {
-    return fs.readdir(p);
-  },
-};
+/* c8 ignore start -- real MSAL adapter, exercised only via live smoke */
+
+async function realImportWhatsApp(
+  config: Config,
+): Promise<ImportWhatsAppCliResult> {
+  const { default: Database } = await import("better-sqlite3");
+  const { applyMigrations } = await import("./store/schema.js");
+  const { SqliteMessageStore } = await import("./store/sqlite-message-store.js");
+  const { importWhatsAppFile } = await import("./sync/import-whatsapp.js");
+  const { systemClock } = await import("./clock.js");
+  const db = new Database(config.dbPath);
+  try {
+    db.pragma("journal_mode = WAL");
+    applyMigrations(db);
+    const store = new SqliteMessageStore(db);
+    let files = 0;
+    let imported = 0;
+    const entries = await nodeFileSystem.listDir(config.whatsappDownloadsPath);
+    const matches = entries.filter(
+      (name) => /^WhatsApp Chat.*\.(?:txt|zip)$/.test(name),
+    );
+    for (const name of matches) {
+      files += 1;
+      const result = await importWhatsAppFile({
+        fs: nodeFileSystem,
+        clock: systemClock,
+        store,
+        filePath: `${config.whatsappDownloadsPath}/${name}`,
+        account: config.whatsappAccount,
+        archiveRoot: config.whatsappArchivePath,
+      });
+      imported += result.imported;
+      process.stdout.write(
+        `  imported ${result.imported}/${result.parsed} from ${name}\n`,
+      );
+    }
+    db.pragma("wal_checkpoint(TRUNCATE)");
+    return { files, imported };
+  } finally {
+    db.close();
+  }
+}
 
 async function realBackfill(dbPath: string): Promise<BackfillCliResult> {
   const { default: Database } = await import("better-sqlite3");
@@ -136,6 +177,22 @@ export async function runCli(
     const account = await addAccount(opts);
     return { mode: "add-account", account };
   }
+  if (argv.includes("--import-whatsapp")) {
+    const env = resolveEnv(opts);
+    const config = loadConfig(env);
+    /* c8 ignore next -- default console.log only in production */
+    const print: PrintFn = opts.print ?? ((m) => console.log(m));
+    const impl = opts.importWhatsAppImpl ?? realImportWhatsApp;
+    const result = await impl(config);
+    print(
+      `whatsapp import complete: ${result.imported} new messages from ${result.files} files`,
+    );
+    return {
+      mode: "import-whatsapp",
+      files: result.files,
+      imported: result.imported,
+    };
+  }
   if (argv.includes("--backfill-bodies")) {
     const env = resolveEnv(opts);
     const config = loadConfig(env);
@@ -167,6 +224,11 @@ if (isMain) {
         console.log(`Added account: ${r.account.username}`);
       } else if (r.mode === "backfill") {
         console.log(`Backfill done: ${r.processed} messages updated`);
+        process.exit(0);
+      } else if (r.mode === "import-whatsapp") {
+        console.log(
+          `WhatsApp import done: ${r.imported} new messages from ${r.files} files`,
+        );
         process.exit(0);
       }
     })

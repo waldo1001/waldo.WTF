@@ -302,4 +302,68 @@ describe("MCP HTTP server end-to-end (SQLite + SDK client over HTTP)", () => {
     expect(row?.stale).toBe(false);
     expect(parsed.staleCount).toBe(0);
   });
+
+  it("projects a WhatsApp row through get_recent_activity, search, and get_thread", async () => {
+    await store.upsertMessages([
+      mkMessage({
+        id: "whatsapp:abc",
+        source: "whatsapp",
+        account: "whatsapp-local",
+        nativeId: "whatsapp:abc",
+        threadId: "Mom",
+        threadName: "Mom",
+        senderName: "waldo",
+        body: "lunch at 1 pm",
+        sentAt: new Date("2026-04-13T09:30:00Z"),
+        rawJson: "[13/04/2026, 11:30:00] waldo: lunch at 1 pm",
+      }),
+    ]);
+
+    const recent = await client.callTool({
+      name: "get_recent_activity",
+      arguments: { hours: 24, sources: ["whatsapp"] },
+    });
+    const r = parse<{
+      count: number;
+      messages: Array<{
+        id: string;
+        source: string;
+        account: string;
+        threadName?: string;
+        senderName?: string;
+        snippet?: string;
+      }>;
+    }>((recent.content as Array<{ text: string }>)[0]!.text);
+    expect(r.count).toBe(1);
+    expect(r.messages[0]?.source).toBe("whatsapp");
+    expect(r.messages[0]?.threadName).toBe("Mom");
+    expect(r.messages[0]?.senderName).toBe("waldo");
+    expect(r.messages[0]?.snippet).toBe("lunch at 1 pm");
+
+    const searchRes = await client.callTool({
+      name: "search",
+      arguments: { query: "lunch" },
+    });
+    const s = parse<{
+      count: number;
+      hits: Array<{ message: { id: string; source: string } }>;
+    }>((searchRes.content as Array<{ text: string }>)[0]!.text);
+    expect(
+      s.hits.some(
+        (h) =>
+          h.message.id === "whatsapp:abc" && h.message.source === "whatsapp",
+      ),
+    ).toBe(true);
+
+    const thread = await client.callTool({
+      name: "get_thread",
+      arguments: { thread_id: "Mom" },
+    });
+    const t = parse<{
+      count: number;
+      messages: Array<{ id: string; source: string }>;
+    }>((thread.content as Array<{ text: string }>)[0]!.text);
+    expect(t.count).toBe(1);
+    expect(t.messages[0]?.source).toBe("whatsapp");
+  });
 });

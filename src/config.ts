@@ -3,6 +3,9 @@ export const DEFAULT_AUTH_DIR = "./data/auth";
 export const DEFAULT_PORT = 8765;
 export const DEFAULT_SYNC_INTERVAL_MS = 300_000;
 export const DEFAULT_BIND_HOST = "127.0.0.1";
+export const DEFAULT_WHATSAPP_DOWNLOADS_PATH = `${process.env.HOME ?? "."}/Downloads`;
+export const DEFAULT_WHATSAPP_ARCHIVE_PATH = `${process.env.HOME ?? "."}/WhatsAppArchive`;
+export const DEFAULT_WHATSAPP_ACCOUNT = "whatsapp-local";
 
 export type Config = Readonly<{
   msClientId: string;
@@ -13,6 +16,10 @@ export type Config = Readonly<{
   syncIntervalMs: number;
   bindHost: string;
   backfillDays?: number;
+  whatsappDownloadsPath: string;
+  whatsappArchivePath: string;
+  whatsappAccount: string;
+  whatsappWatch: boolean;
 }>;
 
 export class ConfigError extends Error {
@@ -63,6 +70,16 @@ export function loadConfig(env: Env): Config {
     port,
     syncIntervalMs,
     bindHost: present(env.WALDO_BIND_HOST) ? env.WALDO_BIND_HOST : DEFAULT_BIND_HOST,
+    whatsappDownloadsPath: present(env.WALDO_WHATSAPP_DOWNLOADS_PATH)
+      ? env.WALDO_WHATSAPP_DOWNLOADS_PATH
+      : DEFAULT_WHATSAPP_DOWNLOADS_PATH,
+    whatsappArchivePath: present(env.WALDO_WHATSAPP_ARCHIVE_PATH)
+      ? env.WALDO_WHATSAPP_ARCHIVE_PATH
+      : DEFAULT_WHATSAPP_ARCHIVE_PATH,
+    whatsappAccount: present(env.WALDO_WHATSAPP_ACCOUNT)
+      ? env.WALDO_WHATSAPP_ACCOUNT
+      : DEFAULT_WHATSAPP_ACCOUNT,
+    whatsappWatch: env.WALDO_WHATSAPP_WATCH === "true",
     ...(backfillDays !== undefined ? { backfillDays } : {}),
   };
 }

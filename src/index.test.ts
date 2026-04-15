@@ -4,6 +4,7 @@ import { ConfigError } from "./config.js";
 import { FakeAuthClient } from "./testing/fake-auth-client.js";
 import { FakeGraphClient } from "./testing/fake-graph-client.js";
 import { FakeTeamsClient } from "./testing/fake-teams-client.js";
+import { InMemoryFileSystem } from "./testing/in-memory-file-system.js";
 import { InMemoryMessageStore } from "./testing/in-memory-message-store.js";
 import type {
   SetTimerFn,
@@ -111,6 +112,51 @@ describe("main", () => {
     expect(addr).not.toBeNull();
     expect(typeof addr).toBe("object");
     expect((addr as { address: string }).address).toBe("0.0.0.0");
+    await result.shutdown();
+  });
+
+  it("does not start the WhatsApp watcher when WALDO_WHATSAPP_WATCH is unset", async () => {
+    const h = makeHarness();
+    const overrides = makeOverrides();
+    const result = await main({
+      env: makeEnv(),
+      loadDotenv: false,
+      overrides: { ...overrides, setTimer: h.setTimer, logger: h.logger },
+    });
+    expect(result.whatsappWatcher).toBeUndefined();
+    await result.shutdown();
+  });
+
+  it("starts the WhatsApp watcher when WALDO_WHATSAPP_WATCH=true and imports dropped files", async () => {
+    const h = makeHarness();
+    const overrides = makeOverrides();
+    const fs = new InMemoryFileSystem();
+    const result = await main({
+      env: {
+        ...makeEnv(),
+        WALDO_WHATSAPP_WATCH: "true",
+        WALDO_WHATSAPP_DOWNLOADS_PATH: "/tmp/dl",
+        WALDO_WHATSAPP_ARCHIVE_PATH: "/tmp/archive",
+      },
+      loadDotenv: false,
+      overrides: { ...overrides, setTimer: h.setTimer, logger: h.logger, fs },
+    });
+    expect(result.whatsappWatcher).toBeDefined();
+
+    const filePath = "/tmp/dl/WhatsApp Chat - Mom.txt";
+    await fs.writeFile(
+      filePath,
+      "[15/04/2026, 09:03:17] waldo: hi there",
+    );
+    fs.trigger(filePath);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const recent = await overrides.store.getRecentMessages({
+      since: new Date("2026-04-14T00:00:00.000Z"),
+      limit: 10,
+    });
+    expect(recent.some((m) => m.source === "whatsapp")).toBe(true);
+
     await result.shutdown();
   });
 

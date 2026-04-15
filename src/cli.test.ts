@@ -74,6 +74,25 @@ describe("runCli", () => {
     ).rejects.toBeInstanceOf(ConfigError);
   });
 
+  it("dispatches --import-whatsapp to the injected importer impl and prints the summary", async () => {
+    const prints: string[] = [];
+    let capturedConfig: { whatsappDownloadsPath?: string } | undefined;
+    const result = await runCli(["--import-whatsapp"], {
+      env: ENV,
+      loadDotenv: false,
+      print: (m) => prints.push(m),
+      importWhatsAppImpl: async (cfg) => {
+        capturedConfig = cfg;
+        return { files: 3, imported: 7 };
+      },
+    });
+    expect(result).toEqual({ mode: "import-whatsapp", files: 3, imported: 7 });
+    expect(capturedConfig?.whatsappDownloadsPath).toBeDefined();
+    expect(
+      prints.some((p) => p.includes("7") && p.includes("3")),
+    ).toBe(true);
+  });
+
   it("dispatches --backfill-bodies to the injected backfill impl and prints processed count", async () => {
     const prints: string[] = [];
     let captured: string | undefined;

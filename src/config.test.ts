@@ -7,6 +7,9 @@ import {
   DEFAULT_PORT,
   DEFAULT_SYNC_INTERVAL_MS,
   DEFAULT_BIND_HOST,
+  DEFAULT_WHATSAPP_ACCOUNT,
+  DEFAULT_WHATSAPP_ARCHIVE_PATH,
+  DEFAULT_WHATSAPP_DOWNLOADS_PATH,
 } from "./config.js";
 
 const validEnv = () => ({
@@ -29,7 +32,31 @@ describe("loadConfig", () => {
       port: DEFAULT_PORT,
       syncIntervalMs: DEFAULT_SYNC_INTERVAL_MS,
       bindHost: DEFAULT_BIND_HOST,
+      whatsappDownloadsPath: DEFAULT_WHATSAPP_DOWNLOADS_PATH,
+      whatsappArchivePath: DEFAULT_WHATSAPP_ARCHIVE_PATH,
+      whatsappAccount: DEFAULT_WHATSAPP_ACCOUNT,
+      whatsappWatch: false,
     });
+  });
+
+  it("honors WALDO_WHATSAPP_* env vars", () => {
+    const cfg = loadConfig({
+      ...validEnv(),
+      WALDO_WHATSAPP_DOWNLOADS_PATH: "/tmp/dl",
+      WALDO_WHATSAPP_ARCHIVE_PATH: "/tmp/archive",
+      WALDO_WHATSAPP_ACCOUNT: "whatsapp-eric",
+      WALDO_WHATSAPP_WATCH: "true",
+    });
+    expect(cfg.whatsappDownloadsPath).toBe("/tmp/dl");
+    expect(cfg.whatsappArchivePath).toBe("/tmp/archive");
+    expect(cfg.whatsappAccount).toBe("whatsapp-eric");
+    expect(cfg.whatsappWatch).toBe(true);
+  });
+
+  it("treats any WALDO_WHATSAPP_WATCH value other than 'true' as false", () => {
+    expect(loadConfig({ ...validEnv(), WALDO_WHATSAPP_WATCH: "false" }).whatsappWatch).toBe(false);
+    expect(loadConfig({ ...validEnv(), WALDO_WHATSAPP_WATCH: "1" }).whatsappWatch).toBe(false);
+    expect(loadConfig(validEnv()).whatsappWatch).toBe(false);
   });
 
   it("defaults bindHost to 127.0.0.1", () => {

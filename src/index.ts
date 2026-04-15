@@ -1,4 +1,3 @@
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { config as loadDotenv } from "dotenv";
 import { loadConfig, type Config } from "./config.js";
@@ -6,6 +5,7 @@ import { systemClock, type Clock } from "./clock.js";
 import { MsalAuthClient } from "./auth/msal-auth-client.js";
 import { TokenCacheStore } from "./auth/token-cache-store.js";
 import type { FileSystem } from "./fs.js";
+import { nodeFileSystem } from "./fs-node.js";
 import type { AuthClient } from "./auth/auth-client.js";
 import type { MessageStore } from "./store/message-store.js";
 import type { GraphClient } from "./sources/graph.js";
@@ -22,6 +22,11 @@ import {
 } from "./sync/sync-scheduler.js";
 import { createMcpHttpServer } from "./mcp/http-server.js";
 import { consoleLogger, type Logger } from "./logger.js";
+import { importWhatsAppFile } from "./sync/import-whatsapp.js";
+import {
+  startWhatsAppWatcher,
+  type WhatsAppWatcherHandle,
+} from "./sync/whatsapp-watcher.js";
 import type { Server } from "node:http";
 
 export interface MainOverrides {
@@ -31,6 +36,7 @@ export interface MainOverrides {
   readonly store?: MessageStore;
   readonly setTimer?: SetTimerFn;
   readonly logger?: Logger;
+  readonly fs?: FileSystem;
 }
 
 export interface MainOptions {
@@ -43,6 +49,7 @@ export interface MainResult {
   readonly config: Config;
   readonly scheduler: SyncScheduler;
   readonly httpServer: Server;
+  readonly whatsappWatcher?: WhatsAppWatcherHandle;
   shutdown: () => Promise<void>;
 }
 
@@ -53,25 +60,6 @@ export interface Signals {
 export interface RunFromCliOptions extends MainOptions {
   readonly signals?: Signals;
 }
-
-const nodeFileSystem: FileSystem = {
-  async readFile(p) {
-    return fs.readFile(p);
-  },
-  async writeFile(p, data, mode) {
-    await fs.mkdir(path.dirname(p), { recursive: true });
-    await fs.writeFile(p, data, { mode });
-  },
-  async rename(from, to) {
-    await fs.rename(from, to);
-  },
-  watch() {
-    throw new Error("not implemented: FileSystem.watch (composition-root stub)");
-  },
-  async listDir(p) {
-    return fs.readdir(p);
-  },
-};
 
 const nodeSetTimer: SetTimerFn = (fn, ms): TimerHandle => {
   const h = setInterval(fn, ms);
@@ -154,10 +142,30 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
 
   await scheduler.start();
 
+  let whatsappWatcher: WhatsAppWatcherHandle | undefined;
+  if (config.whatsappWatch) {
+    const watcherFs = overrides.fs ?? nodeFileSystem;
+    whatsappWatcher = startWhatsAppWatcher({
+      fs: watcherFs,
+      logger,
+      downloadsPath: config.whatsappDownloadsPath,
+      importer: (filePath) =>
+        importWhatsAppFile({
+          fs: watcherFs,
+          clock,
+          store,
+          filePath,
+          account: config.whatsappAccount,
+          archiveRoot: config.whatsappArchivePath,
+        }),
+    });
+  }
+
   let shuttingDown = false;
   const shutdown = async (): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
+    whatsappWatcher?.stop();
     scheduler.stop();
     await new Promise<void>((resolve, reject) => {
       httpServer.close((err) => (err ? reject(err) : resolve()));
@@ -165,7 +173,7 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
     if (ownsDb && db !== null) db.close();
   };
 
-  return { config, scheduler, httpServer, shutdown };
+  return { config, scheduler, httpServer, whatsappWatcher, shutdown };
 }
 
 export async function runFromCli(

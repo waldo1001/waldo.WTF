@@ -1,12 +1,15 @@
 # waldo.WTF — docker compose
 #
-# Two bind mounts:
-#   ./data/db   -> /data/db     (SQLite lake + WAL/SHM sidecar files)
-#   ./data/auth -> /data/auth   (MSAL token cache + delta-state.json)
+# Bind mounts:
+#   ./data/db            -> /data/db             (SQLite lake + WAL/SHM sidecars)
+#   ./data/auth          -> /data/auth           (MSAL token cache + delta-state)
+#   ./whatsapp-inbox     -> /data/whatsapp-inbox   (drop zip/txt exports here)
+#   ./whatsapp-archive   -> /data/whatsapp-archive (imported files archived here)
 #
-# On the Synology NAS, replace the LEFT side of each mount with an absolute
-# path on the INTERNAL SSD (e.g. /volume1/docker/waldo-wtf/db). NEVER put the
-# db volume on an SMB / network share — SQLite + WAL over SMB corrupts.
+# On the Synology NAS these resolve under /volume1/docker/waldo-wtf/. NEVER put
+# the db volume on an SMB / network share — SQLite + WAL over SMB corrupts.
+# The whatsapp-inbox/archive folders are pure file throughput and are safe on
+# any local filesystem, including ones writable from the Mac over SMB/Taildrop.
 #
 # First-run MSAL login (attach an interactive terminal):
 #   docker compose run --rm waldo --add-account
@@ -36,6 +39,10 @@ services:
       WALDO_BIND_HOST: "0.0.0.0"
       WALDO_DB_PATH: "/data/db/lake.db"
       WALDO_AUTH_DIR: "/data/auth"
+      WALDO_WHATSAPP_WATCH: "true"
+      WALDO_WHATSAPP_DOWNLOADS_PATH: "/data/whatsapp-inbox"
+      WALDO_WHATSAPP_ARCHIVE_PATH: "/data/whatsapp-archive"
+      WALDO_WHATSAPP_ACCOUNT: "whatsapp-local"
     ports:
       # Host port : container port. Keep 8765 on both sides so Claude Desktop's
       # MCP config can use http://<tailnet-host>:8765 unchanged.
@@ -43,6 +50,8 @@ services:
     volumes:
       - ./data/db:/data/db
       - ./data/auth:/data/auth
+      - ./whatsapp-inbox:/data/whatsapp-inbox
+      - ./whatsapp-archive:/data/whatsapp-archive
     healthcheck:
       # /health is unauthenticated and returns {ok:true}. Uses node's built-in
       # fetch so we don't need curl/wget in the image.

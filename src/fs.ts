@@ -6,6 +6,8 @@ export interface FileSystem {
     mode?: number,
   ): Promise<void>;
   rename(from: string, to: string): Promise<void>;
+  mkdir(path: string): Promise<void>;
+  exists(path: string): Promise<boolean>;
   watch(
     dir: string,
     glob: string,

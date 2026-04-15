@@ -251,14 +251,29 @@ Plan: [docs/plans/fix-message-bodies-slice-a-backfill.md](docs/plans/fix-message
 
 ## Weekend 6 — WhatsApp + Android
 
-- [ ] WhatsApp `.txt` importer (`source='whatsapp'`)
-- [ ] Chokidar watches `~/Downloads/` for `WhatsApp Chat*.txt`
-- [ ] Mac locale date parser
-- [ ] Multi-line message handling
-- [ ] Dedup via `sha256(chat + sender + ts + body)` + `INSERT OR IGNORE`
-- [ ] Archive imported files → `~/WhatsAppArchive/YYYY-MM/`
-- [ ] Tailscale on Android
-- [ ] Claude mobile connector → remote MCP endpoint
+Code slices 1–8 complete 2026-04-15. Plan:
+[docs/plans/weekend-6-whatsapp-importer.md](docs/plans/weekend-6-whatsapp-importer.md).
+
+- [x] WhatsApp `.txt` importer (`source='whatsapp'`) ✅ (2026-04-15) —
+  pure parser + hash-id mapper + file orchestrator. 442 tests green,
+  99.77% lines / 97.53% branches.
+- [x] Chokidar-backed watcher on `~/Downloads/` for `WhatsApp Chat*.txt`
+  ✅ (2026-04-15) — reuses existing `FileSystem.watch` seam; off by
+  default on the NAS, enable via `WALDO_WHATSAPP_WATCH=true` on the Mac.
+- [x] Mac en-BE 24h date parser (DST-aware via `Intl.DateTimeFormat`)
+  ✅ (2026-04-15) — [src/sources/whatsapp.ts](src/sources/whatsapp.ts).
+- [x] Multi-line message handling (continuation lines prepend to previous)
+  ✅ (2026-04-15).
+- [x] Dedup via `whatsapp:sha256(chat\nsender\nsentAtIso\nbody)` +
+  `upsertMessages` primary-key idempotency ✅ (2026-04-15) —
+  [src/sync/whatsapp-map.ts](src/sync/whatsapp-map.ts).
+- [x] Archive imported files → `~/WhatsAppArchive/YYYY-MM/` with
+  `-1`/`-2` collision suffixes ✅ (2026-04-15) —
+  [src/sync/import-whatsapp.ts](src/sync/import-whatsapp.ts).
+- [ ] Live smoke on the Mac: drop a real export, watcher imports it,
+  Claude Desktop's `search` finds it.
+- [ ] Tailscale on Android (manual)
+- [ ] Claude mobile connector → remote MCP endpoint (manual)
 - [ ] First *"wtf is going on?"* from the train 🚄
 
 ---

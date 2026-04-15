@@ -49,6 +49,14 @@ export class InMemoryFileSystem implements FileSystem {
     if (mode !== undefined) this.modes.set(path, mode);
   }
 
+  async mkdir(_path: string): Promise<void> {
+    // flat namespace — nothing to create
+  }
+
+  async exists(path: string): Promise<boolean> {
+    return this.files.has(path);
+  }
+
   async rename(from: string, to: string): Promise<void> {
     this.ops.push({ kind: "rename", from, to });
     const buf = this.files.get(from);

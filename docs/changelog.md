@@ -11,6 +11,64 @@ skill.
 
 ---
 
+## 2026-04-15 — Weekend 6 follow-up: real watcher + NAS deployment
+
+- `nodeFileSystem.watch()` is now a real chokidar-backed implementation
+  with `awaitWriteFinish` (500ms stability window) so partial scp writes
+  don't trigger the importer mid-transfer. Extracted from `index.ts` and
+  `cli.ts` into [../src/fs-node.ts](../src/fs-node.ts) so it has a single
+  owner and can be integration-tested against a real tmp dir
+  ([../src/fs-node.test.ts](../src/fs-node.test.ts)).
+- `docker-compose.yml` gains two bind mounts (`./whatsapp-inbox` and
+  `./whatsapp-archive`) plus `WALDO_WHATSAPP_WATCH=true` and matching
+  path env vars. On the NAS these resolve under
+  `/volume1/docker/waldo-wtf/`.
+- [../bin/wtf-whatsapp-push](../bin/wtf-whatsapp-push) — one-command push
+  from Mac to NAS via scp. The container's watcher picks up the file
+  automatically; no `docker exec` round-trip needed.
+- 3 new integration tests (real tmp dir + real chokidar), suite at
+  450 / 450.
+
+## 2026-04-15 — Weekend 6 follow-up: zip export support
+
+- WhatsApp importer now accepts iOS-style `.zip` exports in addition to
+  raw `.txt`. On `.zip` input, `_chat.txt` is extracted via `adm-zip`
+  and fed to the existing parser; the zip itself is archived under
+  `~/WhatsAppArchive/YYYY-MM/`. Dedup is unchanged, so re-importing the
+  same chat as `.zip` and then as `.txt` (or vice versa) is a no-op.
+- Watcher glob broadened from `WhatsApp Chat*.txt` to `WhatsApp Chat*`;
+  CLI `--import-whatsapp` filter now matches `.txt` and `.zip`.
+- Malformed zips and zips missing `_chat.txt` raise `WhatsAppImportError`
+  and leave the source file in place (no archive, no partial rows).
+- 5 new tests; suite at 447 / 447, coverage on touched files ≥95% branches.
+
+## 2026-04-15 — Weekend 6: WhatsApp importer
+
+- Third message source lands in the lake. WhatsApp chat `.txt` exports
+  dropped into `~/Downloads/` are parsed, deduped, upserted with
+  `source='whatsapp'`, and archived to `~/WhatsAppArchive/YYYY-MM/`.
+  Re-importing the same chat is a no-op — dedup id is
+  `whatsapp:sha256(chat\nsender\nsentAtIso\nbody)`. Eight TDD slices,
+  no new MCP tools (existing `get_recent_activity` / `search` /
+  `get_thread` project whatsapp rows unchanged).
+  [plans/weekend-6-whatsapp-importer.md](plans/weekend-6-whatsapp-importer.md).
+- Pure parser [../src/sources/whatsapp.ts](../src/sources/whatsapp.ts)
+  handles Mac en-BE 24h dates (DST-aware via `Intl.DateTimeFormat`),
+  multi-line messages, `<Media omitted>`, system messages, and BOM/ZWSP.
+- Orchestrator [../src/sync/import-whatsapp.ts](../src/sync/import-whatsapp.ts)
+  + watcher [../src/sync/whatsapp-watcher.ts](../src/sync/whatsapp-watcher.ts).
+  Watcher reuses the existing `FileSystem.watch` seam — the slice-3
+  idempotent import covers chokidar's double-fire during copies.
+- New env knobs: `WALDO_WHATSAPP_DOWNLOADS_PATH`,
+  `WALDO_WHATSAPP_ARCHIVE_PATH`, `WALDO_WHATSAPP_ACCOUNT`,
+  `WALDO_WHATSAPP_WATCH`. **Off by default on the NAS**; opt-in on the
+  Mac via `WALDO_WHATSAPP_WATCH=true`.
+- CLI one-shot: `tsx src/cli.ts --import-whatsapp` scans the downloads
+  path once. [../src/cli.ts](../src/cli.ts).
+- `FileSystem` seam extended with `mkdir` and `exists` (both existing
+  impls updated; real node adapter uses `fs.mkdir({recursive:true})`).
+- 442 tests pass, 99.77% lines / 97.53% branches.
+
 ## 2026-04-15
 
 - `search`, `get_recent_activity`, and `get_thread` now project an

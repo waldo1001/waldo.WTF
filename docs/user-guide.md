@@ -140,14 +140,40 @@ tick (within 5 minutes). No restart needed.
 ## 6. Adding WhatsApp exports (Weekend 6+)
 
 1. In WhatsApp → chat → Export chat → Without media.
-2. Save or AirDrop to your Mac's `~/Downloads/`.
-3. The chokidar watcher picks up `WhatsApp Chat*.txt` within seconds,
-   parses it, inserts into the lake under `source='whatsapp'`, and
-   moves the original to `~/WhatsAppArchive/YYYY-MM/`.
+2. Save or AirDrop to your Mac's `~/Downloads/`. iOS WhatsApp produces
+   a `.zip` containing `_chat.txt`; Android usually produces the `.txt`
+   directly. Both are supported — the importer handles either.
+3. The watcher picks up `WhatsApp Chat*.txt` or `WhatsApp Chat*.zip`
+   within seconds, parses it, inserts into the lake under
+   `source='whatsapp'`, and moves the original to
+   `~/WhatsAppArchive/YYYY-MM/`.
 4. Ask Claude about it.
 
 Re-exporting the same chat is idempotent (dedup hash on primary key) —
 re-import as often as you like.
+
+**NAS deployment**: Mac drops zips into `~/Downloads/`, then
+`bin/wtf-whatsapp-push` scps them into the NAS inbox bind mount. The
+container's chokidar watcher picks up each file within a second of
+the scp finishing, imports, and archives. No second command needed.
+
+**One-shot import** (bypasses the watcher, useful for backfilling):
+
+```sh
+npm run dev -- --import-whatsapp
+```
+
+Scans `WALDO_WHATSAPP_DOWNLOADS_PATH` for `WhatsApp Chat*.txt`, imports
+each, archives to `WALDO_WHATSAPP_ARCHIVE_PATH/YYYY-MM/`, and exits.
+
+**Env knobs** (all optional; sensible defaults):
+
+| Var | Default | Purpose |
+|---|---|---|
+| `WALDO_WHATSAPP_WATCH` | unset | Set to `true` to start the chokidar watcher in the main process |
+| `WALDO_WHATSAPP_DOWNLOADS_PATH` | `~/Downloads` | Where to watch / scan for exports |
+| `WALDO_WHATSAPP_ARCHIVE_PATH` | `~/WhatsAppArchive` | Where imported files are moved |
+| `WALDO_WHATSAPP_ACCOUNT` | `whatsapp-local` | `account` column value for imported rows |
 
 ## 7. Deployment to Synology NAS (Weekend 5+)
 
