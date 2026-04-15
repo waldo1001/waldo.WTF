@@ -155,8 +155,8 @@ with its own plan file.
   `threadId` and `subject` to `threadName` (both defensively omitted
   when absent). `get_thread` now resolves Outlook conversations. Plan:
   [docs/plans/weekend-4.5-slice-3-outlook-thread-fields.md](docs/plans/weekend-4.5-slice-3-outlook-thread-fields.md).
-- [ ] Live smoke through Claude Desktop: *"show me the full thread
-  about X"* (Teams) and *"which accounts do you have access to?"*.
+- [x] Live smoke through Claude Desktop: *"show me the full thread
+  about X"* (Teams) and *"which accounts do you have access to?"* ✅ (2026-04-15).
 
 ---
 
