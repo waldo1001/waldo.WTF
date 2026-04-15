@@ -72,11 +72,15 @@
       "Bash(sed 's|__HOME__|__TRACKED_VAR__|g' bin/com.waldo.wtf.whatsapp-push.plist)",
       "Bash(launchctl load *)",
       "Bash(launchctl list *)",
-      "Bash(ssh waldo@waldonas3 \"sudo ls /volume1/docker/waldo-wtf/data/whatsapp-inbox/ /volume1/docker/waldo-wtf/data/whatsapp-archive/2026-04/ 2>&1; sudo docker logs waldo-wtf --tail=10 2>&1\")"
+      "Bash(ssh waldo@waldonas3 \"sudo ls /volume1/docker/waldo-wtf/data/whatsapp-inbox/ /volume1/docker/waldo-wtf/data/whatsapp-archive/2026-04/ 2>&1; sudo docker logs waldo-wtf --tail=10 2>&1\")",
+      "Read(//Users/waldo/WaldoInbox/**)",
+      "Bash(osacompile -o '__TRACKED_VAR__/Library/Scripts/Folder Action Scripts/wtf-whatsapp-relay.scpt' '__TRACKED_VAR__/Library/Scripts/Folder Action Scripts/wtf-whatsapp-relay.applescript')",
+      "Bash(:)"
     ],
     "additionalDirectories": [
       "/tmp",
-      "/Users/waldo/Library/Application Support/Claude"
+      "/Users/waldo/Library/Application Support/Claude",
+      "/Users/waldo/Library/Scripts/Folder Action Scripts"
     ]
   }
 }

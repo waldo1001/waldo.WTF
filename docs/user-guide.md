@@ -248,12 +248,78 @@ Inbox empty, file in archive, no error lines in the logs = end-to-end
 working. The watcher logs only on failures, not successes — silent
 success is the design.
 
-### 6c. Daily use
+### 6c. Downloads → WaldoInbox relay (optional but recommended)
 
-Export a WhatsApp chat → share-sheet → **Save to Files → WaldoInbox →
-Save**. Done. You can close the window, move on with your day, and
-ask Claude Desktop *"What did my mom send me this weekend?"* five
-minutes later.
+In practice you'll export from WhatsApp on your phone and AirDrop to
+the Mac, which always lands in `~/Downloads` (macOS has no setting to
+change this). Rather than manually move every file into
+`~/WaldoInbox`, attach a **Folder Action** to `~/Downloads` that does
+the move for you. Finder (which hosts Folder Actions) has the
+Downloads TCC grant that launchd lacks, so it can see the files and
+move them — after which the launchd agent from §6b takes over as
+normal.
+
+The AppleScript source lives at
+[../bin/folder-actions/wtf-whatsapp-relay.applescript](../bin/folder-actions/wtf-whatsapp-relay.applescript).
+Install:
+
+```sh
+mkdir -p "$HOME/Library/Scripts/Folder Action Scripts"
+cp bin/folder-actions/wtf-whatsapp-relay.applescript \
+   "$HOME/Library/Scripts/Folder Action Scripts/"
+osacompile \
+  -o "$HOME/Library/Scripts/Folder Action Scripts/wtf-whatsapp-relay.scpt" \
+  "$HOME/Library/Scripts/Folder Action Scripts/wtf-whatsapp-relay.applescript"
+
+osascript <<'EOF'
+tell application "System Events"
+    set folder actions enabled to true
+    set downloadsPath to (POSIX path of (path to downloads folder))
+    try
+        delete (every folder action whose name is "Downloads")
+    end try
+    set fa to make new folder action at end of folder actions ¬
+        with properties {name:"Downloads", path:downloadsPath}
+    tell fa
+        make new script at end of scripts ¬
+            with properties {name:"wtf-whatsapp-relay.scpt"}
+    end tell
+end tell
+EOF
+```
+
+**Test** by renaming any WhatsApp zip inside `~/Downloads` (Finder
+fires the action on "items added", which a rename counts as):
+
+```sh
+mv "$HOME/Downloads/WhatsApp Chat - BC Dev Talk.zip" \
+   "$HOME/Downloads/tmp.zip"
+mv "$HOME/Downloads/tmp.zip" \
+   "$HOME/Downloads/WhatsApp Chat - BC Dev Talk.zip"
+sleep 4
+ls ~/Downloads/ ~/WaldoInbox/ ~/WhatsAppArchive/$(date +%Y-%m)/
+```
+
+Expected: file gone from `Downloads` and `WaldoInbox`, present in
+`WhatsAppArchive/YYYY-MM/`. The launchd push log
+(`/tmp/wtf-whatsapp-push.log`) should show "Found 1 file(s)" and a
+successful scp.
+
+**Uninstall**:
+
+```sh
+osascript -e 'tell application "System Events" to delete (every folder action whose name is "Downloads")'
+rm "$HOME/Library/Scripts/Folder Action Scripts/wtf-whatsapp-relay.scpt"
+rm "$HOME/Library/Scripts/Folder Action Scripts/wtf-whatsapp-relay.applescript"
+```
+
+### 6c-bis. Daily use
+
+Export a WhatsApp chat → AirDrop or share-sheet to your Mac. The
+Folder Action relays it into `~/WaldoInbox`, launchd pushes it to the
+NAS, the container imports it and archives. You do nothing after the
+export. Ask Claude Desktop *"What did my mom send me this weekend?"*
+five minutes later.
 
 ### 6d. Troubleshooting the auto-push
 
