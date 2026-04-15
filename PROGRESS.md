@@ -199,11 +199,54 @@ with its own plan file.
   .env // tip: ⌁ auth for agents [www.vestauth.com]` — NOT from
   waldo.WTF code, likely an ad/promo injection from a transitive
   `node_modules` dep; deferred as a separate security investigation.
-- [ ] Synology: Container Manager + Tailscale installed (manual Part B)
-- [ ] Deploy container (internal SSD bind mounts — **not** SMB) (manual Part D)
-- [ ] First-run MSAL login against NAS volume (manual Part E)
-- [ ] Reachable via tailnet hostname (manual Part F)
-- [ ] Claude Desktop repointed from `localhost` → `waldo-nas.tailnet.ts.net` (manual Part G)
+- [x] Synology: Container Manager + Tailscale installed (manual Part B) ✅ (2026-04-15)
+- [x] Deploy container (internal SSD bind mounts — **not** SMB) (manual Part D) ✅ (2026-04-15)
+- [x] First-run MSAL login against NAS volume (manual Part E) ✅ (2026-04-15)
+- [x] Reachable via tailnet hostname (manual Part F) ✅ (2026-04-15)
+- [x] Claude Desktop repointed from `localhost` → `waldo-nas.tailnet.ts.net` (manual Part G) ✅ (2026-04-15)
+
+---
+
+## Weekend 5.5 — Body backfill ✅ (2026-04-15)
+
+First live smoke of the NAS container surfaced that Claude couldn't read
+mail bodies: FTS5 indexes `body`, but Outlook mails land in `body_html`,
+so `search` returned null snippets and `get_recent_activity` surfaced raw
+`<html><head><meta>…` boilerplate. Data was already on disk — this slice
+derives plain `body` from `body_html` in place on the 882 MB production
+lake, with no Graph refetch.
+
+- [x] `htmlToText` helper ([src/text/html-to-text.ts](src/text/html-to-text.ts))
+  — `node-html-parser`-backed, drops `<script>`/`<style>`/`<head>`,
+  converts block/void tags to newlines, decodes entities, collapses
+  whitespace. 7 unit tests incl. a realistic Outlook-shaped fixture.
+- [x] [src/sync/sync-inbox.ts](src/sync/sync-inbox.ts) mapper populates
+  both `bodyHtml` (raw) and `body` (`htmlToText(bodyHtml)`) on ingest so
+  every new Outlook mail is FTS-indexed going forward.
+- [x] Schema v5 → v6 marker migration ([src/store/schema.ts](src/store/schema.ts))
+  — no DDL, gates the data backfill and lets future code assume v6+ rows
+  have populated `body` when `body_html` is present.
+- [x] [src/store/backfill-body-from-html.ts](src/store/backfill-body-from-html.ts)
+  — chunked 5 000-row transactions, `WHERE body IS NULL AND body_html IS
+  NOT NULL` (self-healing on re-run), then FTS5
+  `INSERT INTO messages_fts(messages_fts) VALUES('rebuild')` to
+  recompute the shadow index from the content table. `raw_json` and
+  `body_html` left untouched.
+- [x] CLI subcommand `tsx src/cli.ts --backfill-bodies`
+  ([src/cli.ts](src/cli.ts)) — opens the real DB, runs migrations,
+  backfills with progress output, WAL checkpoint truncate.
+- [x] 396 tests pass, coverage 99.73% lines / 98.33% branches. Security
+  scan clean.
+- [x] Deployment recipe: [docs/deploy-backfill-bodies.md](docs/deploy-backfill-bodies.md).
+- [ ] Live run against the NAS container (operator action per the
+  deployment doc).
+
+**Deferred to Slice B**: exposing full bodies through the MCP surface
+(`include_body` flag on `get_thread` / new `get_message` tool). Slice A
+only fixes snippet quality + FTS indexing — enough for Claude to *find*
+and *preview* mail, not yet to read the full body.
+
+Plan: [docs/plans/fix-message-bodies-slice-a-backfill.md](docs/plans/fix-message-bodies-slice-a-backfill.md).
 
 ---
 

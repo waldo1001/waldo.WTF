@@ -1,6 +1,6 @@
 import type { Database } from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 const MIGRATION_1 = `
 CREATE TABLE IF NOT EXISTS messages (
@@ -99,6 +99,12 @@ const MIGRATION_5 = `
 ALTER TABLE chat_cursors RENAME COLUMN last_modified_iso TO cursor;
 `;
 
+// v6 is a marker-only migration for the body-from-html backfill. No DDL —
+// the `body` and `body_html` columns already exist since v1. The bump lets
+// operational tooling and future code assume "v6+ means backfill has run
+// or is expected to run via `cli --backfill-bodies`".
+const MIGRATION_6 = `SELECT 1;`;
+
 export function applyMigrations(db: Database): void {
   const current = (
     db.prepare("PRAGMA user_version").get() as { user_version: number }
@@ -121,6 +127,9 @@ export function applyMigrations(db: Database): void {
     }
     if (current < 5) {
       db.exec(MIGRATION_5);
+    }
+    if (current < 6) {
+      db.exec(MIGRATION_6);
     }
     db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
   });

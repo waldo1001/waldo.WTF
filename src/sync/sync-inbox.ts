@@ -4,6 +4,7 @@ import type { Clock } from "../clock.js";
 import type { MessageStore } from "../store/message-store.js";
 import type { Message } from "../store/types.js";
 import type { GraphClient, GraphMessage } from "../sources/graph.js";
+import { htmlToText } from "../text/html-to-text.js";
 
 export const DEFAULT_INBOX_DELTA_ENDPOINT =
   "/me/mailFolders/inbox/messages/delta";
@@ -50,7 +51,9 @@ const toMessage = (
       senderName: g.from.emailAddress.name,
       senderEmail: g.from.emailAddress.address,
       ...(body?.contentType === "text" ? { body: body.content } : {}),
-      ...(body?.contentType === "html" ? { bodyHtml: body.content } : {}),
+      ...(body?.contentType === "html"
+        ? { bodyHtml: body.content, body: htmlToText(body.content) }
+        : {}),
     };
   }
   return msg;

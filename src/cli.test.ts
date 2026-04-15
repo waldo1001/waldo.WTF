@@ -74,6 +74,23 @@ describe("runCli", () => {
     ).rejects.toBeInstanceOf(ConfigError);
   });
 
+  it("dispatches --backfill-bodies to the injected backfill impl and prints processed count", async () => {
+    const prints: string[] = [];
+    let captured: string | undefined;
+    const result = await runCli(["--backfill-bodies"], {
+      env: ENV,
+      loadDotenv: false,
+      print: (m) => prints.push(m),
+      backfillImpl: async (dbPath) => {
+        captured = dbPath;
+        return { processed: 42 };
+      },
+    });
+    expect(result).toEqual({ mode: "backfill", processed: 42 });
+    expect(captured).toMatch(/lake\.db$/);
+    expect(prints.some((p) => p.includes("42"))).toBe(true);
+  });
+
   it("dispatches default mode to the injected main impl", async () => {
     const fakeMainResult = { sentinel: "main" } as unknown as Awaited<
       ReturnType<typeof import("./index.js").main>

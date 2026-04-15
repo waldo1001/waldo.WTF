@@ -13,6 +13,20 @@ skill.
 
 ## 2026-04-15
 
+- Message-body backfill (Slice A of the "make Claude read mail" fix) —
+  new pure helper [src/text/html-to-text.ts](../src/text/html-to-text.ts)
+  (backed by `node-html-parser`), new
+  [src/store/backfill-body-from-html.ts](../src/store/backfill-body-from-html.ts)
+  chunked backfill, schema v5→v6 marker migration, new CLI subcommand
+  `tsx src/cli.ts --backfill-bodies`. [sync-inbox.ts](../src/sync/sync-inbox.ts)
+  mapper now populates plain `body` from `body_html` on ingest so every
+  new Outlook mail is FTS-indexed. Backfill is in-place on the 882 MB
+  production lake — no Graph refetch, `raw_json` and `body_html`
+  untouched, `WHERE body IS NULL` makes re-runs idempotent. FTS5
+  `rebuild` incantation recomputes the shadow index from the content
+  table. 396 tests pass, coverage 99.73% lines / 98.33% branches.
+  Deployment steps in [deploy-backfill-bodies.md](deploy-backfill-bodies.md).
+  Plan: [docs/plans/fix-message-bodies-slice-a-backfill.md](plans/fix-message-bodies-slice-a-backfill.md).
 - Weekend 5 slice 1 end-to-end live: Claude Desktop on the Mac now talks to the waldo.WTF container on the DS223 over Tailscale and pulls mail/chat tool results from the lake. Three MS 365 accounts added via `--add-account` on the NAS (emails redacted), `docker compose up -d` healthy, first post-login sync tick `sync tick complete: 3 account(s), 6 ok, 0 error(s)`, `curl http://waldonas3:8765/health` → `{"ok":true}` from the Mac, Claude Desktop MCP tools listing populated after a Cmd+Q-and-relaunch. Slice 1 acceptance criteria met — "Claude Desktop, backed by the NAS container, can answer a question about recent mail" passes.
 - Claude Desktop MCP config — `mcp-remote` needs `--allow-http`. Claude Desktop's `claude_desktop_config.json` has no native remote-HTTP transport, so we proxy via `npx -y mcp-remote` which by default refuses any non-`localhost` HTTP URL and exits with `Non-HTTPS URLs are only allowed for localhost or when --allow-http flag is provided`. Adding `--allow-http` to the args unblocks it; safe over Tailscale because the tailnet link is WireGuard-encrypted end-to-end. [deploy-synology.md Part G](deploy-synology.md) rewritten — the old doc showed the hypothetical `{"type":"http","url":"...","headers":{...}}` form (which Claude Desktop does NOT implement); replaced with the real `command: npx` + `args: [-y, mcp-remote, <url>, --allow-http, --header, "Authorization: Bearer ..."]` stdio-bridge form, plus three gotchas callout (allow-http, full MagicDNS name vs short hostname mDNS collision, `--header "Name: value"` single-string vs hypothetical JSON object). Troubleshooting §`MCP server disconnected` expanded to list the three actual failure modes seen in `~/Library/Logs/Claude/mcp-server-waldo-wtf.log` in order of likelihood (missing `--allow-http`, bearer mismatch, `ECONNREFUSED` from wrong bind host).
 - [.claude/settings.json](../.claude/settings.json) — minor permissions tweak from this session's hands-on work. Keeps `/security-scan` from prompting on routine file reads in `docs/` and `node_modules/` during the supply-chain false-alarm investigation.

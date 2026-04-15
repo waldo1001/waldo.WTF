@@ -23,7 +23,7 @@ describe("schema / applyMigrations", () => {
     expect(userVersion(db)).toBe(0);
     applyMigrations(db);
     expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
-    expect(CURRENT_SCHEMA_VERSION).toBe(5);
+    expect(CURRENT_SCHEMA_VERSION).toBe(6);
   });
 
   it("creates all four tables and expected indices", () => {
@@ -477,10 +477,45 @@ describe("schema / chat_cursors column rename (migration 5)", () => {
     expect(row.cursor).toBe("2026-04-13T10:00:00.000Z");
   });
 
-  it("is idempotent at v5", () => {
+  it("is idempotent at v6", () => {
     const db = new Database(":memory:");
     applyMigrations(db);
     applyMigrations(db);
-    expect(userVersion(db)).toBe(5);
+    expect(userVersion(db)).toBe(6);
+  });
+
+  it("migrates an existing v5 db to v6 preserving rows and FTS index", () => {
+    const db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY, source TEXT NOT NULL, account TEXT NOT NULL,
+        native_id TEXT NOT NULL, thread_id TEXT, thread_name TEXT,
+        sender_name TEXT, sender_email TEXT, sent_at INTEGER NOT NULL,
+        imported_at INTEGER NOT NULL, is_read INTEGER, body TEXT,
+        body_html TEXT, raw_json TEXT, chat_type TEXT, reply_to_id TEXT,
+        mentions_json TEXT
+      );
+      CREATE VIRTUAL TABLE messages_fts USING fts5(
+        body, thread_name, sender_name, content='messages', content_rowid='rowid'
+      );
+      CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
+        INSERT INTO messages_fts(rowid, body, thread_name, sender_name)
+        VALUES (new.rowid, new.body, new.thread_name, new.sender_name);
+      END;
+      INSERT INTO messages (id, source, account, native_id, sent_at, imported_at, body, thread_name)
+      VALUES ('x', 'outlook', 'a', 'n', 0, 0, 'kangaroo', 'subj');
+      PRAGMA user_version = 5;
+    `);
+    applyMigrations(db);
+    expect(userVersion(db)).toBe(6);
+    const row = db.prepare("SELECT id, body FROM messages").get() as {
+      id: string;
+      body: string;
+    };
+    expect(row).toEqual({ id: "x", body: "kangaroo" });
+    const hit = db
+      .prepare("SELECT rowid FROM messages_fts WHERE messages_fts MATCH 'kangaroo'")
+      .all();
+    expect(hit).toHaveLength(1);
   });
 });

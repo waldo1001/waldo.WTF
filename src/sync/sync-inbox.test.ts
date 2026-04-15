@@ -298,7 +298,47 @@ describe("syncInbox", () => {
     expect(text?.bodyHtml).toBeUndefined();
     expect(html?.senderName).toBe("Carol");
     expect(html?.bodyHtml).toBe("<p>rich</p>");
-    expect(html?.body).toBeUndefined();
+    expect(html?.body).toBe("rich");
+  });
+
+  it("maps html-body messages to both bodyHtml and stripped body", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const graph = new FakeGraphClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({
+            value: [
+              makeGraphMessage({
+                id: "msg-rich",
+                from: {
+                  emailAddress: { name: "Dave", address: "dave@example.invalid" },
+                },
+                body: {
+                  contentType: "html",
+                  content:
+                    "<html><head><style>p{}</style></head><body><p>Hi Waldo,</p><p>Sponsor list?</p></body></html>",
+                },
+              }),
+            ],
+            "@odata.deltaLink": "d",
+          }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncInbox({ account, auth, graph, store, clock });
+
+    const upserted = store.calls.flatMap((c) =>
+      c.method === "upsertMessages" ? c.messages : [],
+    );
+    const rich = upserted.find((m) => m.nativeId === "msg-rich");
+    expect(rich?.bodyHtml).toContain("<p>Hi Waldo");
+    expect(rich?.body).toBe("Hi Waldo,\n\nSponsor list?");
+    expect(rich?.body).not.toContain("<");
+    expect(rich?.body).not.toContain("{");
   });
 
   it("persists rawJson as stringified Graph DTO on upsert", async () => {

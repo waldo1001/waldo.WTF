@@ -60,7 +60,8 @@
       "Bash(docker buildx:*)",
       "Bash(./deploy-to-nas.sh)",
       "Bash(git status:*)",
-      "Bash(git check-ignore:*)"
+      "Bash(git check-ignore:*)",
+      "Bash(node -e \"console.log\\(require\\('node-html-parser/package.json'\\).version\\)\")"
     ],
     "additionalDirectories": [
       "/tmp",
