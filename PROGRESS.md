@@ -238,8 +238,7 @@ lake, with no Graph refetch.
 - [x] 396 tests pass, coverage 99.73% lines / 98.33% branches. Security
   scan clean.
 - [x] Deployment recipe: [docs/deploy-backfill-bodies.md](docs/deploy-backfill-bodies.md).
-- [ ] Live run against the NAS container (operator action per the
-  deployment doc).
+- [x] Live run against the NAS container ✅ (2026-04-15).
 
 **Deferred to Slice B**: exposing full bodies through the MCP surface
 (`include_body` flag on `get_thread` / new `get_message` tool). Slice A
