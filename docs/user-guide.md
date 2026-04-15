@@ -55,6 +55,9 @@ their next delta touch; clear the delta token for a forced resync.
 
 Typical flow: Claude calls `search` → picks a result → calls
 `get_thread` with the result's `thread_id` → reads the full exchange.
+Every projection (`search`, `get_recent_activity`, `get_thread`)
+echoes an optional `threadId` field on each message, so the round-trip
+needs no guessing.
 
 ### `list_accounts()`
 

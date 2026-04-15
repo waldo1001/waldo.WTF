@@ -15,6 +15,7 @@ export interface ProjectedSearchMessage {
   readonly id: string;
   readonly source: Message["source"];
   readonly account: string;
+  readonly threadId?: string;
   readonly threadName?: string;
   readonly senderName?: string;
   readonly senderEmail?: string;
@@ -96,6 +97,7 @@ function project(h: SearchHit): ProjectedSearchHit {
       id: m.id,
       source: m.source,
       account: m.account,
+      ...(m.threadId !== undefined && { threadId: m.threadId }),
       ...(m.threadName !== undefined && { threadName: m.threadName }),
       ...(m.senderName !== undefined && { senderName: m.senderName }),
       ...(m.senderEmail !== undefined && { senderEmail: m.senderEmail }),

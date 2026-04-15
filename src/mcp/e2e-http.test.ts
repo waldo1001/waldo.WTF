@@ -41,6 +41,7 @@ describe("MCP HTTP server end-to-end (SQLite + SDK client over HTTP)", () => {
         id: "in-1",
         body: "Quarterly board meeting recap — numbers look great",
         threadName: "Board",
+        threadId: "conv-board",
         senderName: "Alice",
         senderEmail: "alice@example.test",
         sentAt: new Date("2026-04-13T10:00:00Z"),
@@ -185,7 +186,7 @@ describe("MCP HTTP server end-to-end (SQLite + SDK client over HTTP)", () => {
     expect(boardMsg?.rawJson).toBeUndefined();
   });
 
-  it("search over HTTP returns FTS5 hits with snippet and rank", async () => {
+  it("search over HTTP returns FTS5 hits with snippet, rank, and threadId", async () => {
     const res = await client.callTool({
       name: "search",
       arguments: { query: "board" },
@@ -194,7 +195,7 @@ describe("MCP HTTP server end-to-end (SQLite + SDK client over HTTP)", () => {
     const parsed = parse<{
       count: number;
       hits: Array<{
-        message: { id: string };
+        message: { id: string; threadId?: string };
         snippet: string;
         rank: number;
       }>;
@@ -202,6 +203,7 @@ describe("MCP HTTP server end-to-end (SQLite + SDK client over HTTP)", () => {
     expect(parsed.count).toBe(1);
     const first = parsed.hits[0];
     expect(first?.message.id).toBe("in-1");
+    expect(first?.message.threadId).toBe("conv-board");
     expect(first?.snippet.length).toBeGreaterThan(0);
     expect(typeof first?.rank).toBe("number");
   });

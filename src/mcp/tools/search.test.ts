@@ -183,6 +183,32 @@ describe("handleSearch", () => {
     expect(msg?.mentions).toEqual(["bob@example.test"]);
   });
 
+  it("projects threadId when the message has one", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mkMessage({
+            id: "with-thread",
+            source: "teams",
+            threadId: "chat-abc",
+            body: "needle one",
+          }),
+          mkMessage({
+            id: "without-thread",
+            body: "needle two",
+          }),
+        ],
+      },
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleSearch(store, clock, { query: "needle" });
+    const withT = result.hits.find((h) => h.message.id === "with-thread");
+    const withoutT = result.hits.find((h) => h.message.id === "without-thread");
+    expect(withT?.message.threadId).toBe("chat-abc");
+    expect(withoutT).toBeDefined();
+    expect(Object.keys(withoutT?.message ?? {})).not.toContain("threadId");
+  });
+
   it("exposes a tool descriptor with a valid JSON-schema input", () => {
     expect(SEARCH_TOOL.name).toBe("search");
     expect(SEARCH_TOOL.inputSchema.type).toBe("object");

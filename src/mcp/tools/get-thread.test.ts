@@ -157,6 +157,30 @@ describe("handleGetThread", () => {
     expect(result.messages[0]?.threadName).toBe("Weekly sync");
   });
 
+  it("projects threadId on every returned message", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mk({
+            id: "teams:a@example.test:1",
+            threadId: "chat-1",
+            sentAt: new Date("2026-04-13T10:00:00Z"),
+          }),
+          mk({
+            id: "teams:a@example.test:2",
+            threadId: "chat-1",
+            sentAt: new Date("2026-04-13T11:00:00Z"),
+          }),
+        ],
+      },
+    });
+    const result = await handleGetThread(store, clock, {
+      thread_id: "chat-1",
+    });
+    expect(result.count).toBe(2);
+    expect(result.messages.every((m) => m.threadId === "chat-1")).toBe(true);
+  });
+
   it("orders messages oldest→newest and respects explicit limit", async () => {
     const store = new InMemoryMessageStore({
       seed: {

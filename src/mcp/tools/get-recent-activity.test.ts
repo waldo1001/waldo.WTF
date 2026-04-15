@@ -224,6 +224,40 @@ describe("handleGetRecentActivity", () => {
     expect(m?.mentions).toEqual(["alice@example.test"]);
   });
 
+  it("projects threadId when the message has one", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mkMessage({
+            id: "teams-msg",
+            source: "teams",
+            threadId: "chat-xyz",
+            sentAt: new Date("2026-04-13T11:30:00Z"),
+          }),
+          mkMessage({
+            id: "outlook-msg",
+            source: "outlook",
+            threadId: "conv-123",
+            sentAt: new Date("2026-04-13T11:31:00Z"),
+          }),
+          mkMessage({
+            id: "no-thread",
+            sentAt: new Date("2026-04-13T11:32:00Z"),
+          }),
+        ],
+      },
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleGetRecentActivity(store, clock, { hours: 2 });
+    const teams = result.messages.find((m) => m.id === "teams-msg");
+    const outlook = result.messages.find((m) => m.id === "outlook-msg");
+    const none = result.messages.find((m) => m.id === "no-thread");
+    expect(teams?.threadId).toBe("chat-xyz");
+    expect(outlook?.threadId).toBe("conv-123");
+    expect(none).toBeDefined();
+    expect(Object.keys(none ?? {})).not.toContain("threadId");
+  });
+
   it("sources:['teams'] returns only teams rows", async () => {
     const store = new InMemoryMessageStore({
       seed: {

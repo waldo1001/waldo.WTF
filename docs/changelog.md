@@ -13,6 +13,10 @@ skill.
 
 ## 2026-04-15
 
+- `search`, `get_recent_activity`, and `get_thread` now project an
+  optional `threadId` field, so an MCP client can pivot from any hit
+  back into `get_thread` without guessing the id. Additive wire-shape
+  change. [src/mcp/tools/](../src/mcp/tools/)
 - New `/deploy-nas` skill + migration registry. [.claude/skills/deploy-nas/SKILL.md](../.claude/skills/deploy-nas/SKILL.md)
   drives the recurring NAS deploy loop step-by-step — build image on
   Mac → ship → stop container → optionally run a one-shot migration

@@ -18,6 +18,7 @@ export interface ProjectedThreadMessage {
   readonly id: string;
   readonly source: MessageSource;
   readonly account: string;
+  readonly threadId?: string;
   readonly threadName?: string;
   readonly senderName?: string;
   readonly senderEmail?: string;
@@ -100,6 +101,7 @@ function project(m: Message): ProjectedThreadMessage {
     id: m.id,
     source: m.source,
     account: m.account,
+    ...(m.threadId !== undefined && { threadId: m.threadId }),
     ...(m.threadName !== undefined && { threadName: m.threadName }),
     ...(m.senderName !== undefined && { senderName: m.senderName }),
     ...(m.senderEmail !== undefined && { senderEmail: m.senderEmail }),
