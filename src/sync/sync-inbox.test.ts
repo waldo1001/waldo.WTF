@@ -631,4 +631,37 @@ describe("syncInbox", () => {
     );
     expect(upsertedRows).toHaveLength(0);
   });
+
+  it("on a message with missing receivedDateTime, falls back to importedAt for sentAt", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const graph = new FakeGraphClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({
+            value: [
+              makeGraphMessage({
+                id: "no-date",
+                receivedDateTime: undefined as unknown as string,
+              }),
+            ],
+            "@odata.deltaLink": "https://graph/delta?token=d1",
+          }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    const result = await syncInbox({ account, auth, graph, store, clock });
+
+    expect(result.added).toBe(1);
+    const upserted = store.calls.flatMap((c) =>
+      c.method === "upsertMessages" ? c.messages : [],
+    );
+    expect(upserted).toHaveLength(1);
+    // sentAt should fall back to importedAt (clock.now()) instead of Invalid Date
+    expect(upserted[0]?.sentAt.toISOString()).toBe("2026-04-13T12:00:00.000Z");
+    expect(Number.isNaN(upserted[0]?.sentAt.getTime())).toBe(false);
+  });
 });

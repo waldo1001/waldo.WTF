@@ -80,7 +80,12 @@
       "Bash(getent hosts *)",
       "Bash(dscacheutil -q host -a name waldonas3)",
       "Bash(tailscale status *)",
-      "Read(//Users/waldo/.claude/**)"
+      "Read(//Users/waldo/.claude/**)",
+      "Bash(ssh -o BatchMode=yes -o ConnectTimeout=3 waldo@waldonas3 'echo reachable')",
+      "Bash(ssh -o BatchMode=yes waldo@waldonas3 'sudo -n docker ps --format \"{{.Names}}\" 2>&1')",
+      "Bash(docker save *)",
+      "Bash(scp -O /tmp/waldo-wtf.tar waldo@waldonas3:/tmp/waldo-wtf.tar)",
+      "Bash(find /Users/waldo/SourceCode/Community/waldo.WTF -name \"*.md\" -type f -exec grep -l \"sentAt\\\\|sent_at\\\\|NOT NULL\\\\|constraint\" {} \\\\;)"
     ],
     "additionalDirectories": [
       "/tmp",

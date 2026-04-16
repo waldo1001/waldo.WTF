@@ -56,6 +56,11 @@ export class SyncScheduler {
       const accounts = await this.deps.auth.listAccounts();
       accountsCount = accounts.length;
       for (const account of accounts) {
+        await this.deps.store.upsertAccount({
+          username: account.username,
+          tenantId: account.tenantId,
+          addedAt: this.deps.clock.now(),
+        });
         try {
           const r = await syncInbox({
             account,

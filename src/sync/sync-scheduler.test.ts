@@ -159,6 +159,45 @@ describe("SyncScheduler", () => {
     expect(bobRow?.status).toBe("ok");
   });
 
+  it("upserts each account into the store on every tick", async () => {
+    const a1 = acc("alice");
+    const a2 = acc("bob");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ value: [], "@odata.deltaLink": "d1" }) },
+        { kind: "ok", response: ok({ value: [], "@odata.deltaLink": "d2" }) },
+      ],
+    });
+    const auth = new FakeAuthClient({
+      accounts: [a1, a2],
+      tokens: new Map([
+        [a1.homeAccountId, tok(a1)],
+        [a2.homeAccountId, tok(a2)],
+      ]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+
+    const accounts = await store.listAccounts();
+    expect(accounts).toHaveLength(2);
+    expect(accounts.map((a) => a.username).sort()).toEqual([
+      a1.username,
+      a2.username,
+    ]);
+    expect(accounts[0]?.tenantId).toBe(a1.tenantId);
+  });
+
   it("start() awaits first runOnce then arms the timer with intervalMs", async () => {
     const store = new InMemoryMessageStore();
     const graph = new FakeGraphClient({

@@ -37,7 +37,7 @@ const toMessage = (
     source: "outlook",
     account: accountUsername,
     nativeId: g.id,
-    sentAt: new Date(g.receivedDateTime),
+    sentAt: g.receivedDateTime ? new Date(g.receivedDateTime) : importedAt,
     importedAt,
     rawJson: JSON.stringify(g),
     ...(g.conversationId !== undefined ? { threadId: g.conversationId } : {}),

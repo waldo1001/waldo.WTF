@@ -15,6 +15,8 @@ skill.
 
 - Expanded MCP tool descriptions (`search`, `get_sync_status`, `get_recent_activity`, `get_thread`) with multilingual search guidance and multi-source caveats so agents handle Dutch/English content and WhatsApp ingestion correctly.
 - Added server-level `instructions` to the MCP server with a general multilingual search strategy.
+- Fixed `list_accounts` returning empty — sync scheduler now calls `upsertAccount()` for each account on every tick.
+- Fixed `NOT NULL constraint failed: messages.sent_at` — `syncInbox` now falls back to `importedAt` when a Graph message has no `receivedDateTime`.
 
 ## 2026-04-15 — Weekend 6 follow-up: auto-push + EXDEV fix + launchd
 
