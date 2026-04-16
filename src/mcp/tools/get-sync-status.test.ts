@@ -175,4 +175,11 @@ describe("handleGetSyncStatus", () => {
   it("STALE_THRESHOLD_MS is 15 minutes", () => {
     expect(STALE_THRESHOLD_MS).toBe(15 * 60 * 1000);
   });
+
+  it("description warns it is not an authoritative source inventory", () => {
+    expect(GET_SYNC_STATUS_TOOL.description).toContain(
+      "NOT an authoritative inventory",
+    );
+    expect(GET_SYNC_STATUS_TOOL.description).toContain("get_recent_activity");
+  });
 });

@@ -11,6 +11,11 @@ skill.
 
 ---
 
+## 2026-04-16
+
+- Expanded MCP tool descriptions (`search`, `get_sync_status`, `get_recent_activity`, `get_thread`) with multilingual search guidance and multi-source caveats so agents handle Dutch/English content and WhatsApp ingestion correctly.
+- Added server-level `instructions` to the MCP server with a general multilingual search strategy.
+
 ## 2026-04-15 — Weekend 6 follow-up: auto-push + EXDEV fix + launchd
 
 - **Auto-push from Mac to NAS via launchd.** New

@@ -29,8 +29,11 @@ export interface GetSyncStatusResult {
 
 export const GET_SYNC_STATUS_TOOL = {
   name: "get_sync_status",
-  description:
+  description: [
     "Return a per-(account, source) health snapshot of the sync loop: last sync, last ok, last error, and messages added in the last 24h. Read-only.",
+    "",
+    'This tool reports health of tracked account/source pairs — it is NOT an authoritative inventory of which sources exist in the lake. Some sources (e.g. whatsapp-local) may be ingested through mechanisms that don\'t appear as rows here. To verify whether a source has data, call get_recent_activity with sources: ["<source>"] directly. Do not tell the user "source X is not synced" based on this tool alone.',
+  ].join("\n"),
   inputSchema: {
     type: "object",
     properties: {},

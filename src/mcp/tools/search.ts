@@ -38,8 +38,13 @@ export interface SearchResult {
 
 export const SEARCH_TOOL = {
   name: "search",
-  description:
+  description: [
     "Full-text search the message lake (FTS5, BM25-ranked). Returns hits with snippet and rank (lower = better). Read-only.",
+    "",
+    'Language matters. The lake contains messages in multiple languages (notably Dutch and English for Belgian users). FTS5 tokenizes on word boundaries, so compound words in Germanic languages won\'t match their English equivalents — "spaghettisaus" ≠ "spaghetti sauce", "boodschappenlijst" ≠ "shopping list", "verjaardag" ≠ "birthday". When searching for personal, family, or household content, try the user\'s native language first or in parallel. If a query returns zero hits, try: (1) the other language, (2) a root/stem rather than a compound (e.g. "saus" instead of "spaghettisaus"), (3) a related noun from the same context ("gehakt", "ajuin") before concluding the content doesn\'t exist.',
+    "",
+    "Empty results are not proof of absence. They usually mean the query didn't match the indexed tokens. Widen before concluding.",
+  ].join("\n"),
   inputSchema: {
     type: "object",
     properties: {

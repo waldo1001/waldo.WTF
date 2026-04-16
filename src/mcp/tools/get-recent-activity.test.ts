@@ -322,4 +322,10 @@ describe("handleGetRecentActivity", () => {
     expect(GET_RECENT_ACTIVITY_TOOL.inputSchema.type).toBe("object");
     expect(GET_RECENT_ACTIVITY_TOOL.inputSchema.required).toContain("hours");
   });
+
+  it("description identifies it as source-of-truth probe", () => {
+    expect(GET_RECENT_ACTIVITY_TOOL.description).toContain(
+      "source-of-truth probe",
+    );
+  });
 });

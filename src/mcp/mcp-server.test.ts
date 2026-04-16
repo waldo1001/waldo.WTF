@@ -139,4 +139,10 @@ describe("createMcpServer (SDK, in-memory transport)", () => {
       }),
     ).rejects.toMatchObject({ code: ErrorCode.InternalError });
   });
+
+  it("server provides multilingual search instructions", () => {
+    const instructions = client.getInstructions();
+    expect(instructions).toContain("multilingual");
+    expect(instructions).toContain("get_sync_status");
+  });
 });

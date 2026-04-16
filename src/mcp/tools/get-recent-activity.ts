@@ -47,8 +47,11 @@ export interface GetRecentActivityResult {
 
 export const GET_RECENT_ACTIVITY_TOOL = {
   name: "get_recent_activity",
-  description:
+  description: [
     "Return recent messages from the lake within the last N hours, optionally filtered by source and/or account. Read-only.",
+    "",
+    'Use this as the source-of-truth probe when you need to confirm whether a given source (outlook, teams, whatsapp) has any recent data. A single call with sources: ["whatsapp"] and a wide hours window is the correct way to verify presence — more reliable than inferring from get_sync_status.',
+  ].join("\n"),
   inputSchema: {
     type: "object",
     properties: {

@@ -66,7 +66,16 @@ const TOOL_HANDLERS: Record<string, ToolHandler> = {
 export function createMcpServer(deps: McpServerDeps): Server {
   const server = new Server(
     { name: "waldo-wtf", version: "0.0.0" },
-    { capabilities: { tools: {} } },
+    {
+      capabilities: { tools: {} },
+      instructions: [
+        "Search strategy for multilingual lakes:",
+        "- If the user references a known person, go straight to get_thread on that person's thread where possible.",
+        "- If using search, try queries in the language the referenced person would use, not the language the user is currently chatting in.",
+        '- Treat empty results as "didn\'t match," not "doesn\'t exist." Retry with: other language, shorter root, related term, or switch to get_thread.',
+        "- Never use get_sync_status to claim a source is absent — it reports health, not inventory.",
+      ].join("\n"),
+    },
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({

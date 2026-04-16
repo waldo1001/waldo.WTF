@@ -79,7 +79,8 @@
       "Bash(ssh -G waldonas3)",
       "Bash(getent hosts *)",
       "Bash(dscacheutil -q host -a name waldonas3)",
-      "Bash(tailscale status *)"
+      "Bash(tailscale status *)",
+      "Read(//Users/waldo/.claude/**)"
     ],
     "additionalDirectories": [
       "/tmp",

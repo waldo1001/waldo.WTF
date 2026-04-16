@@ -36,8 +36,11 @@ export interface GetThreadResult {
 
 export const GET_THREAD_TOOL = {
   name: "get_thread",
-  description:
+  description: [
     "Return every message in a conversation (Teams chat) ordered oldest→newest. Pass the `threadId` field from a prior `search` / `get_recent_activity` result. Read-only.",
+    "",
+    'Prefer this over search when the user references a specific person or conversation by name ("did my wife send me...", "what did Gunter say about..."). A thread dump of ~50-200 messages is cheap and avoids the tokenization/language pitfalls of full-text search. Use search to find threads; use get_thread to read them.',
+  ].join("\n"),
   inputSchema: {
     type: "object",
     properties: {

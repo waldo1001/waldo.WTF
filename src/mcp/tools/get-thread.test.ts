@@ -212,4 +212,10 @@ describe("handleGetThread", () => {
     });
     expect(result.messages.map((m) => m.snippet)).toEqual(["first", "second"]);
   });
+
+  it("description recommends get_thread over search for known persons", () => {
+    expect(GET_THREAD_TOOL.description).toContain(
+      "Prefer this over search",
+    );
+  });
 });

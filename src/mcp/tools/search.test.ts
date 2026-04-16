@@ -214,4 +214,10 @@ describe("handleSearch", () => {
     expect(SEARCH_TOOL.inputSchema.type).toBe("object");
     expect(SEARCH_TOOL.inputSchema.required).toContain("query");
   });
+
+  it("description includes multilingual search guidance", () => {
+    expect(SEARCH_TOOL.description).toContain("Language matters");
+    expect(SEARCH_TOOL.description).toContain("spaghettisaus");
+    expect(SEARCH_TOOL.description).toContain("Empty results are not proof of absence");
+  });
 });
