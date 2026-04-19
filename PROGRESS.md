@@ -104,12 +104,12 @@ Scaffold **in-place** in this repo (`/Users/waldo/SourceCode/Community/waldo.WTF
 ### Retrofit — `rawJson` population ✅ (2026-04-13)
 - [x] `syncInbox` + `syncTeams` mappers now stringify the raw DTO into `Message.rawJson` on upsert, closing the brief §4.10 insurance-policy gap. Column existed since Weekend 2 but sync writers never set it; pre-retrofit rows remain `rawJson=NULL` until delta resync naturally overwrites them (no migration). Plan: [docs/plans/fix-raw-json-population.md](docs/plans/fix-raw-json-population.md).
 
-- [ ] Remaining Microsoft accounts logged in (iFacto, customer tenants, personal) — uses `tsx src/cli.ts --add-account` (Slice 1)
-- [ ] Open Q: do all 4 support delegated `Mail.Read` without admin consent?
-- [ ] Teams source: `/me/chats/getAllMessages` with delta
-- [ ] Teams quirks: chat vs channel, reply threading, mentions
-- [ ] Claude Desktop system prompt: "always check all accounts + both sources"
-- [ ] Live with it for a week, collect frustrations below
+- [x] Remaining Microsoft accounts logged in (iFacto, customer tenants, personal) — uses `tsx src/cli.ts --add-account` (Slice 1) ✅ (2026-04-19)
+- [x] Open Q: do all 4 support delegated `Mail.Read` without admin consent? ✅ (2026-04-19) — resolved in practice by completing the logins above
+- [x] Teams source: `/me/chats/getAllMessages` with delta — superseded by the endpoint rework below; delegated `getAllMessages/delta` returns 412, so `/me/chats` + per-chat messages shipped instead
+- [x] Teams quirks: chat vs channel, reply threading, mentions — shipped as `chatType` / `replyToId` / `mentions` in schema v3 and all three MCP tool projections (Weekend 4 slice 2 + slice 6)
+- [x] Claude Desktop system prompt: "always check all accounts + both sources" — [docs/user-guide.md §3](docs/user-guide.md)
+- [x] Live with it for a week, collect frustrations below ✅ (2026-04-19) — smoke-tested across real accounts + Teams + Outlook, no new frustrations surfaced beyond the Teams 412 (already fixed)
 
 ### Teams endpoint rework — slice 1 ✅ (2026-04-13)
 - [x] Schema v4 `chat_cursors` table + `MessageStore.getChatCursor` / `setChatCursor` / `listChatCursors` on both impls. Storage-only slice; seam reshape + `HttpTeamsClient` rewrite + `syncTeams` rewrite are slice 2. Plan: [docs/plans/teams-endpoint-rework.md](docs/plans/teams-endpoint-rework.md).
@@ -246,6 +246,24 @@ only fixes snippet quality + FTS indexing — enough for Claude to *find*
 and *preview* mail, not yet to read the full body.
 
 Plan: [docs/plans/fix-message-bodies-slice-a-backfill.md](docs/plans/fix-message-bodies-slice-a-backfill.md).
+
+### Slice B — `include_body` on `get_thread` + `search` ✅ (2026-04-19)
+
+- [x] Shared `projectBody` helper
+  ([src/mcp/tools/body-projection.ts](src/mcp/tools/body-projection.ts))
+  — 50k chars/message head-truncation with `bodyTruncated: true` flag,
+  400k chars per-call budget. 5 unit tests.
+- [x] `get_thread` gained `include_body?: boolean`. When true, projects
+  each message's plain-text body; surfaces `bodyBudgetExhausted: true`
+  when the per-call budget runs out mid-list. 6 new tests.
+- [x] `search` gained the same flag with identical semantics. 4 new
+  tests (incl. a budget-exhaustion test against a seeded 10-hit batch).
+- [x] e2e HTTP test confirms bodies round-trip through the MCP SDK
+  transport.
+- [x] 480 tests green, coverage ≥90% lines/branches on touched files,
+  `/security-scan` clean.
+
+Plan: [docs/plans/fix-message-bodies-slice-b-include-body.md](docs/plans/fix-message-bodies-slice-b-include-body.md).
 
 ---
 

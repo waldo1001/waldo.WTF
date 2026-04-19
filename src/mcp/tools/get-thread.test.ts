@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { FakeClock } from "../../testing/fake-clock.js";
 import { InMemoryMessageStore } from "../../testing/in-memory-message-store.js";
 import type { Message } from "../../store/types.js";
+import {
+  MAX_BODY_CHARS,
+  TRUNCATION_SENTINEL,
+} from "./body-projection.js";
 import { InvalidParamsError } from "./get-recent-activity.js";
 import {
   GET_THREAD_TOOL,
@@ -217,5 +221,160 @@ describe("handleGetThread", () => {
     expect(GET_THREAD_TOOL.description).toContain(
       "Prefer this over search",
     );
+  });
+
+  it("truncates a single oversized body without affecting other messages", async () => {
+    const big = "x".repeat(MAX_BODY_CHARS + 200);
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mk({
+            id: "teams:a@example.test:1",
+            threadId: "chat-1",
+            sentAt: new Date("2026-04-13T10:00:00Z"),
+            body: "short a",
+          }),
+          mk({
+            id: "teams:a@example.test:2",
+            threadId: "chat-1",
+            sentAt: new Date("2026-04-13T10:05:00Z"),
+            body: big,
+          }),
+          mk({
+            id: "teams:a@example.test:3",
+            threadId: "chat-1",
+            sentAt: new Date("2026-04-13T10:10:00Z"),
+            body: "short c",
+          }),
+        ],
+      },
+    });
+    const result = await handleGetThread(store, clock, {
+      thread_id: "chat-1",
+      include_body: true,
+    });
+    expect(result.messages[0]?.bodyTruncated).toBeUndefined();
+    expect(result.messages[0]?.body).toBe("short a");
+    expect(result.messages[1]?.bodyTruncated).toBe(true);
+    expect(result.messages[1]?.body?.endsWith(TRUNCATION_SENTINEL)).toBe(true);
+    expect(result.messages[2]?.bodyTruncated).toBeUndefined();
+    expect(result.messages[2]?.body).toBe("short c");
+    expect(result.bodyBudgetExhausted).toBeUndefined();
+  });
+
+  it("projects body on every message when include_body is true and bodies fit", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mk({
+            id: "teams:a@example.test:1",
+            threadId: "chat-1",
+            sentAt: new Date("2026-04-13T10:00:00Z"),
+            body: "first message body",
+          }),
+          mk({
+            id: "teams:a@example.test:2",
+            threadId: "chat-1",
+            sentAt: new Date("2026-04-13T10:05:00Z"),
+            body: "second message body",
+          }),
+          mk({
+            id: "teams:a@example.test:3",
+            threadId: "chat-1",
+            sentAt: new Date("2026-04-13T10:10:00Z"),
+            body: "third message body",
+          }),
+        ],
+      },
+    });
+    const result = await handleGetThread(store, clock, {
+      thread_id: "chat-1",
+      include_body: true,
+    });
+    expect(result.count).toBe(3);
+    expect(result.messages.map((m) => m.body)).toEqual([
+      "first message body",
+      "second message body",
+      "third message body",
+    ]);
+    expect(result.messages.every((m) => m.bodyTruncated === undefined)).toBe(
+      true,
+    );
+    expect(result.bodyBudgetExhausted).toBeUndefined();
+  });
+
+  it("marks bodyBudgetExhausted when cumulative bodies exceed the per-call budget", async () => {
+    const chunk = "y".repeat(MAX_BODY_CHARS);
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: Array.from({ length: 10 }, (_, i) =>
+          mk({
+            id: `teams:a@example.test:${i + 1}`,
+            threadId: "chat-1",
+            sentAt: new Date(`2026-04-13T10:${String(i).padStart(2, "0")}:00Z`),
+            body: chunk,
+          }),
+        ),
+      },
+    });
+    const result = await handleGetThread(store, clock, {
+      thread_id: "chat-1",
+      include_body: true,
+    });
+    expect(result.count).toBe(10);
+    expect(result.bodyBudgetExhausted).toBe(true);
+    const withBody = result.messages.filter((m) => m.body !== undefined);
+    const withoutBody = result.messages.filter((m) => m.body === undefined);
+    expect(withBody.length).toBeGreaterThan(0);
+    expect(withoutBody.length).toBeGreaterThan(0);
+    expect(withBody.length + withoutBody.length).toBe(10);
+  });
+
+  it("defaults to include_body=false when the flag is omitted", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mk({
+            id: "teams:a@example.test:1",
+            threadId: "chat-1",
+            body: "should not appear",
+          }),
+        ],
+      },
+    });
+    const result = await handleGetThread(store, clock, {
+      thread_id: "chat-1",
+    });
+    expect(result.messages[0]?.body).toBeUndefined();
+    expect(result.bodyBudgetExhausted).toBeUndefined();
+  });
+
+  it("omits body when include_body is explicitly false", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mk({
+            id: "teams:a@example.test:1",
+            threadId: "chat-1",
+            body: "should not appear",
+          }),
+        ],
+      },
+    });
+    const result = await handleGetThread(store, clock, {
+      thread_id: "chat-1",
+      include_body: false,
+    });
+    expect(result.messages[0]?.body).toBeUndefined();
+  });
+
+  it("rejects non-boolean include_body with InvalidParamsError", async () => {
+    const store = new InMemoryMessageStore();
+    await expect(
+      handleGetThread(store, clock, {
+        thread_id: "chat-1",
+        include_body: "yes" as unknown as boolean,
+      }),
+    ).rejects.toBeInstanceOf(InvalidParamsError);
   });
 });

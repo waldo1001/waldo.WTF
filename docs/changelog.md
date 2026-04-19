@@ -11,6 +11,11 @@ skill.
 
 ---
 
+## 2026-04-19
+
+- Slice B: added `include_body` parameter to `get_thread` and `search` MCP tools so Claude can read full message bodies on demand. Bodies are head-truncated per message at 50k chars (flagged via `bodyTruncated: true`) and capped at 400k chars per call — later messages are returned without a body and the response carries `bodyBudgetExhausted: true` when the budget runs out. Default remains `false` (snippets only) to protect context.
+- Extracted shared `projectBody` helper at [../src/mcp/tools/body-projection.ts](../src/mcp/tools/body-projection.ts) so the per-message cap and per-call budget accounting are defined in one place.
+
 ## 2026-04-16
 
 - Expanded MCP tool descriptions (`search`, `get_sync_status`, `get_recent_activity`, `get_thread`) with multilingual search guidance and multi-source caveats so agents handle Dutch/English content and WhatsApp ingestion correctly.

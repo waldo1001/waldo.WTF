@@ -1,6 +1,7 @@
 import type { Clock } from "../../clock.js";
 import type { MessageStore } from "../../store/message-store.js";
 import type { ChatType, Message, SearchHit } from "../../store/types.js";
+import { MAX_TOTAL_BODY_CHARS, projectBody } from "./body-projection.js";
 import { InvalidParamsError } from "./get-recent-activity.js";
 
 export const DEFAULT_SEARCH_LIMIT = 20;
@@ -9,6 +10,7 @@ export const MAX_SEARCH_LIMIT = 100;
 export interface SearchParams {
   readonly query: string;
   readonly limit?: number;
+  readonly include_body?: boolean;
 }
 
 export interface ProjectedSearchMessage {
@@ -23,6 +25,8 @@ export interface ProjectedSearchMessage {
   readonly chatType?: ChatType;
   readonly replyToId?: string;
   readonly mentions?: readonly string[];
+  readonly body?: string;
+  readonly bodyTruncated?: true;
 }
 
 export interface ProjectedSearchHit {
@@ -34,6 +38,7 @@ export interface ProjectedSearchHit {
 export interface SearchResult {
   readonly count: number;
   readonly hits: readonly ProjectedSearchHit[];
+  readonly bodyBudgetExhausted?: true;
 }
 
 export const SEARCH_TOOL = {
@@ -44,6 +49,8 @@ export const SEARCH_TOOL = {
     'Language matters. The lake contains messages in multiple languages (notably Dutch and English for Belgian users). FTS5 tokenizes on word boundaries, so compound words in Germanic languages won\'t match their English equivalents — "spaghettisaus" ≠ "spaghetti sauce", "boodschappenlijst" ≠ "shopping list", "verjaardag" ≠ "birthday". When searching for personal, family, or household content, try the user\'s native language first or in parallel. If a query returns zero hits, try: (1) the other language, (2) a root/stem rather than a compound (e.g. "saus" instead of "spaghettisaus"), (3) a related noun from the same context ("gehakt", "ajuin") before concluding the content doesn\'t exist.',
     "",
     "Empty results are not proof of absence. They usually mean the query didn't match the indexed tokens. Widen before concluding.",
+    "",
+    'Pass `include_body: true` only when the user wants the full text of the matched messages (e.g. "read me the mail", "quote what it said"). Otherwise snippets are enough. Bodies are head-truncated per message (flagged with `bodyTruncated: true`) and the response carries `bodyBudgetExhausted: true` when later hits had to be returned without a body to protect context.',
   ].join("\n"),
   inputSchema: {
     type: "object",
@@ -58,6 +65,11 @@ export const SEARCH_TOOL = {
         exclusiveMinimum: 0,
         maximum: MAX_SEARCH_LIMIT,
         description: `Max hits to return. Default ${DEFAULT_SEARCH_LIMIT}, max ${MAX_SEARCH_LIMIT}.`,
+      },
+      include_body: {
+        type: "boolean",
+        description:
+          "If true, project the plain-text body of each hit (head-truncated per message; later hits may be omitted if the per-call budget is exhausted). Default false.",
       },
     },
     required: ["query"],
@@ -88,14 +100,42 @@ export async function handleSearch(
       throw new InvalidParamsError(`limit must be <= ${MAX_SEARCH_LIMIT}`);
     }
   }
+  if (
+    params.include_body !== undefined &&
+    typeof params.include_body !== "boolean"
+  ) {
+    throw new InvalidParamsError("include_body must be a boolean");
+  }
   const hits = await store.searchMessages(query, limit);
+  const includeBody = params.include_body === true;
+  let remaining = MAX_TOTAL_BODY_CHARS;
+  let exhausted = false;
+  const projected = hits.map((h) => {
+    const base = projectCore(h);
+    if (!includeBody) return base;
+    const bp = projectBody(h.message, remaining);
+    if (bp.body === undefined) {
+      if (h.message.body !== undefined) exhausted = true;
+      return base;
+    }
+    remaining -= bp.consumed;
+    return {
+      ...base,
+      message: {
+        ...base.message,
+        body: bp.body,
+        ...(bp.bodyTruncated && { bodyTruncated: bp.bodyTruncated }),
+      },
+    };
+  });
   return {
     count: hits.length,
-    hits: hits.map(project),
+    hits: projected,
+    ...(exhausted && { bodyBudgetExhausted: true as const }),
   };
 }
 
-function project(h: SearchHit): ProjectedSearchHit {
+function projectCore(h: SearchHit): ProjectedSearchHit {
   const m = h.message;
   return {
     message: {

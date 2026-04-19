@@ -7,6 +7,10 @@ import {
   DEFAULT_SEARCH_LIMIT,
   MAX_SEARCH_LIMIT,
 } from "./search.js";
+import {
+  MAX_BODY_CHARS,
+  TRUNCATION_SENTINEL,
+} from "./body-projection.js";
 import { InvalidParamsError } from "./get-recent-activity.js";
 import type { Message } from "../../store/types.js";
 
@@ -219,5 +223,77 @@ describe("handleSearch", () => {
     expect(SEARCH_TOOL.description).toContain("Language matters");
     expect(SEARCH_TOOL.description).toContain("spaghettisaus");
     expect(SEARCH_TOOL.description).toContain("Empty results are not proof of absence");
+  });
+
+  it("rejects non-boolean include_body with InvalidParamsError", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    await expect(
+      handleSearch(store, clock, {
+        query: "hello",
+        include_body: "yes" as unknown as boolean,
+      }),
+    ).rejects.toBeInstanceOf(InvalidParamsError);
+  });
+
+  it("omits body when include_body is false", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [mkMessage({ id: "m1", body: "private text" })],
+      },
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleSearch(store, clock, {
+      query: "private",
+      include_body: false,
+    });
+    expect(result.hits[0]?.message.body).toBeUndefined();
+    expect(result.bodyBudgetExhausted).toBeUndefined();
+  });
+
+  it("projects body on every hit when include_body is true", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mkMessage({ id: "m1", body: "one two three" }),
+          mkMessage({ id: "m2", body: "three four five" }),
+        ],
+      },
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleSearch(store, clock, {
+      query: "three",
+      include_body: true,
+    });
+    const bodies = result.hits.map((h) => h.message.body).sort();
+    expect(bodies).toEqual(["one two three", "three four five"]);
+    expect(result.hits.every((h) => h.message.bodyTruncated === undefined)).toBe(
+      true,
+    );
+    expect(result.bodyBudgetExhausted).toBeUndefined();
+  });
+
+  it("marks bodyBudgetExhausted when cumulative hit bodies exceed the per-call budget", async () => {
+    const token = "needle";
+    const big = token + " " + "z".repeat(MAX_BODY_CHARS - token.length - 1);
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: Array.from({ length: 10 }, (_, i) =>
+          mkMessage({ id: `m${i}`, body: big }),
+        ),
+      },
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleSearch(store, clock, {
+      query: token,
+      include_body: true,
+      limit: 10,
+    });
+    expect(result.count).toBe(10);
+    expect(result.bodyBudgetExhausted).toBe(true);
+    const withBody = result.hits.filter((h) => h.message.body !== undefined);
+    const withoutBody = result.hits.filter((h) => h.message.body === undefined);
+    expect(withBody.length).toBeGreaterThan(0);
+    expect(withoutBody.length).toBeGreaterThan(0);
   });
 });

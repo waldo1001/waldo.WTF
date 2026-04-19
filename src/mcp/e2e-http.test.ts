@@ -366,4 +366,45 @@ describe("MCP HTTP server end-to-end (SQLite + SDK client over HTTP)", () => {
     expect(t.count).toBe(1);
     expect(t.messages[0]?.source).toBe("whatsapp");
   });
+
+  it("returns readable message bodies when include_body=true", async () => {
+    await store.upsertMessages([
+      mkMessage({
+        id: "teams:alice@example.test:body-1",
+        source: "teams",
+        threadId: "chat-body",
+        senderName: "Carol",
+        body: "Full body content we want Claude to quote verbatim.",
+        sentAt: new Date("2026-04-13T09:00:00Z"),
+      }),
+      mkMessage({
+        id: "teams:alice@example.test:body-2",
+        source: "teams",
+        threadId: "chat-body",
+        senderName: "Dave",
+        body: "Second body, also readable end-to-end.",
+        sentAt: new Date("2026-04-13T09:05:00Z"),
+      }),
+    ]);
+    const res = await client.callTool({
+      name: "get_thread",
+      arguments: { thread_id: "chat-body", include_body: true },
+    });
+    const parsed = parse<{
+      count: number;
+      messages: Array<{ id: string; body?: string; bodyTruncated?: boolean }>;
+      bodyBudgetExhausted?: boolean;
+    }>((res.content as Array<{ text: string }>)[0]!.text);
+    expect(parsed.count).toBe(2);
+    expect(parsed.messages[0]?.body).toBe(
+      "Full body content we want Claude to quote verbatim.",
+    );
+    expect(parsed.messages[1]?.body).toBe(
+      "Second body, also readable end-to-end.",
+    );
+    expect(parsed.messages.every((m) => m.bodyTruncated === undefined)).toBe(
+      true,
+    );
+    expect(parsed.bodyBudgetExhausted).toBeUndefined();
+  });
 });

@@ -34,16 +34,21 @@ accounts, ordered `sent_at DESC`, within the last `hours`. Filter by
 Typical prompt: *"What happened in the last 4 hours across all my
 accounts?"*
 
-### `search(query, since?, until?, sources?, accounts?)`
+### `search(query, limit?, include_body?)`
 
 Full-text search via SQLite FTS5 over `thread_name`, `sender_name`,
-`body`. Returns top N ranked matches.
+`body`. Returns top N ranked matches with snippets. Pass
+`include_body: true` when the user wants the full text of the matched
+messages (e.g. *"read me the mail"*); bodies are head-truncated per
+message (50k chars, flagged with `bodyTruncated: true`) and the
+response carries `bodyBudgetExhausted: true` when later hits had to be
+returned without a body to protect context.
 
 Typical prompts:
 - *"Search for any mention of 'Q2 release' in the last month."*
 - *"Find emails from Defrancq about the pricing proposal."*
 
-### `get_thread(thread_id, limit?)`
+### `get_thread(thread_id, limit?, include_body?)`
 
 Pull a full conversation given a `thread_id` returned by one of the
 other tools. Used to get back-and-forth context. Resolves by the
@@ -52,6 +57,10 @@ stored `thread_id` column (oldest→newest, `limit` default 200, max
 conversations** (keyed on Graph's `conversationId`). Outlook rows
 synced before the slice-3 follow-up have `thread_id = NULL` until
 their next delta touch; clear the delta token for a forced resync.
+
+Pass `include_body: true` when the user wants the message text itself
+(e.g. *"what did it say"*, *"summarize"*). Same truncation and budget
+semantics as `search`.
 
 Typical flow: Claude calls `search` → picks a result → calls
 `get_thread` with the result's `thread_id` → reads the full exchange.
