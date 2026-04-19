@@ -262,6 +262,8 @@ Plan: [docs/plans/fix-message-bodies-slice-a-backfill.md](docs/plans/fix-message
   transport.
 - [x] 480 tests green, coverage ≥90% lines/branches on touched files,
   `/security-scan` clean.
+- [x] Live run against the NAS container ✅ (2026-04-19) — deployed
+  from commit `80012e5`, container healthy, initial sync tick started.
 
 Plan: [docs/plans/fix-message-bodies-slice-b-include-body.md](docs/plans/fix-message-bodies-slice-b-include-body.md).
 
