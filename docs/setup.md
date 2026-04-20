@@ -65,6 +65,15 @@ BEARER_TOKEN=generate-a-long-random-hex-string
 # Optional — paths. Defaults shown.
 # WALDO_DB_PATH=./data/lake.db
 # WALDO_AUTH_DIR=./data/auth
+
+# Optional — OAuth 2.1 surface for the MCP endpoint (rolled out across slices).
+# When WALDO_PUBLIC_URL is set, the server mounts /.well-known/oauth-* and
+# POST /oauth/register so claude.ai / Claude mobile can register as a client.
+# Must be the externally reachable URL (https, or http://localhost for dev),
+# no trailing slash. Required for the Tailscale-Funnel deployment.
+# WALDO_PUBLIC_URL=https://waldo-nas.your-tailnet.ts.net
+# WALDO_ADMIN_PASSWORD=  # generate with: openssl rand -hex 24 — gates consent (slice 2+)
+# WALDO_DISABLE_STATIC_BEARER=  # set to true once OAuth is the primary path (slice 4+)
 ```
 
 `loadConfig` throws `ConfigError` listing every missing required key on

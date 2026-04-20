@@ -11,6 +11,16 @@ skill.
 
 ---
 
+## 2026-04-20
+
+- OAuth slice 1: added `.well-known/oauth-authorization-server` (RFC 8414) and `.well-known/oauth-protected-resource` (RFC 9728) discovery documents plus `POST /oauth/register` Dynamic Client Registration (RFC 7591) on the MCP HTTP server. Mounted only when `WALDO_PUBLIC_URL` is set; existing static-bearer auth is untouched. Plan: [plans/oauth-mcp-auth-slice-1-discovery-and-dcr.md](plans/oauth-mcp-auth-slice-1-discovery-and-dcr.md).
+- Schema migration v6 → v7: new `oauth_clients` table. `AuthStore` seam (interface + `SqliteAuthStore` + `InMemoryAuthStore`) added under [../src/auth/oauth/](../src/auth/oauth/) with shared contract test suite.
+- OAuth slice 2: `GET/POST /oauth/authorize` consent UI — validates client, renders HTML form, verifies admin password (scrypt N=16384), issues 10-minute auth code, 302-redirects with `code` + `state`. `verifyPkceS256` (timing-safe S256) and `scryptPasswordHasher` extracted as standalone modules. Schema migration v7 → v8: `oauth_auth_codes` table.
+- OAuth slice 3: `POST /oauth/token` — `authorization_code` grant (PKCE verifier check, issues access + refresh pair) and `refresh_token` grant (rotation: old token invalidated on use). Access TTL 1 h, refresh TTL 30 days. Schema migration v8 → v9: `oauth_access_tokens` table + refresh index.
+- OAuth slice 4: MCP endpoint dual-path auth — accepts valid OAuth access token **or** static bearer (unless `WALDO_DISABLE_STATIC_BEARER=true`). Every 401 with OAuth configured now carries `WWW-Authenticate: Bearer resource_metadata=<publicUrl>/.well-known/oauth-protected-resource` (RFC 6750).
+- OAuth slice 5: `docs/oauth.md` operator guide — setup, curl walkthrough, claude.ai registration steps, admin password rotation, manual SQLite client revocation, troubleshooting table. `.env.example` verified complete.
+- `.env.example` documents four OAuth vars: `WALDO_PUBLIC_URL`, `WALDO_ADMIN_PASSWORD`, `WALDO_DISABLE_STATIC_BEARER` (new in slice 1), and confirms all are optional with clear defaults.
+
 ## 2026-04-19
 
 - Slice B: added `include_body` parameter to `get_thread` and `search` MCP tools so Claude can read full message bodies on demand. Bodies are head-truncated per message at 50k chars (flagged via `bodyTruncated: true`) and capped at 400k chars per call — later messages are returned without a body and the response carries `bodyBudgetExhausted: true` when the budget runs out. Default remains `false` (snippets only) to protect context.

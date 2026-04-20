@@ -6,12 +6,14 @@ import { FakeGraphClient } from "./testing/fake-graph-client.js";
 import { FakeTeamsClient } from "./testing/fake-teams-client.js";
 import { InMemoryFileSystem } from "./testing/in-memory-file-system.js";
 import { InMemoryMessageStore } from "./testing/in-memory-message-store.js";
+import { InMemoryAuthStore } from "./testing/in-memory-auth-store.js";
 import type {
   SetTimerFn,
   TimerHandle,
 } from "./sync/sync-scheduler.js";
 import type { Logger } from "./logger.js";
 import type { Signals } from "./index.js";
+import type { AddressInfo } from "node:net";
 
 const randomPort = (): string =>
   String(40000 + Math.floor(Math.random() * 20000));
@@ -157,6 +159,65 @@ describe("main", () => {
     });
     expect(recent.some((m) => m.source === "whatsapp")).toBe(true);
 
+    await result.shutdown();
+  });
+
+  it("mounts OAuth discovery + DCR routes when WALDO_PUBLIC_URL is set", async () => {
+    const h = makeHarness();
+    const overrides = makeOverrides();
+    const authStore = new InMemoryAuthStore();
+    const result = await main({
+      env: {
+        ...makeEnv(),
+        WALDO_PUBLIC_URL: "https://nas.example.ts.net",
+      },
+      loadDotenv: false,
+      overrides: {
+        ...overrides,
+        authStore,
+        setTimer: h.setTimer,
+        logger: h.logger,
+      },
+    });
+    const addr = result.httpServer.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${addr.port}`;
+
+    const meta = await fetch(
+      `${baseUrl}/.well-known/oauth-authorization-server`,
+    );
+    expect(meta.status).toBe(200);
+    expect(await meta.json()).toMatchObject({
+      issuer: "https://nas.example.ts.net",
+      registration_endpoint: "https://nas.example.ts.net/oauth/register",
+    });
+
+    const reg = await fetch(`${baseUrl}/oauth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ redirect_uris: ["https://claude.ai/cb"] }),
+    });
+    expect(reg.status).toBe(201);
+    const regBody = await reg.json();
+    expect(regBody.client_id).toMatch(/^[0-9a-f]{64}$/);
+    expect(await authStore.getClient(regBody.client_id)).toBeDefined();
+
+    await result.shutdown();
+  });
+
+  it("does not mount OAuth routes when WALDO_PUBLIC_URL is unset", async () => {
+    const h = makeHarness();
+    const overrides = makeOverrides();
+    const result = await main({
+      env: makeEnv(),
+      loadDotenv: false,
+      overrides: { ...overrides, setTimer: h.setTimer, logger: h.logger },
+    });
+    const addr = result.httpServer.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${addr.port}`;
+    const meta = await fetch(
+      `${baseUrl}/.well-known/oauth-authorization-server`,
+    );
+    expect(meta.status).toBe(401);
     await result.shutdown();
   });
 

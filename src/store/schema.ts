@@ -1,6 +1,6 @@
 import type { Database } from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 9;
 
 const MIGRATION_1 = `
 CREATE TABLE IF NOT EXISTS messages (
@@ -105,6 +105,42 @@ ALTER TABLE chat_cursors RENAME COLUMN last_modified_iso TO cursor;
 // or is expected to run via `cli --backfill-bodies`".
 const MIGRATION_6 = `SELECT 1;`;
 
+const MIGRATION_7 = `
+CREATE TABLE IF NOT EXISTS oauth_clients (
+  client_id TEXT PRIMARY KEY,
+  client_name TEXT,
+  redirect_uris_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+`;
+
+const MIGRATION_8 = `
+CREATE TABLE IF NOT EXISTS oauth_auth_codes (
+  code TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES oauth_clients(client_id),
+  redirect_uri TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT 'mcp',
+  code_challenge TEXT NOT NULL,
+  state TEXT,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+`;
+
+const MIGRATION_9 = `
+CREATE TABLE IF NOT EXISTS oauth_access_tokens (
+  access_token TEXT PRIMARY KEY,
+  refresh_token TEXT NOT NULL,
+  client_id TEXT NOT NULL REFERENCES oauth_clients(client_id),
+  scope TEXT NOT NULL DEFAULT 'mcp',
+  access_expires_at INTEGER NOT NULL,
+  refresh_expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_access_tokens_refresh
+  ON oauth_access_tokens(refresh_token);
+`;
+
 export function applyMigrations(db: Database): void {
   const current = (
     db.prepare("PRAGMA user_version").get() as { user_version: number }
@@ -130,6 +166,15 @@ export function applyMigrations(db: Database): void {
     }
     if (current < 6) {
       db.exec(MIGRATION_6);
+    }
+    if (current < 7) {
+      db.exec(MIGRATION_7);
+    }
+    if (current < 8) {
+      db.exec(MIGRATION_8);
+    }
+    if (current < 9) {
+      db.exec(MIGRATION_9);
     }
     db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
   });

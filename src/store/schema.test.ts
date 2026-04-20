@@ -23,7 +23,7 @@ describe("schema / applyMigrations", () => {
     expect(userVersion(db)).toBe(0);
     applyMigrations(db);
     expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
-    expect(CURRENT_SCHEMA_VERSION).toBe(6);
+    expect(CURRENT_SCHEMA_VERSION).toBe(9);
   });
 
   it("creates all four tables and expected indices", () => {
@@ -477,11 +477,11 @@ describe("schema / chat_cursors column rename (migration 5)", () => {
     expect(row.cursor).toBe("2026-04-13T10:00:00.000Z");
   });
 
-  it("is idempotent at v6", () => {
+  it("is idempotent at the current schema version", () => {
     const db = new Database(":memory:");
     applyMigrations(db);
     applyMigrations(db);
-    expect(userVersion(db)).toBe(6);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
   });
 
   it("migrates an existing v5 db to v6 preserving rows and FTS index", () => {
@@ -507,7 +507,7 @@ describe("schema / chat_cursors column rename (migration 5)", () => {
       PRAGMA user_version = 5;
     `);
     applyMigrations(db);
-    expect(userVersion(db)).toBe(6);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
     const row = db.prepare("SELECT id, body FROM messages").get() as {
       id: string;
       body: string;
@@ -517,5 +517,212 @@ describe("schema / chat_cursors column rename (migration 5)", () => {
       .prepare("SELECT rowid FROM messages_fts WHERE messages_fts MATCH 'kangaroo'")
       .all();
     expect(hit).toHaveLength(1);
+  });
+});
+
+describe("schema / oauth_access_tokens (migration 9)", () => {
+  function hasColumn(
+    db: Database.Database,
+    table: string,
+    column: string,
+  ): boolean {
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all() as {
+      name: string;
+    }[];
+    return rows.some((r) => r.name === column);
+  }
+
+  it("creates oauth_access_tokens table on v8→v9", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const tables = objectNames(db, "table");
+    expect(tables).toContain("oauth_access_tokens");
+    expect(hasColumn(db, "oauth_access_tokens", "access_token")).toBe(true);
+    expect(hasColumn(db, "oauth_access_tokens", "refresh_token")).toBe(true);
+    expect(hasColumn(db, "oauth_access_tokens", "client_id")).toBe(true);
+    expect(hasColumn(db, "oauth_access_tokens", "access_expires_at")).toBe(true);
+    expect(hasColumn(db, "oauth_access_tokens", "refresh_expires_at")).toBe(true);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it("oauth_access_tokens PRIMARY KEY rejects duplicate access_token", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    db.prepare(
+      "INSERT INTO oauth_clients (client_id, client_name, redirect_uris_json, created_at) VALUES (?, ?, ?, ?)",
+    ).run("c1", null, '["https://claude.ai/cb"]', 0);
+    const insert = db.prepare(
+      "INSERT INTO oauth_access_tokens (access_token, refresh_token, client_id, scope, access_expires_at, refresh_expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    );
+    insert.run("at-1", "rt-1", "c1", "mcp", 1e12, 1e12, 0);
+    expect(() => insert.run("at-1", "rt-2", "c1", "mcp", 1e12, 1e12, 0)).toThrow();
+  });
+
+  it("v8→v9 preserves oauth_clients and oauth_auth_codes data", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    db.prepare(
+      "INSERT INTO oauth_clients (client_id, client_name, redirect_uris_json, created_at) VALUES (?, ?, ?, ?)",
+    ).run("survivor", null, '["https://claude.ai/cb"]', 0);
+    db.exec("PRAGMA user_version = 8");
+    db.exec("DROP TABLE IF EXISTS oauth_access_tokens");
+    applyMigrations(db);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+    const tables = objectNames(db, "table");
+    expect(tables).toContain("oauth_access_tokens");
+    const n = (
+      db
+        .prepare("SELECT COUNT(*) AS n FROM oauth_clients WHERE client_id = ?")
+        .get("survivor") as { n: number }
+    ).n;
+    expect(n).toBe(1);
+  });
+
+  it("is idempotent at v9 (current schema)", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    applyMigrations(db);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+});
+
+describe("schema / oauth_auth_codes (migration 8)", () => {
+  function hasColumn(
+    db: Database.Database,
+    table: string,
+    column: string,
+  ): boolean {
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all() as {
+      name: string;
+    }[];
+    return rows.some((r) => r.name === column);
+  }
+
+  it("creates oauth_auth_codes table on v7→v8", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const tables = objectNames(db, "table");
+    expect(tables).toContain("oauth_auth_codes");
+    expect(hasColumn(db, "oauth_auth_codes", "code")).toBe(true);
+    expect(hasColumn(db, "oauth_auth_codes", "client_id")).toBe(true);
+    expect(hasColumn(db, "oauth_auth_codes", "redirect_uri")).toBe(true);
+    expect(hasColumn(db, "oauth_auth_codes", "code_challenge")).toBe(true);
+    expect(hasColumn(db, "oauth_auth_codes", "state")).toBe(true);
+    expect(hasColumn(db, "oauth_auth_codes", "expires_at")).toBe(true);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it("oauth_auth_codes PRIMARY KEY rejects duplicate code on raw insert", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    db.prepare(
+      "INSERT INTO oauth_clients (client_id, client_name, redirect_uris_json, created_at) VALUES (?, ?, ?, ?)",
+    ).run("c1", null, '["https://claude.ai/cb"]', 0);
+    const insert = db.prepare(
+      "INSERT INTO oauth_auth_codes (code, client_id, redirect_uri, scope, code_challenge, state, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    );
+    insert.run("code-1", "c1", "https://claude.ai/cb", "mcp", "ch", null, 1e12, 0);
+    expect(() =>
+      insert.run("code-1", "c1", "https://claude.ai/cb", "mcp", "ch", null, 1e12, 0),
+    ).toThrow();
+  });
+
+  it("v7→v8 preserves oauth_clients data", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    db.prepare(
+      "INSERT INTO oauth_clients (client_id, client_name, redirect_uris_json, created_at) VALUES (?, ?, ?, ?)",
+    ).run("survivor", null, '["https://claude.ai/cb"]', 0);
+    db.exec("PRAGMA user_version = 7");
+    db.exec("DROP TABLE IF EXISTS oauth_auth_codes");
+    applyMigrations(db);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+    const n = (
+      db
+        .prepare("SELECT COUNT(*) AS n FROM oauth_clients WHERE client_id = ?")
+        .get("survivor") as { n: number }
+    ).n;
+    expect(n).toBe(1);
+  });
+
+  it("is idempotent at v8 (current schema)", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    applyMigrations(db);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+});
+
+describe("schema / oauth_clients (migration 7)", () => {
+  function hasColumn(
+    db: Database.Database,
+    table: string,
+    column: string,
+  ): boolean {
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all() as {
+      name: string;
+    }[];
+    return rows.some((r) => r.name === column);
+  }
+
+  it("creates oauth_clients table on v6→v7", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const tables = objectNames(db, "table");
+    expect(tables).toContain("oauth_clients");
+    expect(hasColumn(db, "oauth_clients", "client_id")).toBe(true);
+    expect(hasColumn(db, "oauth_clients", "client_name")).toBe(true);
+    expect(hasColumn(db, "oauth_clients", "redirect_uris_json")).toBe(true);
+    expect(hasColumn(db, "oauth_clients", "created_at")).toBe(true);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it("oauth_clients PRIMARY KEY rejects duplicate client_id on raw insert", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const insert = db.prepare(
+      "INSERT INTO oauth_clients (client_id, client_name, redirect_uris_json, created_at) VALUES (?, ?, ?, ?)",
+    );
+    insert.run(
+      "client-1",
+      "Claude",
+      '["https://claude.ai/cb"]',
+      1_700_000_000_000,
+    );
+    expect(() =>
+      insert.run(
+        "client-1",
+        "Other",
+        '["https://other.example/cb"]',
+        1_700_000_000_001,
+      ),
+    ).toThrow();
+  });
+
+  it("upgrades a pre-existing v6 database to v7 preserving messages rows", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    insertMessageRow(db, { id: "before-v7", body: "rows survive v7" });
+    db.exec("PRAGMA user_version = 6");
+    db.exec("DROP TABLE IF EXISTS oauth_clients");
+
+    applyMigrations(db);
+
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+    const tables = objectNames(db, "table");
+    expect(tables).toContain("oauth_clients");
+    const n = (
+      db
+        .prepare("SELECT COUNT(*) AS n FROM messages WHERE id = ?")
+        .get("before-v7") as { n: number }
+    ).n;
+    expect(n).toBe(1);
+  });
+
+  it("is idempotent at the current schema version (from v7 base)", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    applyMigrations(db);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
   });
 });

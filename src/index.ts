@@ -14,6 +14,11 @@ import type { TeamsClient } from "./sources/teams.js";
 import { HttpTeamsClient } from "./sources/http-teams-client.js";
 import { openDatabase } from "./store/open-database.js";
 import { SqliteMessageStore } from "./store/sqlite-message-store.js";
+import type { AuthStore } from "./auth/oauth/auth-store.js";
+import { SqliteAuthStore } from "./auth/oauth/sqlite-auth-store.js";
+import { cryptoRandomIdSource } from "./auth/oauth/ids.js";
+import { loadOAuthConfig } from "./auth/oauth/oauth-config.js";
+import { scryptPasswordHasher } from "./auth/oauth/password.js";
 import {
   SyncScheduler,
   type SetTimerFn,
@@ -34,6 +39,7 @@ export interface MainOverrides {
   readonly graph?: GraphClient;
   readonly teams?: TeamsClient;
   readonly store?: MessageStore;
+  readonly authStore?: AuthStore;
   readonly setTimer?: SetTimerFn;
   readonly logger?: Logger;
   readonly fs?: FileSystem;
@@ -127,10 +133,35 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
     },
   });
 
+  const oauthEnv = env.WALDO_PUBLIC_URL;
+  const oauth =
+    oauthEnv !== undefined && oauthEnv !== ""
+      ? await (async () => {
+          const oauthConfig = loadOAuthConfig(env);
+          const authStore: AuthStore =
+            overrides.authStore ?? new SqliteAuthStore(db!);
+          let adminPasswordHash: string | undefined;
+          if (oauthConfig.adminPassword !== undefined) {
+            adminPasswordHash = await scryptPasswordHasher.hash(
+              oauthConfig.adminPassword,
+            );
+          }
+          return {
+            publicUrl: oauthConfig.publicUrl,
+            authStore,
+            ids: cryptoRandomIdSource,
+            adminPasswordHash,
+            hasher: scryptPasswordHasher,
+            disableStaticBearer: oauthConfig.disableStaticBearer,
+          };
+        })()
+      : undefined;
+
   const httpServer = createMcpHttpServer({
     bearerToken: config.bearerToken,
     store,
     clock,
+    ...(oauth !== undefined ? { oauth } : {}),
   });
   await new Promise<void>((resolve) => {
     httpServer.listen(config.port, config.bindHost, () => resolve());

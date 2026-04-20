@@ -298,7 +298,55 @@ Code slices 1–8 complete 2026-04-15. Plan:
 
 ---
 
-## Weekend 7+ — Use, iterate, blog
+## Weekend 7 — OAuth 2.1 surface for MCP ✅ (2026-04-20)
+
+Plan: [docs/plans/oauth-mcp-auth.md](docs/plans/oauth-mcp-auth.md). Goal: enable claude.ai custom-connector / Claude mobile to register against the publicly reachable Tailscale-Funnel endpoint without the static bearer token.
+
+### Slice 1 — Discovery + DCR + AuthStore seam ✅ (2026-04-20)
+- [x] `.well-known/oauth-authorization-server` (RFC 8414) and `.well-known/oauth-protected-resource` (RFC 9728) discovery routes
+- [x] `POST /oauth/register` Dynamic Client Registration (RFC 7591) — public-client (PKCE-only), `token_endpoint_auth_method: "none"`
+- [x] `AuthStore` seam (interface + `SqliteAuthStore` + `InMemoryAuthStore`) with shared contract test
+- [x] Schema migration v6 → v7 adding `oauth_clients` table
+- [x] Routes mount only when `WALDO_PUBLIC_URL` is set; static-bearer auth untouched
+
+Plan: [docs/plans/oauth-mcp-auth-slice-1-discovery-and-dcr.md](docs/plans/oauth-mcp-auth-slice-1-discovery-and-dcr.md).
+
+### Slice 2 — Consent UI (`GET/POST /oauth/authorize`) ✅ (2026-04-20)
+- [x] `GET /oauth/authorize` validates client_id, redirect_uri, response_type=code, PKCE S256, and renders an HTML consent form
+- [x] `POST /oauth/authorize` verifies admin password (scrypt), issues a 10-minute auth code, 302-redirects to `redirect_uri?code=…&state=…`
+- [x] 401 HTML on wrong password; 503 JSON when `WALDO_ADMIN_PASSWORD` is not configured
+- [x] `scryptPasswordHasher` (N=16384, r=8, p=1, keyLen=64) + `PlaintextPasswordHasher` test fake
+- [x] `verifyPkceS256` helper (timing-safe S256 check)
+- [x] Schema migration v7 → v8 adding `oauth_auth_codes` table
+
+Plan: [docs/plans/oauth-mcp-auth-slice-2-authorize.md](docs/plans/oauth-mcp-auth-slice-2-authorize.md).
+
+### Slice 3 — Token endpoint (`POST /oauth/token`) ✅ (2026-04-20)
+- [x] `authorization_code` grant: consumes auth code, verifies PKCE verifier, issues access + refresh token pair
+- [x] `refresh_token` grant: rotates pair (old refresh token invalidated on use)
+- [x] Access token TTL 1 h; refresh token TTL 30 days
+- [x] Schema migration v8 → v9 adding `oauth_access_tokens` table (+ refresh index)
+
+Plan: [docs/plans/oauth-mcp-auth-slice-3-token.md](docs/plans/oauth-mcp-auth-slice-3-token.md).
+
+### Slice 4 — MCP endpoint access-token guard ✅ (2026-04-20)
+- [x] Dual-path auth: valid OAuth access token **or** static bearer (unless `WALDO_DISABLE_STATIC_BEARER=true`)
+- [x] `WWW-Authenticate: Bearer resource_metadata=<publicUrl>/.well-known/oauth-protected-resource` on every 401 when OAuth is configured
+- [x] `WALDO_DISABLE_STATIC_BEARER` config flag wired end-to-end (`oauth-config.ts` → `index.ts` → `http-server.ts`)
+
+Plan: [docs/plans/oauth-mcp-auth-slice-4-resource-guard.md](docs/plans/oauth-mcp-auth-slice-4-resource-guard.md).
+
+### Slice 5 — Operator guide ✅ (2026-04-20)
+- [x] `docs/oauth.md` — setup, curl walkthrough, claude.ai registration, admin password rotation, manual client revocation via SQLite, troubleshooting table
+- [x] `.env.example` verified complete (all four OAuth vars documented)
+
+Plan: [docs/plans/oauth-mcp-auth-slice-5-live-smoke.md](docs/plans/oauth-mcp-auth-slice-5-live-smoke.md).
+
+> **Live smoke** (claude.ai connector registration + first mobile query) is a manual step — see [docs/oauth.md §3](oauth.md#3-connecting-claudeai).
+
+---
+
+## Weekend 8+ — Use, iterate, blog
 
 - [ ] One real week of daily use
 - [ ] Blog post on waldo.be
