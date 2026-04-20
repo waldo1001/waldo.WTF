@@ -63,6 +63,12 @@ done, **cite the test names that cover each requirement**.
   [changelog](docs/changelog.md), [setup](docs/setup.md),
   [getting-started](docs/getting-started.md), and [user guide](docs/user-guide.md)
   in sync with reality.
+- [`/local-smoke`](.claude/skills/local-smoke/SKILL.md) — invoke before
+  `/deploy-nas` (or whenever the user says "smoke test"). Boots
+  [src/index.ts](src/index.ts) against a throwaway SQLite on a
+  non-default port and exercises the CLI + `tools/list`. Catches
+  boot-path regressions that `npm test` can't — env wiring, real
+  SQLite open, steering-store construction, OAuth conditional mount.
 - [`/deploy-nas`](.claude/skills/deploy-nas/SKILL.md) — invoke when
   shipping code changes to the running Synology container, or when
   running any one-shot data migration from [docs/migrations/](docs/migrations/).
@@ -71,9 +77,9 @@ done, **cite the test names that cover each requirement**.
   registered migration; `--dry-run` prints the plan without executing.
 
 A task is not done until all three coding skills (tdd-cycle,
-security-scan, docs-update) have been run. `/deploy-nas` is a separate
-operator workflow, invoked when you want to deploy — not part of the
-coding-task definition-of-done.
+security-scan, docs-update) have been run. `/local-smoke` and
+`/deploy-nas` are separate operator workflows, invoked when you want
+to ship — not part of the coding-task definition-of-done.
 
 GitHub Copilot uses the **same** toolchain via
 [.github/copilot-instructions.md](.github/copilot-instructions.md), which
@@ -84,6 +90,16 @@ sync when the toolchain structure changes (new skill, renamed doc).
 
 - Read-only forever. No write tools in the MCP surface, and no tests that
   exercise writes against real Microsoft Graph — Graph is always faked.
+  **Scoped exception**: `add_steering_rule`, `remove_steering_rule`, and
+  `set_steering_enabled` write to the local `steering_rules` table only.
+  No Graph call, no external blast radius — a compromised bearer can at
+  worst hide messages from the user, fully reversible via
+  `remove_steering_rule`. Everything else (messages, sync_state,
+  sync_log, accounts, auth tables) is still off-limits to MCP tools.
+- Brief §10 resolution: steering rules are applied at **read** time,
+  never at sync time. Default behavior is hard-exclude on
+  `get_recent_activity` + `search`; `include_muted: true` is the escape
+  hatch. `get_thread` and `list_accounts` are never filtered.
 - SQLite uses WAL mode. Tests use in-memory (`:memory:`) or a tmp-dir db with
   WAL, never the real `lake.db`.
 - Clock and filesystem are injected, never imported directly in business logic.

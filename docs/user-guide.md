@@ -378,6 +378,79 @@ each, archives to `WALDO_WHATSAPP_ARCHIVE_PATH/YYYY-MM/`, and exits.
 | `WALDO_WHATSAPP_ARCHIVE_PATH` | `~/WhatsAppArchive` | Where imported files are moved |
 | `WALDO_WHATSAPP_ACCOUNT` | `whatsapp-local` | `account` column value for imported rows |
 
+## 6e. Muting noisy senders (steering rules)
+
+`get_recent_activity` and `search` hide messages that match **steering
+rules** by default. Rules are stored in the lake's `steering_rules`
+table; sync is never touched — all messages are still in `messages`,
+you just don't see them on the default read path. Think of steering as
+a *lens*, not a filter: every muted row is one `include_muted: true`
+away from returning.
+
+### Via Claude Desktop (the expected path)
+
+Talk to it. When Claude surfaces something low-signal, say:
+
+> *Not interested in mails from DevOps.*
+
+Claude calls `add_steering_rule(rule_type="sender_domain",
+pattern="devops.example.com", reason="too noisy")`. Next `search` or
+`get_recent_activity` skips those rows and returns `muted_count` + a
+`steering_hint` telling Claude how many were hidden. Claude can also:
+
+- `get_steering()` to list all rules (enabled + disabled).
+- `remove_steering_rule(id)` to drop one.
+- `set_steering_enabled(id, enabled)` to temporarily un-mute without
+  deleting the rule.
+
+`get_thread` and `list_accounts` are **not** filtered — once you open a
+thread you see everything in it, and account listing is metadata.
+
+### Via the CLI (for bulk setup and recovery)
+
+Same store, different frontend. Useful for scripting, bulk imports,
+and recovery outside a chat session.
+
+```sh
+# add a rule — pick the right type
+npm run dev -- --steer-add-sender  "noise@example.com"
+npm run dev -- --steer-add-domain  "marketing.example.com" --reason "newsletters"
+npm run dev -- --steer-add-thread  "AAMkA...thread-id"
+npm run dev -- --steer-add-thread-name "[Jira]"
+npm run dev -- --steer-add-body    "sync fail"
+
+# optional modifiers narrow a rule to one source / account:
+npm run dev -- --steer-add-sender  "bob@example.com" \
+    --source outlook --account me@example.com
+
+# list / toggle / remove
+npm run dev -- --steer-list
+npm run dev -- --steer-disable 3
+npm run dev -- --steer-enable  3
+npm run dev -- --steer-remove  3
+```
+
+Rule types:
+
+| Type | Matches | Notes |
+|---|---|---|
+| `sender_email` | exact `sender_email` | lowercased |
+| `sender_domain` | `sender_email` ends with `@<pattern>` | reject patterns containing `@` |
+| `thread_id` | exact `thread_id` | mute one conversation |
+| `thread_name_contains` | case-insensitive substring on `thread_name` | good for `[Jira]`, `out of office` |
+| `body_contains` | FTS5 match on the body | single word or phrase |
+
+### Why add-tools on a "read-only" MCP surface
+
+Project brief §9 says no MCP write tools, so a compromised bearer
+can't send, reply, delete, or archive across four Microsoft accounts.
+Steering rules are a scoped exception: they write only to
+`steering_rules` in the local SQLite lake — no Graph API call, no
+external blast radius. The worst an attacker can do is hide messages
+from you, which is fully reversible by calling `remove_steering_rule`.
+That carve-out is documented in [CLAUDE.md](../CLAUDE.md) so the
+constraint stays unambiguous.
+
 ## 7. Deployment to Synology NAS (Weekend 5+)
 
 See [setup.md §9](setup.md). Short version: Container Manager +

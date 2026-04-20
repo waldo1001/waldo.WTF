@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { createMcpHttpServer } from "./http-server.js";
 import { InMemoryMessageStore } from "../testing/in-memory-message-store.js";
+import { InMemorySteeringStore } from "../testing/in-memory-steering-store.js";
 import { InMemoryAuthStore } from "../testing/in-memory-auth-store.js";
 import { FakeClock } from "../testing/fake-clock.js";
 import type { RandomIdSource } from "../auth/oauth/ids.js";
@@ -27,7 +28,12 @@ describe("createMcpHttpServer (HTTP shell around SDK transport)", () => {
   beforeEach(async () => {
     store = new InMemoryMessageStore();
     clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
-    server = createMcpHttpServer({ bearerToken: BEARER, store, clock });
+    server = createMcpHttpServer({
+      bearerToken: BEARER,
+      store,
+      steering: new InMemorySteeringStore(),
+      clock,
+    });
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", () => resolve());
     });
@@ -112,6 +118,7 @@ describe("createMcpHttpServer + OAuth discovery & DCR routes", () => {
     server = createMcpHttpServer({
       bearerToken: BEARER,
       store,
+      steering: new InMemorySteeringStore(),
       clock,
       oauth: {
         publicUrl: PUBLIC_URL,
@@ -237,6 +244,7 @@ describe("createMcpHttpServer + OAuth authorize routes", () => {
     server = createMcpHttpServer({
       bearerToken: BEARER,
       store,
+      steering: new InMemorySteeringStore(),
       clock,
       oauth: {
         publicUrl: PUBLIC_URL,
@@ -323,6 +331,7 @@ describe("createMcpHttpServer + OAuth authorize routes", () => {
     const bareServer = createMcpHttpServer({
       bearerToken: BEARER,
       store,
+      steering: new InMemorySteeringStore(),
       clock,
     });
     await new Promise<void>((resolve) => {
@@ -377,6 +386,7 @@ describe("createMcpHttpServer + OAuth token route", () => {
     server = createMcpHttpServer({
       bearerToken: BEARER,
       store,
+      steering: new InMemorySteeringStore(),
       clock,
       oauth: {
         publicUrl: PUBLIC_URL,
@@ -478,6 +488,7 @@ describe("createMcpHttpServer + OAuth resource guard", () => {
     server = createMcpHttpServer({
       bearerToken: BEARER,
       store,
+      steering: new InMemorySteeringStore(),
       clock,
       oauth: {
         publicUrl: PUBLIC_URL,

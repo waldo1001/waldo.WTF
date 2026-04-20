@@ -290,11 +290,11 @@ Code slices 1–8 complete 2026-04-15. Plan:
 - [x] Archive imported files → `~/WhatsAppArchive/YYYY-MM/` with
   `-1`/`-2` collision suffixes ✅ (2026-04-15) —
   [src/sync/import-whatsapp.ts](src/sync/import-whatsapp.ts).
-- [ ] Live smoke on the Mac: drop a real export, watcher imports it,
-  Claude Desktop's `search` finds it.
-- [ ] Tailscale on Android (manual)
-- [ ] Claude mobile connector → remote MCP endpoint (manual)
-- [ ] First *"wtf is going on?"* from the train 🚄
+- [x] Live smoke on the Mac: drop a real export, watcher imports it,
+  Claude Desktop's `search` finds it. ✅ (2026-04-20)
+- [x] Tailscale on Android (manual) ✅ (2026-04-20)
+- [x] Claude mobile connector → remote MCP endpoint (manual) ✅ (2026-04-20)
+- [x] First *"wtf is going on?"* from the train 🚄 ✅ (2026-04-20)
 
 ---
 
@@ -348,6 +348,7 @@ Plan: [docs/plans/oauth-mcp-auth-slice-5-live-smoke.md](docs/plans/oauth-mcp-aut
 
 ## Weekend 8+ — Use, iterate, blog
 
+- [x] **Steering rules** ✅ (2026-04-20) — hard-exclude-by-default on `get_recent_activity` + `search`, with `include_muted` escape hatch. New `steering_rules` table (schema v9→v10), `SteeringStore` contract (sqlite + in-memory), `buildSteeringPredicate` shared SQL-and-JS filter. Four new MCP tools (`get_steering`, `add_steering_rule`, `remove_steering_rule`, `set_steering_enabled`) so Claude can mute in-chat; eight new CLI flags (`--steer-*`) for scriptable management. Five rule types: `sender_email`, `sender_domain`, `thread_id`, `thread_name_contains`, `body_contains` (FTS5). `get_thread` + `list_accounts` unaffected. Plan: [docs/plans/steering-rules.md](docs/plans/steering-rules.md). Five /tdd-cycle runs, all green; coverage 99.81% / 97.16%.
 - [ ] One real week of daily use
 - [ ] Blog post on waldo.be
 - [ ] Days of Knowledge 2026 lightning talk?

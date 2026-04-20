@@ -3,18 +3,22 @@ import {
   DEFAULT_GET_THREAD_LIMIT,
   type DeleteResult,
   type GetRecentMessagesOptions,
+  type GetRecentMessagesResult,
   type GetThreadOptions,
   type MessageStore,
+  type SearchMessagesOptions,
+  type SearchMessagesResult,
   type UpsertResult,
 } from "./message-store.js";
 import { applyMigrations } from "./schema.js";
+import { buildSteeringPredicate } from "./steering-filter.js";
+import type { SteeringStore } from "./steering-store.js";
 import type {
   AccountRecord,
   ChatCursorEntry,
   ChatType,
   Message,
   MessageSource,
-  SearchHit,
   SyncLogEntry,
   SyncStateEntry,
   SyncStatusRow,
@@ -77,12 +81,14 @@ export class SqliteMessageStore implements MessageStore {
     [string, string | null, string | null, number]
   >;
   private readonly listAccountsStmt: Statement<[]>;
-  private readonly searchStmt: Statement<[string, number]>;
   private readonly getChatCursorStmt: Statement<[string, string]>;
   private readonly setChatCursorStmt: Statement<[string, string, string]>;
   private readonly listChatCursorsStmt: Statement<[string]>;
 
-  constructor(private readonly db: Database) {
+  constructor(
+    private readonly db: Database,
+    private readonly steeringStore?: SteeringStore,
+  ) {
     applyMigrations(db);
 
     this.existsStmt = db.prepare("SELECT 1 FROM messages WHERE id = ?");
@@ -142,19 +148,6 @@ export class SqliteMessageStore implements MessageStore {
     this.listAccountsStmt = db.prepare(
       "SELECT username, display_name, tenant_id, added_at FROM accounts ORDER BY added_at ASC, username ASC",
     );
-    this.searchStmt = db.prepare(`
-      SELECT m.id, m.source, m.account, m.native_id,
-             m.thread_id, m.thread_name, m.sender_name, m.sender_email,
-             m.sent_at, m.imported_at, m.is_read, m.body, m.body_html, m.raw_json,
-             m.chat_type, m.reply_to_id, m.mentions_json,
-             snippet(messages_fts, 0, '[', ']', '…', 16) AS snippet,
-             bm25(messages_fts) AS rank
-      FROM messages_fts
-      JOIN messages m ON m.rowid = messages_fts.rowid
-      WHERE messages_fts MATCH ?
-      ORDER BY rank
-      LIMIT ?
-    `);
     this.getChatCursorStmt = db.prepare(
       "SELECT cursor FROM chat_cursors WHERE account = ? AND chat_id = ?",
     );
@@ -312,34 +305,66 @@ export class SqliteMessageStore implements MessageStore {
 
   async getRecentMessages(
     opts: GetRecentMessagesOptions,
-  ): Promise<readonly Message[]> {
-    const clauses: string[] = ["sent_at >= ?"];
-    const params: (string | number)[] = [opts.since.getTime()];
+  ): Promise<GetRecentMessagesResult> {
+    const baseClauses: string[] = ["m.sent_at >= ?"];
+    const baseParams: (string | number)[] = [opts.since.getTime()];
     if (opts.sources && opts.sources.length > 0) {
-      clauses.push(
-        `source IN (${opts.sources.map(() => "?").join(", ")})`,
+      baseClauses.push(
+        `m.source IN (${opts.sources.map(() => "?").join(", ")})`,
       );
-      params.push(...opts.sources);
+      baseParams.push(...opts.sources);
     }
     if (opts.accounts && opts.accounts.length > 0) {
-      clauses.push(
-        `account IN (${opts.accounts.map(() => "?").join(", ")})`,
+      baseClauses.push(
+        `m.account IN (${opts.accounts.map(() => "?").join(", ")})`,
       );
-      params.push(...opts.accounts);
+      baseParams.push(...opts.accounts);
     }
-    params.push(opts.limit);
+
+    const predicate = await this.loadPredicate(opts.includeMuted);
+
+    let mutedCount = 0;
+    if (predicate.sqlFragment !== null) {
+      const countSql = `
+        SELECT COUNT(*) AS n FROM messages m
+        WHERE ${baseClauses.join(" AND ")} AND ${predicate.sqlFragment}
+      `;
+      const countRow = this.db
+        .prepare(countSql)
+        .get(...baseParams, ...predicate.params) as { n: number };
+      mutedCount = countRow.n;
+    }
+
+    const dataClauses = [...baseClauses];
+    const dataParams = [...baseParams];
+    if (predicate.sqlFragment !== null) {
+      dataClauses.push(`NOT ${predicate.sqlFragment}`);
+      dataParams.push(...predicate.params);
+    }
+    dataParams.push(opts.limit);
+
     const sql = `
-      SELECT id, source, account, native_id,
-             thread_id, thread_name, sender_name, sender_email,
-             sent_at, imported_at, is_read, body, body_html, raw_json,
-             chat_type, reply_to_id, mentions_json
-      FROM messages
-      WHERE ${clauses.join(" AND ")}
-      ORDER BY sent_at DESC, id DESC
+      SELECT m.id, m.source, m.account, m.native_id,
+             m.thread_id, m.thread_name, m.sender_name, m.sender_email,
+             m.sent_at, m.imported_at, m.is_read, m.body, m.body_html, m.raw_json,
+             m.chat_type, m.reply_to_id, m.mentions_json
+      FROM messages m
+      WHERE ${dataClauses.join(" AND ")}
+      ORDER BY m.sent_at DESC, m.id DESC
       LIMIT ?
     `;
-    const rows = this.db.prepare(sql).all(...params) as MessageRow[];
-    return rows.map(fromRow);
+    const rows = this.db.prepare(sql).all(...dataParams) as MessageRow[];
+    return { messages: rows.map(fromRow), mutedCount };
+  }
+
+  private async loadPredicate(
+    includeMuted: boolean | undefined,
+  ): Promise<ReturnType<typeof buildSteeringPredicate>> {
+    if (includeMuted === true || this.steeringStore === undefined) {
+      return buildSteeringPredicate([]);
+    }
+    const rules = await this.steeringStore.listRules();
+    return buildSteeringPredicate(rules);
   }
 
   async getSyncStatus(now: Date): Promise<readonly SyncStatusRow[]> {
@@ -408,18 +433,59 @@ export class SqliteMessageStore implements MessageStore {
   async searchMessages(
     query: string,
     limit: number,
-  ): Promise<readonly SearchHit[]> {
+    opts?: SearchMessagesOptions,
+  ): Promise<SearchMessagesResult> {
     const phrase = toFts5Phrase(query);
-    if (phrase === null) return [];
-    const rows = this.searchStmt.all(phrase, limit) as (MessageRow & {
+    if (phrase === null) return { hits: [], mutedCount: 0 };
+
+    const predicate = await this.loadPredicate(opts?.includeMuted);
+
+    let mutedCount = 0;
+    if (predicate.sqlFragment !== null) {
+      const countSql = `
+        SELECT COUNT(*) AS n
+        FROM messages_fts
+        JOIN messages m ON m.rowid = messages_fts.rowid
+        WHERE messages_fts MATCH ? AND ${predicate.sqlFragment}
+      `;
+      const countRow = this.db
+        .prepare(countSql)
+        .get(phrase, ...predicate.params) as { n: number };
+      mutedCount = countRow.n;
+    }
+
+    const whereParts = ["messages_fts MATCH ?"];
+    const sqlParams: (string | number)[] = [phrase];
+    if (predicate.sqlFragment !== null) {
+      whereParts.push(`NOT ${predicate.sqlFragment}`);
+      sqlParams.push(...predicate.params);
+    }
+    sqlParams.push(limit);
+    const sql = `
+      SELECT m.id, m.source, m.account, m.native_id,
+             m.thread_id, m.thread_name, m.sender_name, m.sender_email,
+             m.sent_at, m.imported_at, m.is_read, m.body, m.body_html, m.raw_json,
+             m.chat_type, m.reply_to_id, m.mentions_json,
+             snippet(messages_fts, 0, '[', ']', '…', 16) AS snippet,
+             bm25(messages_fts) AS rank
+      FROM messages_fts
+      JOIN messages m ON m.rowid = messages_fts.rowid
+      WHERE ${whereParts.join(" AND ")}
+      ORDER BY rank
+      LIMIT ?
+    `;
+    const rows = this.db.prepare(sql).all(...sqlParams) as (MessageRow & {
       snippet: string;
       rank: number;
     })[];
-    return rows.map((r) => ({
-      message: fromRow(r),
-      snippet: r.snippet,
-      rank: r.rank,
-    }));
+    return {
+      hits: rows.map((r) => ({
+        message: fromRow(r),
+        snippet: r.snippet,
+        rank: r.rank,
+      })),
+      mutedCount,
+    };
   }
 }
 

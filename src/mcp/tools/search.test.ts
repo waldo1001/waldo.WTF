@@ -273,6 +273,27 @@ describe("handleSearch", () => {
     expect(result.bodyBudgetExhausted).toBeUndefined();
   });
 
+  it("rejects non-boolean include_muted", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    await expect(
+      handleSearch(store, clock, {
+        query: "anything",
+        include_muted: "yes" as unknown as boolean,
+      }),
+    ).rejects.toBeInstanceOf(InvalidParamsError);
+  });
+
+  it("emits a steering_hint when muted_count > 0 and include_muted is false", async () => {
+    const store = new InMemoryMessageStore();
+    // @ts-expect-error — minimal stub to force a non-zero mutedCount without real steering rules
+    store.searchMessages = async () => ({ hits: [], mutedCount: 3 });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const res = await handleSearch(store, clock, { query: "anything" });
+    expect(res.muted_count).toBe(3);
+    expect(res.steering_hint).toMatch(/3 hit\(s\) hidden/);
+  });
+
   it("marks bodyBudgetExhausted when cumulative hit bodies exceed the per-call budget", async () => {
     const token = "needle";
     const big = token + " " + "z".repeat(MAX_BODY_CHARS - token.length - 1);

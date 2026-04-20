@@ -1,11 +1,40 @@
 import { describe, expect, it } from "vitest";
-import type { MessageStore } from "./message-store.js";
+import type {
+  GetRecentMessagesOptions,
+  MessageStore,
+} from "./message-store.js";
 import type {
   AccountRecord,
   Message,
+  SearchHit,
   SyncLogEntry,
   SyncStateEntry,
 } from "./types.js";
+
+async function recentIds(
+  store: MessageStore,
+  opts: GetRecentMessagesOptions,
+): Promise<string[]> {
+  const { messages } = await store.getRecentMessages(opts);
+  return messages.map((m) => m.id);
+}
+
+async function recent(
+  store: MessageStore,
+  opts: GetRecentMessagesOptions,
+): Promise<readonly Message[]> {
+  const { messages } = await store.getRecentMessages(opts);
+  return messages;
+}
+
+async function search(
+  store: MessageStore,
+  query: string,
+  limit: number,
+): Promise<readonly SearchHit[]> {
+  const { hits } = await store.searchMessages(query, limit);
+  return hits;
+}
 
 function msg(overrides: Partial<Message> & Pick<Message, "id">): Message {
   return {
@@ -240,9 +269,11 @@ export function runMessageStoreContract(
       expect(await store.listAccounts()).toEqual([]);
     });
 
-    it("searchMessages returns [] on an empty store", async () => {
+    it("searchMessages returns empty hits on an empty store", async () => {
       const { store } = await factory();
-      expect(await store.searchMessages("anything", 10)).toEqual([]);
+      const res = await store.searchMessages("anything", 10);
+      expect(res.hits).toEqual([]);
+      expect(res.mutedCount).toBe(0);
     });
 
     it("searchMessages finds a message by a body term", async () => {
@@ -251,7 +282,7 @@ export function runMessageStoreContract(
         msg({ id: "1", body: "lorem ipsum dolor" }),
         msg({ id: "2", body: "completely unrelated text" }),
       ]);
-      const hits = await store.searchMessages("ipsum", 10);
+      const hits = await search(store, "ipsum", 10);
       expect(hits.map((h) => h.message.id)).toEqual(["1"]);
     });
 
@@ -260,7 +291,7 @@ export function runMessageStoreContract(
       await store.upsertMessages([
         msg({ id: "1", threadName: "Project Falcon", body: "hello" }),
       ]);
-      const hits = await store.searchMessages("Falcon", 10);
+      const hits = await search(store, "Falcon", 10);
       expect(hits.map((h) => h.message.id)).toEqual(["1"]);
     });
 
@@ -269,7 +300,7 @@ export function runMessageStoreContract(
       await store.upsertMessages([
         msg({ id: "1", senderName: "Alice Example", body: "hello" }),
       ]);
-      const hits = await store.searchMessages("Example", 10);
+      const hits = await search(store, "Example", 10);
       expect(hits.map((h) => h.message.id)).toEqual(["1"]);
     });
 
@@ -282,24 +313,25 @@ export function runMessageStoreContract(
         msg({ id: "4", body: "kangaroo" }),
         msg({ id: "5", body: "kangaroo" }),
       ]);
-      const hits = await store.searchMessages("kangaroo", 2);
+      const hits = await search(store, "kangaroo", 2);
       expect(hits).toHaveLength(2);
     });
 
-    it("searchMessages returns [] for an empty query", async () => {
+    it("searchMessages returns empty hits for an empty query", async () => {
       const { store } = await factory();
       await store.upsertMessages([msg({ id: "1", body: "lorem ipsum" })]);
-      expect(await store.searchMessages("", 10)).toEqual([]);
-      expect(await store.searchMessages("   ", 10)).toEqual([]);
+      expect((await store.searchMessages("", 10)).hits).toEqual([]);
+      expect((await store.searchMessages("   ", 10)).hits).toEqual([]);
     });
 
-    it("getRecentMessages returns [] on an empty store", async () => {
+    it("getRecentMessages returns empty on an empty store", async () => {
       const { store } = await factory();
       const got = await store.getRecentMessages({
         since: new Date("2026-04-13T00:00:00Z"),
         limit: 50,
       });
-      expect(got).toEqual([]);
+      expect(got.messages).toEqual([]);
+      expect(got.mutedCount).toBe(0);
     });
 
     it("getRecentMessages filters out messages older than since", async () => {
@@ -309,11 +341,11 @@ export function runMessageStoreContract(
         msg({ id: "edge", sentAt: new Date("2026-04-13T00:00:00Z") }),
         msg({ id: "new", sentAt: new Date("2026-04-13T09:00:00Z") }),
       ]);
-      const got = await store.getRecentMessages({
+      const ids = await recentIds(store, {
         since: new Date("2026-04-13T00:00:00Z"),
         limit: 50,
       });
-      expect(got.map((m) => m.id).sort()).toEqual(["edge", "new"]);
+      expect(ids.sort()).toEqual(["edge", "new"]);
     });
 
     it("getRecentMessages orders by sentAt DESC with id DESC tiebreak", async () => {
@@ -324,11 +356,11 @@ export function runMessageStoreContract(
         msg({ id: "b", sentAt: ts }),
         msg({ id: "c", sentAt: new Date("2026-04-13T11:00:00Z") }),
       ]);
-      const got = await store.getRecentMessages({
+      const ids = await recentIds(store, {
         since: new Date("2026-04-13T00:00:00Z"),
         limit: 50,
       });
-      expect(got.map((m) => m.id)).toEqual(["c", "b", "a"]);
+      expect(ids).toEqual(["c", "b", "a"]);
     });
 
     it("getRecentMessages filters by sources", async () => {
@@ -338,12 +370,12 @@ export function runMessageStoreContract(
         msg({ id: "2", source: "teams" }),
         msg({ id: "3", source: "whatsapp" }),
       ]);
-      const got = await store.getRecentMessages({
+      const ids = await recentIds(store, {
         since: new Date("2026-04-01T00:00:00Z"),
         sources: ["teams", "whatsapp"],
         limit: 50,
       });
-      expect(got.map((m) => m.id).sort()).toEqual(["2", "3"]);
+      expect(ids.sort()).toEqual(["2", "3"]);
     });
 
     it("getRecentMessages filters by accounts", async () => {
@@ -353,12 +385,12 @@ export function runMessageStoreContract(
         msg({ id: "2", account: "b@example.test" }),
         msg({ id: "3", account: "c@example.test" }),
       ]);
-      const got = await store.getRecentMessages({
+      const ids = await recentIds(store, {
         since: new Date("2026-04-01T00:00:00Z"),
         accounts: ["a@example.test", "c@example.test"],
         limit: 50,
       });
-      expect(got.map((m) => m.id).sort()).toEqual(["1", "3"]);
+      expect(ids.sort()).toEqual(["1", "3"]);
     });
 
     it("getRecentMessages applies sources and accounts together", async () => {
@@ -368,13 +400,13 @@ export function runMessageStoreContract(
         msg({ id: "2", source: "teams", account: "a@example.test" }),
         msg({ id: "3", source: "outlook", account: "b@example.test" }),
       ]);
-      const got = await store.getRecentMessages({
+      const ids = await recentIds(store, {
         since: new Date("2026-04-01T00:00:00Z"),
         sources: ["outlook"],
         accounts: ["a@example.test"],
         limit: 50,
       });
-      expect(got.map((m) => m.id)).toEqual(["1"]);
+      expect(ids).toEqual(["1"]);
     });
 
     it("getSyncStatus on an empty store returns []", async () => {
@@ -570,7 +602,7 @@ export function runMessageStoreContract(
           body: "hi",
         }),
       ]);
-      const got = await store.getRecentMessages({
+      const got = await recent(store, {
         since: new Date("2026-04-01T00:00:00Z"),
         limit: 10,
       });
@@ -585,7 +617,7 @@ export function runMessageStoreContract(
     it("upsertMessages leaves Teams fields undefined when omitted", async () => {
       const { store } = await factory();
       await store.upsertMessages([msg({ id: "plain", body: "plain" })]);
-      const got = await store.getRecentMessages({
+      const got = await recent(store, {
         since: new Date("2026-04-01T00:00:00Z"),
         limit: 10,
       });
@@ -600,7 +632,7 @@ export function runMessageStoreContract(
       await store.upsertMessages([
         msg({ id: "empty-mentions", source: "teams", mentions: [] }),
       ]);
-      const got = await store.getRecentMessages({
+      const got = await recent(store, {
         since: new Date("2026-04-01T00:00:00Z"),
         limit: 10,
       });
@@ -799,11 +831,11 @@ export function runMessageStoreContract(
         msg({ id: "3", sentAt: new Date("2026-04-13T03:00:00Z") }),
         msg({ id: "4", sentAt: new Date("2026-04-13T04:00:00Z") }),
       ]);
-      const got = await store.getRecentMessages({
+      const ids = await recentIds(store, {
         since: new Date("2026-04-01T00:00:00Z"),
         limit: 2,
       });
-      expect(got.map((m) => m.id)).toEqual(["4", "3"]);
+      expect(ids).toEqual(["4", "3"]);
     });
   });
 }

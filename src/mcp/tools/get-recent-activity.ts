@@ -23,6 +23,7 @@ export interface GetRecentActivityParams {
   readonly hours: number;
   readonly sources?: readonly MessageSource[];
   readonly accounts?: readonly string[];
+  readonly include_muted?: boolean;
 }
 
 export interface ProjectedMessage {
@@ -43,6 +44,8 @@ export interface ProjectedMessage {
 export interface GetRecentActivityResult {
   readonly count: number;
   readonly messages: readonly ProjectedMessage[];
+  readonly muted_count: number;
+  readonly steering_hint?: string;
 }
 
 export const GET_RECENT_ACTIVITY_TOOL = {
@@ -71,6 +74,11 @@ export const GET_RECENT_ACTIVITY_TOOL = {
         type: "array",
         items: { type: "string", minLength: 1 },
         description: "Optional account username filter.",
+      },
+      include_muted: {
+        type: "boolean",
+        description:
+          "If true, include messages matching steering rules. Default false (hard-exclude muted items).",
       },
     },
     required: ["hours"],
@@ -106,15 +114,23 @@ export async function handleGetRecentActivity(
   }
 
   const since = new Date(clock.now().getTime() - hours * 3600 * 1000);
-  const rows = await store.getRecentMessages({
+  const includeMuted = params.include_muted === true;
+  const { messages, mutedCount } = await store.getRecentMessages({
     since,
     ...(params.sources !== undefined && { sources: params.sources }),
     ...(params.accounts !== undefined && { accounts: params.accounts }),
     limit: DEFAULT_LIMIT,
+    includeMuted,
   });
+  const hint =
+    !includeMuted && mutedCount > 0
+      ? `${mutedCount} message(s) hidden by steering rules. Pass include_muted=true to see them, or call get_steering to review active rules.`
+      : undefined;
   return {
-    count: rows.length,
-    messages: rows.map(project),
+    count: messages.length,
+    messages: messages.map(project),
+    muted_count: mutedCount,
+    ...(hint !== undefined && { steering_hint: hint }),
   };
 }
 

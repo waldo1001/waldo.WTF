@@ -172,7 +172,7 @@ describe("SqliteMessageStore — sqlite-specific behavior", () => {
       baseMsg("once", { body: "kangaroo grass field" }),
       baseMsg("thrice", { body: "kangaroo kangaroo kangaroo grass field" }),
     ]);
-    const hits = await store.searchMessages("kangaroo", 10);
+    const { hits } = await store.searchMessages("kangaroo", 10);
     expect(hits.map((h) => h.message.id)).toEqual(["thrice", "once"]);
     expect(hits[0]?.rank).toBeLessThan(hits[1]?.rank ?? 0);
   });
@@ -183,7 +183,7 @@ describe("SqliteMessageStore — sqlite-specific behavior", () => {
     await store.upsertMessages([
       baseMsg("1", { body: "the quick brown kangaroo jumps" }),
     ]);
-    const hits = await store.searchMessages("kangaroo", 10);
+    const { hits } = await store.searchMessages("kangaroo", 10);
     expect(hits).toHaveLength(1);
     expect(hits[0]?.snippet).toMatch(/\[kangaroo\]/i);
   });
@@ -196,10 +196,14 @@ describe("SqliteMessageStore — sqlite-specific behavior", () => {
       baseMsg("2", { body: "completely unrelated content" }),
     ]);
     await expect(
-      store.searchMessages('foo" OR 1=1', 10),
+      store.searchMessages('foo" OR 1=1', 10).then((r) => r.hits),
     ).resolves.toEqual([]);
-    await expect(store.searchMessages("alp*", 10)).resolves.toEqual([]);
-    await expect(store.searchMessages("alpha", 10)).resolves.toHaveLength(1);
+    await expect(
+      store.searchMessages("alp*", 10).then((r) => r.hits),
+    ).resolves.toEqual([]);
+    await expect(
+      store.searchMessages("alpha", 10).then((r) => r.hits),
+    ).resolves.toHaveLength(1);
   });
 
   it("searchMessages round-trips all optional fields on a hit", async () => {
@@ -222,7 +226,7 @@ describe("SqliteMessageStore — sqlite-specific behavior", () => {
       rawJson: '{"x":1}',
     };
     await store.upsertMessages([full]);
-    const hits = await store.searchMessages("kangaroo", 10);
+    const { hits } = await store.searchMessages("kangaroo", 10);
     expect(hits).toHaveLength(1);
     expect(hits[0]?.message).toEqual(full);
   });
@@ -232,7 +236,7 @@ describe("SqliteMessageStore — sqlite-specific behavior", () => {
     const a = new SqliteMessageStore(db);
     await a.upsertMessages([baseMsg("1", { body: "kangaroo" })]);
     const b = new SqliteMessageStore(db);
-    const hits = await b.searchMessages("kangaroo", 10);
+    const { hits } = await b.searchMessages("kangaroo", 10);
     expect(hits.map((h) => h.message.id)).toEqual(["1"]);
   });
 

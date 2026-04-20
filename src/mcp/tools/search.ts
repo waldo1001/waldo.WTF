@@ -11,6 +11,7 @@ export interface SearchParams {
   readonly query: string;
   readonly limit?: number;
   readonly include_body?: boolean;
+  readonly include_muted?: boolean;
 }
 
 export interface ProjectedSearchMessage {
@@ -39,6 +40,8 @@ export interface SearchResult {
   readonly count: number;
   readonly hits: readonly ProjectedSearchHit[];
   readonly bodyBudgetExhausted?: true;
+  readonly muted_count: number;
+  readonly steering_hint?: string;
 }
 
 export const SEARCH_TOOL = {
@@ -70,6 +73,11 @@ export const SEARCH_TOOL = {
         type: "boolean",
         description:
           "If true, project the plain-text body of each hit (head-truncated per message; later hits may be omitted if the per-call budget is exhausted). Default false.",
+      },
+      include_muted: {
+        type: "boolean",
+        description:
+          "If true, include hits matching steering rules. Default false (hard-exclude muted items).",
       },
     },
     required: ["query"],
@@ -106,7 +114,16 @@ export async function handleSearch(
   ) {
     throw new InvalidParamsError("include_body must be a boolean");
   }
-  const hits = await store.searchMessages(query, limit);
+  if (
+    params.include_muted !== undefined &&
+    typeof params.include_muted !== "boolean"
+  ) {
+    throw new InvalidParamsError("include_muted must be a boolean");
+  }
+  const includeMuted = params.include_muted === true;
+  const { hits, mutedCount } = await store.searchMessages(query, limit, {
+    includeMuted,
+  });
   const includeBody = params.include_body === true;
   let remaining = MAX_TOTAL_BODY_CHARS;
   let exhausted = false;
@@ -128,10 +145,16 @@ export async function handleSearch(
       },
     };
   });
+  const hint =
+    !includeMuted && mutedCount > 0
+      ? `${mutedCount} hit(s) hidden by steering rules. Pass include_muted=true to see them, or call get_steering to review active rules.`
+      : undefined;
   return {
     count: hits.length,
     hits: projected,
     ...(exhausted && { bodyBudgetExhausted: true as const }),
+    muted_count: mutedCount,
+    ...(hint !== undefined && { steering_hint: hint }),
   };
 }
 

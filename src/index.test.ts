@@ -157,7 +157,7 @@ describe("main", () => {
       since: new Date("2026-04-14T00:00:00.000Z"),
       limit: 10,
     });
-    expect(recent.some((m) => m.source === "whatsapp")).toBe(true);
+    expect(recent.messages.some((m) => m.source === "whatsapp")).toBe(true);
 
     await result.shutdown();
   });

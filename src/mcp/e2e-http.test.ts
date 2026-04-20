@@ -6,6 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createMcpHttpServer } from "./http-server.js";
 import { SqliteMessageStore } from "../store/sqlite-message-store.js";
+import { SqliteSteeringStore } from "../store/steering-store.js";
 import { FakeClock } from "../testing/fake-clock.js";
 import type { Message } from "../store/types.js";
 
@@ -33,7 +34,8 @@ describe("MCP HTTP server end-to-end (SQLite + SDK client over HTTP)", () => {
 
   beforeEach(async () => {
     db = new Database(":memory:");
-    store = new SqliteMessageStore(db);
+    const steering = new SqliteSteeringStore(db);
+    store = new SqliteMessageStore(db, steering);
     clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
 
     await store.upsertMessages([
@@ -75,7 +77,12 @@ describe("MCP HTTP server end-to-end (SQLite + SDK client over HTTP)", () => {
       lastSyncAt: new Date("2026-04-13T11:55:00Z"),
     });
 
-    server = createMcpHttpServer({ bearerToken: BEARER, store, clock });
+    server = createMcpHttpServer({
+      bearerToken: BEARER,
+      store,
+      steering,
+      clock,
+    });
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", () => resolve());
     });
@@ -108,11 +115,15 @@ describe("MCP HTTP server end-to-end (SQLite + SDK client over HTTP)", () => {
     const res = await client.listTools();
     const names = res.tools.map((t) => t.name).sort();
     expect(names).toEqual([
+      "add_steering_rule",
       "get_recent_activity",
+      "get_steering",
       "get_sync_status",
       "get_thread",
       "list_accounts",
+      "remove_steering_rule",
       "search",
+      "set_steering_enabled",
     ]);
   });
 

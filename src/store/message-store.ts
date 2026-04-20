@@ -23,6 +23,21 @@ export interface GetRecentMessagesOptions {
   readonly sources?: readonly MessageSource[];
   readonly accounts?: readonly string[];
   readonly limit: number;
+  readonly includeMuted?: boolean;
+}
+
+export interface GetRecentMessagesResult {
+  readonly messages: readonly Message[];
+  readonly mutedCount: number;
+}
+
+export interface SearchMessagesOptions {
+  readonly includeMuted?: boolean;
+}
+
+export interface SearchMessagesResult {
+  readonly hits: readonly SearchHit[];
+  readonly mutedCount: number;
 }
 
 export interface GetThreadOptions {
@@ -44,10 +59,14 @@ export interface MessageStore {
   appendSyncLog(entry: SyncLogEntry): Promise<void>;
   upsertAccount(account: AccountRecord): Promise<void>;
   listAccounts(): Promise<readonly AccountRecord[]>;
-  searchMessages(query: string, limit: number): Promise<readonly SearchHit[]>;
+  searchMessages(
+    query: string,
+    limit: number,
+    opts?: SearchMessagesOptions,
+  ): Promise<SearchMessagesResult>;
   getRecentMessages(
     opts: GetRecentMessagesOptions,
-  ): Promise<readonly Message[]>;
+  ): Promise<GetRecentMessagesResult>;
   getThread(opts: GetThreadOptions): Promise<readonly Message[]>;
   getSyncStatus(now: Date): Promise<readonly SyncStatusRow[]>;
   getChatCursor(

@@ -1,6 +1,6 @@
 import type { Database } from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 9;
+export const CURRENT_SCHEMA_VERSION = 10;
 
 const MIGRATION_1 = `
 CREATE TABLE IF NOT EXISTS messages (
@@ -141,6 +141,24 @@ CREATE INDEX IF NOT EXISTS idx_oauth_access_tokens_refresh
   ON oauth_access_tokens(refresh_token);
 `;
 
+const MIGRATION_10 = `
+CREATE TABLE IF NOT EXISTS steering_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  rule_type TEXT NOT NULL CHECK(rule_type IN
+    ('sender_email','sender_domain','thread_id','thread_name_contains','body_contains')),
+  pattern TEXT NOT NULL,
+  source TEXT,
+  account TEXT,
+  reason TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_steering_enabled_type
+  ON steering_rules(enabled, rule_type);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_steering_dedupe
+  ON steering_rules(rule_type, pattern, IFNULL(source,''), IFNULL(account,''));
+`;
+
 export function applyMigrations(db: Database): void {
   const current = (
     db.prepare("PRAGMA user_version").get() as { user_version: number }
@@ -175,6 +193,9 @@ export function applyMigrations(db: Database): void {
     }
     if (current < 9) {
       db.exec(MIGRATION_9);
+    }
+    if (current < 10) {
+      db.exec(MIGRATION_10);
     }
     db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
   });

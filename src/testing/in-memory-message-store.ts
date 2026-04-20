@@ -2,10 +2,15 @@ import {
   DEFAULT_GET_THREAD_LIMIT,
   type DeleteResult,
   type GetRecentMessagesOptions,
+  type GetRecentMessagesResult,
   type GetThreadOptions,
   type MessageStore,
+  type SearchMessagesOptions,
+  type SearchMessagesResult,
   type UpsertResult,
 } from "../store/message-store.js";
+import { buildSteeringPredicate } from "../store/steering-filter.js";
+import type { SteeringStore } from "../store/steering-store.js";
 import type {
   AccountRecord,
   ChatCursorEntry,
@@ -39,6 +44,7 @@ export interface InMemoryMessageStoreOptions {
     syncState?: readonly SyncStateEntry[];
     accounts?: readonly AccountRecord[];
   };
+  steeringStore?: SteeringStore;
 }
 
 const syncKey = (account: string, source: MessageSource): string =>
@@ -51,6 +57,7 @@ export class InMemoryMessageStore implements MessageStore {
   private readonly syncState = new Map<string, SyncStateEntry>();
   private readonly accounts = new Map<string, AccountRecord>();
   private readonly chatCursors = new Map<string, ChatCursorEntry>();
+  private readonly steeringStore: SteeringStore | undefined;
 
   constructor(opts: InMemoryMessageStoreOptions = {}) {
     for (const m of opts.seed?.messages ?? []) {
@@ -62,6 +69,17 @@ export class InMemoryMessageStore implements MessageStore {
     for (const a of opts.seed?.accounts ?? []) {
       this.accounts.set(a.username, a);
     }
+    this.steeringStore = opts.steeringStore;
+  }
+
+  private async loadPredicate(
+    includeMuted: boolean | undefined,
+  ): Promise<ReturnType<typeof buildSteeringPredicate>> {
+    if (includeMuted === true || this.steeringStore === undefined) {
+      return buildSteeringPredicate([]);
+    }
+    const rules = await this.steeringStore.listRules();
+    return buildSteeringPredicate(rules);
   }
 
   async upsertMessages(messages: readonly Message[]): Promise<UpsertResult> {
@@ -119,19 +137,25 @@ export class InMemoryMessageStore implements MessageStore {
   async searchMessages(
     query: string,
     limit: number,
-  ): Promise<readonly SearchHit[]> {
+    opts?: SearchMessagesOptions,
+  ): Promise<SearchMessagesResult> {
     this.calls.push({ method: "searchMessages", query, limit });
     const needle = query.trim().toLowerCase();
-    if (needle === "") return [];
+    if (needle === "") return { hits: [], mutedCount: 0 };
+    const predicate = await this.loadPredicate(opts?.includeMuted);
     const hits: SearchHit[] = [];
+    let mutedCount = 0;
     for (const m of this.messages.values()) {
       const haystack = `${m.body ?? ""}\n${m.threadName ?? ""}\n${m.senderName ?? ""}`.toLowerCase();
-      if (haystack.includes(needle)) {
-        hits.push({ message: m, snippet: m.body ?? "", rank: 0 });
+      if (!haystack.includes(needle)) continue;
+      if (predicate.matches(m)) {
+        mutedCount++;
+        continue;
       }
+      hits.push({ message: m, snippet: m.body ?? "", rank: 0 });
     }
     hits.sort((a, b) => b.message.sentAt.getTime() - a.message.sentAt.getTime());
-    return hits.slice(0, limit);
+    return { hits: hits.slice(0, limit), mutedCount };
   }
 
   async getSyncStatus(now: Date): Promise<readonly SyncStatusRow[]> {
@@ -225,18 +249,24 @@ export class InMemoryMessageStore implements MessageStore {
 
   async getRecentMessages(
     opts: GetRecentMessagesOptions,
-  ): Promise<readonly Message[]> {
+  ): Promise<GetRecentMessagesResult> {
     this.calls.push({ method: "getRecentMessages", opts });
     const sinceMs = opts.since.getTime();
     const sources =
       opts.sources && opts.sources.length > 0 ? new Set(opts.sources) : null;
     const accounts =
       opts.accounts && opts.accounts.length > 0 ? new Set(opts.accounts) : null;
+    const predicate = await this.loadPredicate(opts.includeMuted);
     const rows: Message[] = [];
+    let mutedCount = 0;
     for (const m of this.messages.values()) {
       if (m.sentAt.getTime() < sinceMs) continue;
       if (sources !== null && !sources.has(m.source)) continue;
       if (accounts !== null && !accounts.has(m.account)) continue;
+      if (predicate.matches(m)) {
+        mutedCount++;
+        continue;
+      }
       rows.push(m);
     }
     rows.sort((a, b) => {
@@ -244,6 +274,6 @@ export class InMemoryMessageStore implements MessageStore {
       if (t !== 0) return t;
       return b.id.localeCompare(a.id);
     });
-    return rows.slice(0, opts.limit);
+    return { messages: rows.slice(0, opts.limit), mutedCount };
   }
 }

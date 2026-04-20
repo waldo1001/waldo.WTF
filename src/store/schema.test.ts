@@ -23,7 +23,7 @@ describe("schema / applyMigrations", () => {
     expect(userVersion(db)).toBe(0);
     applyMigrations(db);
     expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
-    expect(CURRENT_SCHEMA_VERSION).toBe(9);
+    expect(CURRENT_SCHEMA_VERSION).toBe(10);
   });
 
   it("creates all four tables and expected indices", () => {
@@ -720,6 +720,106 @@ describe("schema / oauth_clients (migration 7)", () => {
   });
 
   it("is idempotent at the current schema version (from v7 base)", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    applyMigrations(db);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+});
+
+describe("schema / steering_rules (migration 10)", () => {
+  function hasColumn(
+    db: Database.Database,
+    table: string,
+    column: string,
+  ): boolean {
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all() as {
+      name: string;
+    }[];
+    return rows.some((r) => r.name === column);
+  }
+
+  it("creates steering_rules table on v9→v10", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const tables = objectNames(db, "table");
+    expect(tables).toContain("steering_rules");
+    for (const col of [
+      "id",
+      "rule_type",
+      "pattern",
+      "source",
+      "account",
+      "reason",
+      "enabled",
+      "created_at",
+    ]) {
+      expect(hasColumn(db, "steering_rules", col)).toBe(true);
+    }
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it("creates steering_rules indices (enabled+type and dedupe)", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const indices = objectNames(db, "index");
+    expect(indices).toEqual(
+      expect.arrayContaining(["idx_steering_enabled_type", "idx_steering_dedupe"]),
+    );
+  });
+
+  it("steering_rules.rule_type CHECK rejects unknown values", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const insert = db.prepare(
+      "INSERT INTO steering_rules (rule_type, pattern, enabled, created_at) VALUES (?, ?, ?, ?)",
+    );
+    expect(() => insert.run("bogus_type", "foo", 1, 0)).toThrow();
+    expect(() => insert.run("sender_email", "foo@bar.com", 1, 0)).not.toThrow();
+  });
+
+  it("steering_rules dedupe unique index rejects duplicates across NULL scope", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const insert = db.prepare(
+      "INSERT INTO steering_rules (rule_type, pattern, source, account, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    );
+    insert.run("sender_email", "foo@bar.com", null, null, 1, 0);
+    expect(() =>
+      insert.run("sender_email", "foo@bar.com", null, null, 1, 1),
+    ).toThrow();
+    // Different scope should be allowed.
+    expect(() =>
+      insert.run("sender_email", "foo@bar.com", "outlook", null, 1, 2),
+    ).not.toThrow();
+    expect(() =>
+      insert.run("sender_email", "foo@bar.com", null, "a@ex.test", 1, 3),
+    ).not.toThrow();
+  });
+
+  it("upgrades a pre-existing v9 database to v10 preserving data", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    db.prepare(
+      "INSERT INTO accounts (username, display_name, tenant_id, added_at) VALUES (?, ?, ?, ?)",
+    ).run("survivor@example.test", "Survivor", "tenant", 1);
+    db.exec("PRAGMA user_version = 9");
+    db.exec("DROP TABLE IF EXISTS steering_rules");
+
+    applyMigrations(db);
+
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+    const tables = objectNames(db, "table");
+    expect(tables).toContain("steering_rules");
+    const n = (
+      db
+        .prepare("SELECT COUNT(*) AS n FROM accounts WHERE username = ?")
+        .get("survivor@example.test") as { n: number }
+    ).n;
+    expect(n).toBe(1);
+  });
+
+  it("is idempotent at v10 (current schema)", () => {
     const db = new Database(":memory:");
     applyMigrations(db);
     applyMigrations(db);

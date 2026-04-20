@@ -8,6 +8,7 @@ import { timingSafeEqual } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Clock } from "../clock.js";
 import type { MessageStore } from "../store/message-store.js";
+import type { SteeringStore } from "../store/steering-store.js";
 import type { AuthStore } from "../auth/oauth/auth-store.js";
 import type { RandomIdSource } from "../auth/oauth/ids.js";
 import {
@@ -37,6 +38,7 @@ export interface OAuthHttpOptions {
 export interface McpHttpServerOptions {
   readonly bearerToken: string;
   readonly store: MessageStore;
+  readonly steering: SteeringStore;
   readonly clock: Clock;
   readonly oauth?: OAuthHttpOptions;
 }
@@ -281,7 +283,11 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
         res.end(JSON.stringify({ error: "unauthorized" }));
         return;
       }
-      const mcp = createMcpServer({ store: opts.store, clock: opts.clock });
+      const mcp = createMcpServer({
+        store: opts.store,
+        steering: opts.steering,
+        clock: opts.clock,
+      });
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
       } as unknown as ConstructorParameters<

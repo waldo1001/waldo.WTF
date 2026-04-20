@@ -13,6 +13,10 @@ skill.
 
 ## 2026-04-20
 
+- Steering rules: hard-exclude-by-default filter on `get_recent_activity` and `search` with new `include_muted` / `muted_count` / `steering_hint` fields. Rules persist in new `steering_rules` table (schema migration v9 → v10). Sync is untouched — steering is a query-time lens, never a delete. Plan: [plans/steering-rules.md](plans/steering-rules.md).
+- New MCP tools: `get_steering`, `add_steering_rule`, `remove_steering_rule`, `set_steering_enabled`. Chat-driven mute ("not interested in mails from DevOps") writes only to the local `steering_rules` table — no Graph calls — preserving the "no external writes" invariant from brief §9.
+- New CLI flags: `--steer-add-sender|domain|thread|thread-name|body <value>`, `--steer-list`, `--steer-enable|disable|remove <id>`, plus `--reason`, `--source`, `--account` modifiers. Scriptable second path to the same `SteeringStore`.
+- Five rule types in v1: `sender_email`, `sender_domain`, `thread_id`, `thread_name_contains`, `body_contains` (FTS5). `get_thread` and `list_accounts` are unaffected — opening a thread still shows every message in it.
 - OAuth slice 1: added `.well-known/oauth-authorization-server` (RFC 8414) and `.well-known/oauth-protected-resource` (RFC 9728) discovery documents plus `POST /oauth/register` Dynamic Client Registration (RFC 7591) on the MCP HTTP server. Mounted only when `WALDO_PUBLIC_URL` is set; existing static-bearer auth is untouched. Plan: [plans/oauth-mcp-auth-slice-1-discovery-and-dcr.md](plans/oauth-mcp-auth-slice-1-discovery-and-dcr.md).
 - Schema migration v6 → v7: new `oauth_clients` table. `AuthStore` seam (interface + `SqliteAuthStore` + `InMemoryAuthStore`) added under [../src/auth/oauth/](../src/auth/oauth/) with shared contract test suite.
 - OAuth slice 2: `GET/POST /oauth/authorize` consent UI — validates client, renders HTML form, verifies admin password (scrypt N=16384), issues 10-minute auth code, 302-redirects with `code` + `state`. `verifyPkceS256` (timing-safe S256) and `scryptPasswordHasher` extracted as standalone modules. Schema migration v7 → v8: `oauth_auth_codes` table.

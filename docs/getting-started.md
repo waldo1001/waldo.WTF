@@ -85,6 +85,10 @@ name.
 ## Next steps
 
 - Add more accounts: `npm run login -- --account new`, repeat.
+- Mute noise as it shows up — either in-chat ("not interested in mails
+  from DevOps" — Claude calls `add_steering_rule`), or from the shell
+  with `npm run dev -- --steer-list` and friends. See
+  [user-guide.md §6e](user-guide.md#6e-muting-noisy-senders-steering-rules).
 - Read the [user guide](user-guide.md) for the full MCP tool surface
   and day-to-day workflows.
 - When anything feels frustrating, write it in

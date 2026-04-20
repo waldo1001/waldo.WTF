@@ -60,10 +60,12 @@ describe("importWhatsAppFile", () => {
     expect(await deps.fs.exists(result.archivedTo)).toBe(true);
 
     // Rows landed in store.
-    const recent = await deps.store.getRecentMessages({
-      since: new Date("2026-04-15T00:00:00.000Z"),
-      limit: 10,
-    });
+    const recent = (
+      await deps.store.getRecentMessages({
+        since: new Date("2026-04-15T00:00:00.000Z"),
+        limit: 10,
+      })
+    ).messages;
     expect(recent).toHaveLength(2);
     expect(recent.every((m) => m.source === "whatsapp")).toBe(true);
     expect(recent.every((m) => m.account === ACCOUNT)).toBe(true);
@@ -114,10 +116,12 @@ describe("importWhatsAppFile", () => {
     });
 
     // Store still only holds 2 rows (primary key dedup).
-    const all = await deps.store.getRecentMessages({
-      since: new Date("2026-04-15T00:00:00.000Z"),
-      limit: 50,
-    });
+    const all = (
+      await deps.store.getRecentMessages({
+        since: new Date("2026-04-15T00:00:00.000Z"),
+        limit: 50,
+      })
+    ).messages;
     expect(all).toHaveLength(2);
     // Second import reports 0 newly-added rows.
     expect(second.imported).toBe(0);
@@ -140,10 +144,12 @@ describe("importWhatsAppFile", () => {
     // Source file is still in Downloads.
     expect(await deps.fs.exists(src)).toBe(true);
     // No rows landed.
-    const recent = await deps.store.getRecentMessages({
-      since: new Date("2020-01-01T00:00:00.000Z"),
-      limit: 10,
-    });
+    const recent = (
+      await deps.store.getRecentMessages({
+        since: new Date("2020-01-01T00:00:00.000Z"),
+        limit: 10,
+      })
+    ).messages;
     expect(recent).toHaveLength(0);
   });
 
@@ -230,10 +236,12 @@ describe("importWhatsAppFile", () => {
     expect(await deps.fs.exists(src)).toBe(false);
     expect(await deps.fs.exists(result.archivedTo)).toBe(true);
 
-    const recent = await deps.store.getRecentMessages({
-      since: new Date("2026-04-15T00:00:00.000Z"),
-      limit: 10,
-    });
+    const recent = (
+      await deps.store.getRecentMessages({
+        since: new Date("2026-04-15T00:00:00.000Z"),
+        limit: 10,
+      })
+    ).messages;
     expect(recent).toHaveLength(2);
     expect(recent.every((m) => m.source === "whatsapp")).toBe(true);
   });

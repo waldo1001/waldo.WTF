@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import Database from "better-sqlite3";
 import { config as loadDotenv } from "dotenv";
 import { loadConfig, type Config } from "./config.js";
 import { systemClock, type Clock } from "./clock.js";
@@ -14,6 +15,10 @@ import type { TeamsClient } from "./sources/teams.js";
 import { HttpTeamsClient } from "./sources/http-teams-client.js";
 import { openDatabase } from "./store/open-database.js";
 import { SqliteMessageStore } from "./store/sqlite-message-store.js";
+import {
+  SqliteSteeringStore,
+  type SteeringStore,
+} from "./store/steering-store.js";
 import type { AuthStore } from "./auth/oauth/auth-store.js";
 import { SqliteAuthStore } from "./auth/oauth/sqlite-auth-store.js";
 import { cryptoRandomIdSource } from "./auth/oauth/ids.js";
@@ -39,6 +44,7 @@ export interface MainOverrides {
   readonly graph?: GraphClient;
   readonly teams?: TeamsClient;
   readonly store?: MessageStore;
+  readonly steering?: SteeringStore;
   readonly authStore?: AuthStore;
   readonly setTimer?: SetTimerFn;
   readonly logger?: Logger;
@@ -101,8 +107,13 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
     });
   const ownsDb = overrides.store === undefined;
   const db = ownsDb ? openDatabase(config.dbPath) : null;
+  const steering: SteeringStore =
+    overrides.steering ??
+    (db !== null
+      ? new SqliteSteeringStore(db, clock)
+      : new SqliteSteeringStore(new Database(":memory:"), clock));
   const store: MessageStore =
-    overrides.store ?? new SqliteMessageStore(db!);
+    overrides.store ?? new SqliteMessageStore(db!, steering);
   const graph: GraphClient =
     overrides.graph ??
     new HttpGraphClient({
@@ -160,6 +171,7 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
   const httpServer = createMcpHttpServer({
     bearerToken: config.bearerToken,
     store,
+    steering,
     clock,
     ...(oauth !== undefined ? { oauth } : {}),
   });

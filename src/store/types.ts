@@ -71,6 +71,40 @@ export interface SearchHit {
   readonly rank: number;
 }
 
+export const STEERING_RULE_TYPES = [
+  "sender_email",
+  "sender_domain",
+  "thread_id",
+  "thread_name_contains",
+  "body_contains",
+] as const;
+
+export type SteeringRuleType = (typeof STEERING_RULE_TYPES)[number];
+
+export interface RuleScope {
+  readonly source?: MessageSource;
+  readonly account?: string;
+}
+
+export interface SteeringRule {
+  readonly id: number;
+  readonly ruleType: SteeringRuleType;
+  readonly pattern: string;
+  readonly source?: MessageSource;
+  readonly account?: string;
+  readonly reason?: string;
+  readonly enabled: boolean;
+  readonly createdAt: Date;
+}
+
+export interface AddSteeringRuleInput {
+  readonly ruleType: SteeringRuleType;
+  readonly pattern: string;
+  readonly source?: MessageSource;
+  readonly account?: string;
+  readonly reason?: string;
+}
+
 export type StoreErrorKind = "not-found" | "conflict" | "corrupt";
 
 export class StoreError extends Error {
