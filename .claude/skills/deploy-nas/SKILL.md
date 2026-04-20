@@ -1,6 +1,6 @@
 ---
 name: deploy-nas
-description: Deploy waldo.WTF to the Synology DS223 NAS. Runs all local steps (tests, build, save, scp) automatically, then hands the operator a single NAS-side script block for the sudo-gated commands. Use whenever shipping code changes to the running NAS container, OR when running any data migration from docs/migrations/. Flags; `--migrate <name>` to run a registered migration, `--dry-run` to print the plan without executing.
+description: Deploy waldo.WTF to the Synology DS223 NAS. Runs all local steps (tests, build, save, scp) automatically, then hands the operator two NAS-side script blocks (load, then swap) for the sudo-gated commands. Use whenever shipping code changes to the running NAS container, OR when running any data migration from docs/migrations/. Flags; `--migrate <name>` to run a registered migration, `--dry-run` to print the plan without executing.
 ---
 
 # /deploy-nas — Synology NAS deploy driver
@@ -132,28 +132,44 @@ yourself.
 
 ### For routine deploys (no `--migrate`)
 
-Post a single script block the operator can paste after SSH-ing in:
+Post **two** separate paste blocks, not one combined block. The operator
+runs them as distinct steps and wants to verify `docker load` succeeded
+before stopping the running container.
+
+First, the SSH command:
 
 ```
-SSH into the NAS and run these commands:
+SSH into the NAS:
 
     ssh waldo@waldonas3
+```
 
-Then paste this block:
+**Block 1 — load the image.** Operator pastes, waits for
+`Loaded image: waldo-wtf:local`, then continues:
 
-    cd /volume1/docker/waldo-wtf
-    sudo docker load -i /tmp/waldo-wtf.tar
-    sudo docker compose stop
-    sudo docker compose up -d
-    rm /tmp/waldo-wtf.tar
-    sleep 30
-    sudo docker compose ps
-    sudo docker compose logs --tail=60
+```sh
+cd /volume1/docker/waldo-wtf
+sudo docker load -i /tmp/waldo-wtf.tar
+```
+
+**Block 2 — swap and verify:**
+
+```sh
+sudo docker compose stop
+sudo docker compose up -d
+rm /tmp/waldo-wtf.tar
+sleep 30
+sudo docker compose ps
+sudo docker compose logs --tail=60
 ```
 
 Tell the operator: "You'll be prompted for your sudo password — possibly
-twice on a fresh session (Synology quirk). Paste the full output when
-done."
+twice on a fresh session (Synology quirk). Paste the output from block 2
+when done so I can verify health + sync."
+
+**Never combine the two blocks.** Combining hides the load result behind
+subsequent output and risks stopping the live server when the new image
+didn't load cleanly.
 
 ### For `--migrate` deploys
 
