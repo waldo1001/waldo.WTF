@@ -71,7 +71,7 @@ Scaffold **in-place** in this repo (`/Users/waldo/SourceCode/Community/waldo.WTF
 
 ## Weekend 3 — First MCP tools + Claude Desktop wiring ✅ (2026-04-13)
 
-- [x] `@modelcontextprotocol/sdk` installed — 2026-04-13. Hand-rolled JSON-RPC dispatcher replaced by SDK `Server` + `StreamableHTTPServerTransport` (stateless). New [src/mcp/mcp-server.ts](src/mcp/mcp-server.ts) wraps the three existing tool handlers into MCP content blocks and maps `InvalidParamsError` → `McpError(InvalidParams)`. [src/mcp/http-server.ts](src/mcp/http-server.ts) is now a thin shell: `/health` + bearer middleware + per-request SDK transport mount. Plan: [docs/plans/adopt-mcp-sdk.md](docs/plans/adopt-mcp-sdk.md).
+- [x] `@modelcontextprotocol/sdk` installed — 2026-04-13. Hand-rolled JSON-RPC dispatcher replaced by SDK `Server` + `StreamableHTTPServerTransport` (stateless). New [src/mcp/mcp-server.ts](src/mcp/mcp-server.ts) wraps the three existing tool handlers into MCP content blocks and maps `InvalidParamsError` → `McpError(InvalidParams)`. [src/mcp/http-server.ts](src/mcp/http-server.ts) is now a thin shell: `/health` + bearer middleware + per-request SDK transport mount. Plan: [docs/plans/done/adopt-mcp-sdk.md](docs/plans/done/adopt-mcp-sdk.md).
 - [x] `get_recent_activity(hours, sources?, accounts?)` — 2026-04-13. Handler in [src/mcp/tools/get-recent-activity.ts](src/mcp/tools/get-recent-activity.ts); backed by new `MessageStore.getRecentMessages`; JSON-RPC dispatch wired into [src/mcp/http-server.ts](src/mcp/http-server.ts). 30 new tests, 201 total.
 - [x] `get_sync_status()` — 2026-04-13. Handler in [src/mcp/tools/get-sync-status.ts](src/mcp/tools/get-sync-status.ts); backed by new `MessageStore.getSyncStatus(now)` (union of `sync_state` ∪ `sync_log` per pair, with `lastOkAt` / `lastStatus` / `messagesAddedLast24h`). 15-min `stale` threshold, top-level `staleCount`. http-server dispatch refactored to a `{name → handler}` map. 28 new tests, 229 total.
 - [x] Bearer token middleware — Weekend 2 slice 10 (pre-existing; still in effect for `POST /`).
@@ -84,25 +84,25 @@ Scaffold **in-place** in this repo (`/Users/waldo/SourceCode/Community/waldo.WTF
 ## Weekend 4 — Multi-account + Teams
 
 ### Slice 1 — Interactive login CLI ✅ (2026-04-13)
-- [x] `runCli(argv)` + `addAccount(opts)` in [src/cli.ts](src/cli.ts); `--add-account` drives `MsalAuthClient.loginWithDeviceCode` against the real `TokenCacheStore`. Live smoke still required per-account. Plan: [docs/plans/weekend-4-slice-1-interactive-login-cli.md](docs/plans/weekend-4-slice-1-interactive-login-cli.md).
+- [x] `runCli(argv)` + `addAccount(opts)` in [src/cli.ts](src/cli.ts); `--add-account` drives `MsalAuthClient.loginWithDeviceCode` against the real `TokenCacheStore`. Live smoke still required per-account. Plan: [docs/plans/done/weekend-4-slice-1-interactive-login-cli.md](docs/plans/done/weekend-4-slice-1-interactive-login-cli.md).
 
 ### Slice 2 — Teams message shape + schema v3 ✅ (2026-04-13)
-- [x] `Message.chatType` / `replyToId` / `mentions` (optional); schema v3 migration adds `chat_type`, `reply_to_id`, `mentions_json` columns; both store impls roundtrip the fields. FTS5 untouched. Plan: [docs/plans/weekend-4-slice-2-teams-schema-v3.md](docs/plans/weekend-4-slice-2-teams-schema-v3.md).
+- [x] `Message.chatType` / `replyToId` / `mentions` (optional); schema v3 migration adds `chat_type`, `reply_to_id`, `mentions_json` columns; both store impls roundtrip the fields. FTS5 untouched. Plan: [docs/plans/done/weekend-4-slice-2-teams-schema-v3.md](docs/plans/done/weekend-4-slice-2-teams-schema-v3.md).
 
 ### Slice 3 — `TeamsClient` seam + `FakeTeamsClient` ✅ (2026-04-13)
-- [x] Interface + DTOs in [src/sources/teams.ts](src/sources/teams.ts); scripted fake in [src/testing/fake-teams-client.ts](src/testing/fake-teams-client.ts). Plan: [docs/plans/weekend-4-slice-3-teams-client-seam.md](docs/plans/weekend-4-slice-3-teams-client-seam.md).
+- [x] Interface + DTOs in [src/sources/teams.ts](src/sources/teams.ts); scripted fake in [src/testing/fake-teams-client.ts](src/testing/fake-teams-client.ts). Plan: [docs/plans/done/weekend-4-slice-3-teams-client-seam.md](docs/plans/done/weekend-4-slice-3-teams-client-seam.md).
 
 ### Slice 4 — `HttpTeamsClient` ✅ (2026-04-13)
-- [x] Fetch-backed adapter [src/sources/http-teams-client.ts](src/sources/http-teams-client.ts); 401/410/429 mapping + token-redacted errors. Plan: [docs/plans/weekend-4-slice-4-http-teams-client.md](docs/plans/weekend-4-slice-4-http-teams-client.md).
+- [x] Fetch-backed adapter [src/sources/http-teams-client.ts](src/sources/http-teams-client.ts); 401/410/429 mapping + token-redacted errors. Plan: [docs/plans/done/weekend-4-slice-4-http-teams-client.md](docs/plans/done/weekend-4-slice-4-http-teams-client.md).
 
 ### Slice 5 — `syncTeams` + scheduler wiring ✅ (2026-04-13)
-- [x] [src/sync/sync-teams.ts](src/sync/sync-teams.ts) walks Teams delta, maps → `Message`, routes `@removed`, persists `setSyncState({source:"teams"})`. `SyncScheduler` now takes optional `teams: TeamsClient` and emits a second `sync_log` row per account per tick. `src/index.ts` wires real `HttpTeamsClient`. Plan: [docs/plans/weekend-4-slice-5-sync-teams.md](docs/plans/weekend-4-slice-5-sync-teams.md).
+- [x] [src/sync/sync-teams.ts](src/sync/sync-teams.ts) walks Teams delta, maps → `Message`, routes `@removed`, persists `setSyncState({source:"teams"})`. `SyncScheduler` now takes optional `teams: TeamsClient` and emits a second `sync_log` row per account per tick. `src/index.ts` wires real `HttpTeamsClient`. Plan: [docs/plans/done/weekend-4-slice-5-sync-teams.md](docs/plans/done/weekend-4-slice-5-sync-teams.md).
 
 ### Slice 6 — MCP tool coverage for Teams source ✅ (2026-04-13)
-- [x] `get_recent_activity` + `search` projections carry `chatType` / `replyToId` / `mentions`; snippet falls back to `bodyHtml` when `body` absent. `get_sync_status` verified against a mixed outlook+teams log. Weekend 4 closed. Plan: [docs/plans/weekend-4-slice-6-mcp-teams-coverage.md](docs/plans/weekend-4-slice-6-mcp-teams-coverage.md).
+- [x] `get_recent_activity` + `search` projections carry `chatType` / `replyToId` / `mentions`; snippet falls back to `bodyHtml` when `body` absent. `get_sync_status` verified against a mixed outlook+teams log. Weekend 4 closed. Plan: [docs/plans/done/weekend-4-slice-6-mcp-teams-coverage.md](docs/plans/done/weekend-4-slice-6-mcp-teams-coverage.md).
 
 ### Retrofit — `rawJson` population ✅ (2026-04-13)
-- [x] `syncInbox` + `syncTeams` mappers now stringify the raw DTO into `Message.rawJson` on upsert, closing the brief §4.10 insurance-policy gap. Column existed since Weekend 2 but sync writers never set it; pre-retrofit rows remain `rawJson=NULL` until delta resync naturally overwrites them (no migration). Plan: [docs/plans/fix-raw-json-population.md](docs/plans/fix-raw-json-population.md).
+- [x] `syncInbox` + `syncTeams` mappers now stringify the raw DTO into `Message.rawJson` on upsert, closing the brief §4.10 insurance-policy gap. Column existed since Weekend 2 but sync writers never set it; pre-retrofit rows remain `rawJson=NULL` until delta resync naturally overwrites them (no migration). Plan: [docs/plans/done/fix-raw-json-population.md](docs/plans/done/fix-raw-json-population.md).
 
 - [x] Remaining Microsoft accounts logged in (iFacto, customer tenants, personal) — uses `tsx src/cli.ts --add-account` (Slice 1) ✅ (2026-04-19)
 - [x] Open Q: do all 4 support delegated `Mail.Read` without admin consent? ✅ (2026-04-19) — resolved in practice by completing the logins above
@@ -112,13 +112,13 @@ Scaffold **in-place** in this repo (`/Users/waldo/SourceCode/Community/waldo.WTF
 - [x] Live with it for a week, collect frustrations below ✅ (2026-04-19) — smoke-tested across real accounts + Teams + Outlook, no new frustrations surfaced beyond the Teams 412 (already fixed)
 
 ### Teams endpoint rework — slice 1 ✅ (2026-04-13)
-- [x] Schema v4 `chat_cursors` table + `MessageStore.getChatCursor` / `setChatCursor` / `listChatCursors` on both impls. Storage-only slice; seam reshape + `HttpTeamsClient` rewrite + `syncTeams` rewrite are slice 2. Plan: [docs/plans/teams-endpoint-rework.md](docs/plans/teams-endpoint-rework.md).
+- [x] Schema v4 `chat_cursors` table + `MessageStore.getChatCursor` / `setChatCursor` / `listChatCursors` on both impls. Storage-only slice; seam reshape + `HttpTeamsClient` rewrite + `syncTeams` rewrite are slice 2. Plan: [docs/plans/done/teams-endpoint-rework.md](docs/plans/done/teams-endpoint-rework.md).
 
 ### Teams endpoint rework — slice 2 ✅ (2026-04-13)
-- [x] `TeamsClient` seam reshaped to `listChats` + `getChatMessages`; `HttpTeamsClient` rewritten to poll `/me/chats` + `/me/chats/{id}/messages` under delegated auth; `syncTeams` rewritten to enumerate chats and maintain per-chat cursors with per-chat error isolation; schema v5 renames `chat_cursors.last_modified_iso → cursor`. Live smoke on dev db: one account synced Teams successfully (96 messages, 13 chat cursors), the other returned `403 Forbidden — Missing scope permissions` (tenant-level policy, correctly logged). Outlook unaffected. Plan: [docs/plans/teams-endpoint-rework.md](docs/plans/teams-endpoint-rework.md).
+- [x] `TeamsClient` seam reshaped to `listChats` + `getChatMessages`; `HttpTeamsClient` rewritten to poll `/me/chats` + `/me/chats/{id}/messages` under delegated auth; `syncTeams` rewritten to enumerate chats and maintain per-chat cursors with per-chat error isolation; schema v5 renames `chat_cursors.last_modified_iso → cursor`. Live smoke on dev db: one account synced Teams successfully (96 messages, 13 chat cursors), the other returned `403 Forbidden — Missing scope permissions` (tenant-level policy, correctly logged). Outlook unaffected. Plan: [docs/plans/done/teams-endpoint-rework.md](docs/plans/done/teams-endpoint-rework.md).
 
 **Frustrations log:**
-- 2026-04-13 — First live smoke of Teams sync (two real accounts across two tenants) surfaced `HTTP 412 PreconditionFailed — Requested API is not supported in delegated context` on `/me/chats/getAllMessages/delta`. Pre-existing Graph constraint (the endpoint requires application permissions + RSC, not delegated device-code). Slices 4–6 used `FakeTeamsClient` end-to-end so it only showed up on the first real tick. Outlook unaffected and shipping. Fix plan: [docs/plans/teams-endpoint-rework.md](docs/plans/teams-endpoint-rework.md) — recommends polling `/me/chats` + `/me/chats/{id}/messages` under the existing delegated flow.
+- 2026-04-13 — First live smoke of Teams sync (two real accounts across two tenants) surfaced `HTTP 412 PreconditionFailed — Requested API is not supported in delegated context` on `/me/chats/getAllMessages/delta`. Pre-existing Graph constraint (the endpoint requires application permissions + RSC, not delegated device-code). Slices 4–6 used `FakeTeamsClient` end-to-end so it only showed up on the first real tick. Outlook unaffected and shipping. Fix plan: [docs/plans/done/teams-endpoint-rework.md](docs/plans/done/teams-endpoint-rework.md) — recommends polling `/me/chats` + `/me/chats/{id}/messages` under the existing delegated flow.
 
 ---
 
@@ -140,13 +140,13 @@ with its own plan file.
   no `rawJson`; `SNIPPET_MAX=280` fallback to `bodyHtml`). Default
   limit 200, max 500. Covers Teams chats and (as of slice 3) Outlook
   conversations. Plan:
-  [docs/plans/weekend-4.5-slice-1-get-thread.md](docs/plans/weekend-4.5-slice-1-get-thread.md).
+  [docs/plans/done/weekend-4.5-slice-1-get-thread.md](docs/plans/done/weekend-4.5-slice-1-get-thread.md).
 - [x] `list_accounts()` ✅ (2026-04-13) — handler at
   [src/mcp/tools/list-accounts.ts](src/mcp/tools/list-accounts.ts),
   backed by the existing `MessageStore.listAccounts()`. Projection is
   `{username, displayName?, addedAt}`; `tenantId` omitted from the
   wire shape. Plan:
-  [docs/plans/weekend-4.5-slice-2-list-accounts.md](docs/plans/weekend-4.5-slice-2-list-accounts.md).
+  [docs/plans/done/weekend-4.5-slice-2-list-accounts.md](docs/plans/done/weekend-4.5-slice-2-list-accounts.md).
 - [x] [docs/user-guide.md](docs/user-guide.md) and
   [docs/claude-desktop-wiring.md](docs/claude-desktop-wiring.md)
   updated to advertise the two new tools and the 5-tool v1 surface.
@@ -154,7 +154,7 @@ with its own plan file.
   optional `conversationId`; `sync-inbox.toMessage` maps it to
   `threadId` and `subject` to `threadName` (both defensively omitted
   when absent). `get_thread` now resolves Outlook conversations. Plan:
-  [docs/plans/weekend-4.5-slice-3-outlook-thread-fields.md](docs/plans/weekend-4.5-slice-3-outlook-thread-fields.md).
+  [docs/plans/done/weekend-4.5-slice-3-outlook-thread-fields.md](docs/plans/done/weekend-4.5-slice-3-outlook-thread-fields.md).
 - [x] Live smoke through Claude Desktop: *"show me the full thread
   about X"* (Teams) and *"which accounts do you have access to?"* ✅ (2026-04-15).
 
@@ -181,7 +181,7 @@ with its own plan file.
   ✅ (2026-04-14) — end-to-end recipe for DS223 + Tailscale +
   Container Manager, including first-run `--add-account` device code
   flow and Claude Desktop repoint. Plan:
-  [docs/plans/weekend-5-dockerize-and-synology.md](docs/plans/weekend-5-dockerize-and-synology.md).
+  [docs/plans/done/weekend-5-dockerize-and-synology.md](docs/plans/done/weekend-5-dockerize-and-synology.md).
 - [x] **Local container smoke test on Mac** ✅ (2026-04-14) — Part A
   of [docs/deploy-synology.md](docs/deploy-synology.md) executed end
   to end with OrbStack as the Docker engine. `docker buildx build
@@ -245,7 +245,7 @@ lake, with no Graph refetch.
 only fixes snippet quality + FTS indexing — enough for Claude to *find*
 and *preview* mail, not yet to read the full body.
 
-Plan: [docs/plans/fix-message-bodies-slice-a-backfill.md](docs/plans/fix-message-bodies-slice-a-backfill.md).
+Plan: [docs/plans/done/fix-message-bodies-slice-a-backfill.md](docs/plans/done/fix-message-bodies-slice-a-backfill.md).
 
 ### Slice B — `include_body` on `get_thread` + `search` ✅ (2026-04-19)
 
@@ -265,14 +265,14 @@ Plan: [docs/plans/fix-message-bodies-slice-a-backfill.md](docs/plans/fix-message
 - [x] Live run against the NAS container ✅ (2026-04-19) — deployed
   from commit `80012e5`, container healthy, initial sync tick started.
 
-Plan: [docs/plans/fix-message-bodies-slice-b-include-body.md](docs/plans/fix-message-bodies-slice-b-include-body.md).
+Plan: [docs/plans/done/fix-message-bodies-slice-b-include-body.md](docs/plans/done/fix-message-bodies-slice-b-include-body.md).
 
 ---
 
 ## Weekend 6 — WhatsApp + Android
 
 Code slices 1–8 complete 2026-04-15. Plan:
-[docs/plans/weekend-6-whatsapp-importer.md](docs/plans/weekend-6-whatsapp-importer.md).
+[docs/plans/done/weekend-6-whatsapp-importer.md](docs/plans/done/weekend-6-whatsapp-importer.md).
 
 - [x] WhatsApp `.txt` importer (`source='whatsapp'`) ✅ (2026-04-15) —
   pure parser + hash-id mapper + file orchestrator. 442 tests green,
@@ -300,7 +300,7 @@ Code slices 1–8 complete 2026-04-15. Plan:
 
 ## Weekend 7 — OAuth 2.1 surface for MCP ✅ (2026-04-20)
 
-Plan: [docs/plans/oauth-mcp-auth.md](docs/plans/oauth-mcp-auth.md). Goal: enable claude.ai custom-connector / Claude mobile to register against the publicly reachable Tailscale-Funnel endpoint without the static bearer token.
+Plan: [docs/plans/done/oauth-mcp-auth.md](docs/plans/done/oauth-mcp-auth.md). Goal: enable claude.ai custom-connector / Claude mobile to register against the publicly reachable Tailscale-Funnel endpoint without the static bearer token.
 
 ### Slice 1 — Discovery + DCR + AuthStore seam ✅ (2026-04-20)
 - [x] `.well-known/oauth-authorization-server` (RFC 8414) and `.well-known/oauth-protected-resource` (RFC 9728) discovery routes
@@ -309,7 +309,7 @@ Plan: [docs/plans/oauth-mcp-auth.md](docs/plans/oauth-mcp-auth.md). Goal: enable
 - [x] Schema migration v6 → v7 adding `oauth_clients` table
 - [x] Routes mount only when `WALDO_PUBLIC_URL` is set; static-bearer auth untouched
 
-Plan: [docs/plans/oauth-mcp-auth-slice-1-discovery-and-dcr.md](docs/plans/oauth-mcp-auth-slice-1-discovery-and-dcr.md).
+Plan: [docs/plans/done/oauth-mcp-auth-slice-1-discovery-and-dcr.md](docs/plans/done/oauth-mcp-auth-slice-1-discovery-and-dcr.md).
 
 ### Slice 2 — Consent UI (`GET/POST /oauth/authorize`) ✅ (2026-04-20)
 - [x] `GET /oauth/authorize` validates client_id, redirect_uri, response_type=code, PKCE S256, and renders an HTML consent form
@@ -319,7 +319,7 @@ Plan: [docs/plans/oauth-mcp-auth-slice-1-discovery-and-dcr.md](docs/plans/oauth-
 - [x] `verifyPkceS256` helper (timing-safe S256 check)
 - [x] Schema migration v7 → v8 adding `oauth_auth_codes` table
 
-Plan: [docs/plans/oauth-mcp-auth-slice-2-authorize.md](docs/plans/oauth-mcp-auth-slice-2-authorize.md).
+Plan: [docs/plans/done/oauth-mcp-auth-slice-2-authorize.md](docs/plans/done/oauth-mcp-auth-slice-2-authorize.md).
 
 ### Slice 3 — Token endpoint (`POST /oauth/token`) ✅ (2026-04-20)
 - [x] `authorization_code` grant: consumes auth code, verifies PKCE verifier, issues access + refresh token pair
@@ -327,20 +327,20 @@ Plan: [docs/plans/oauth-mcp-auth-slice-2-authorize.md](docs/plans/oauth-mcp-auth
 - [x] Access token TTL 1 h; refresh token TTL 30 days
 - [x] Schema migration v8 → v9 adding `oauth_access_tokens` table (+ refresh index)
 
-Plan: [docs/plans/oauth-mcp-auth-slice-3-token.md](docs/plans/oauth-mcp-auth-slice-3-token.md).
+Plan: [docs/plans/done/oauth-mcp-auth-slice-3-token.md](docs/plans/done/oauth-mcp-auth-slice-3-token.md).
 
 ### Slice 4 — MCP endpoint access-token guard ✅ (2026-04-20)
 - [x] Dual-path auth: valid OAuth access token **or** static bearer (unless `WALDO_DISABLE_STATIC_BEARER=true`)
 - [x] `WWW-Authenticate: Bearer resource_metadata=<publicUrl>/.well-known/oauth-protected-resource` on every 401 when OAuth is configured
 - [x] `WALDO_DISABLE_STATIC_BEARER` config flag wired end-to-end (`oauth-config.ts` → `index.ts` → `http-server.ts`)
 
-Plan: [docs/plans/oauth-mcp-auth-slice-4-resource-guard.md](docs/plans/oauth-mcp-auth-slice-4-resource-guard.md).
+Plan: [docs/plans/done/oauth-mcp-auth-slice-4-resource-guard.md](docs/plans/done/oauth-mcp-auth-slice-4-resource-guard.md).
 
 ### Slice 5 — Operator guide ✅ (2026-04-20)
 - [x] `docs/oauth.md` — setup, curl walkthrough, claude.ai registration, admin password rotation, manual client revocation via SQLite, troubleshooting table
 - [x] `.env.example` verified complete (all four OAuth vars documented)
 
-Plan: [docs/plans/oauth-mcp-auth-slice-5-live-smoke.md](docs/plans/oauth-mcp-auth-slice-5-live-smoke.md).
+Plan: [docs/plans/done/oauth-mcp-auth-slice-5-live-smoke.md](docs/plans/done/oauth-mcp-auth-slice-5-live-smoke.md).
 
 **Live smoke ✅ (2026-04-20)** — claude.ai custom connector registered end-to-end against `https://waldonas3.tailb07704.ts.net` (Tailscale Funnel → NAS container). Full OAuth flow exercised (DCR → consent → PKCE token exchange → `/mcp` tool calls). Static bearer kept on alongside OAuth; `WALDO_DISABLE_STATIC_BEARER` left false so Claude Desktop's bearer path keeps working.
 
@@ -348,7 +348,7 @@ Plan: [docs/plans/oauth-mcp-auth-slice-5-live-smoke.md](docs/plans/oauth-mcp-aut
 
 ## Weekend 8+ — Use, iterate, blog
 
-- [x] **Steering rules** ✅ (2026-04-20) — hard-exclude-by-default on `get_recent_activity` + `search`, with `include_muted` escape hatch. New `steering_rules` table (schema v9→v10), `SteeringStore` contract (sqlite + in-memory), `buildSteeringPredicate` shared SQL-and-JS filter. Four new MCP tools (`get_steering`, `add_steering_rule`, `remove_steering_rule`, `set_steering_enabled`) so Claude can mute in-chat; eight new CLI flags (`--steer-*`) for scriptable management. Five rule types: `sender_email`, `sender_domain`, `thread_id`, `thread_name_contains`, `body_contains` (FTS5). `get_thread` + `list_accounts` unaffected. Plan: [docs/plans/steering-rules.md](docs/plans/steering-rules.md). Five /tdd-cycle runs, all green; coverage 99.81% / 97.16%.
+- [x] **Steering rules** ✅ (2026-04-20) — hard-exclude-by-default on `get_recent_activity` + `search`, with `include_muted` escape hatch. New `steering_rules` table (schema v9→v10), `SteeringStore` contract (sqlite + in-memory), `buildSteeringPredicate` shared SQL-and-JS filter. Four new MCP tools (`get_steering`, `add_steering_rule`, `remove_steering_rule`, `set_steering_enabled`) so Claude can mute in-chat; eight new CLI flags (`--steer-*`) for scriptable management. Five rule types: `sender_email`, `sender_domain`, `thread_id`, `thread_name_contains`, `body_contains` (FTS5). `get_thread` + `list_accounts` unaffected. Plan: [docs/plans/done/steering-rules.md](docs/plans/done/steering-rules.md). Five /tdd-cycle runs, all green; coverage 99.81% / 97.16%.
 - [ ] One real week of daily use
 - [ ] Blog post on waldo.be
 - [ ] Days of Knowledge 2026 lightning talk?

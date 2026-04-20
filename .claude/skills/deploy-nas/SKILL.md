@@ -10,7 +10,7 @@ DS223. **Run every local command yourself via the Bash tool.** Only hand
 off to the operator for NAS-side commands that require `sudo` (which
 needs an interactive password).
 
-Reference: [../../../docs/plans/deploy-nas-skill.md](../../../docs/plans/deploy-nas-skill.md)
+Reference: [../../../docs/plans/done/deploy-nas-skill.md](../../../docs/plans/done/deploy-nas-skill.md)
 for the design rationale and scope boundary.
 
 ## Automation principle

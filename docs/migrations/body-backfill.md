@@ -20,7 +20,7 @@ Claude couldn't read mail bodies. The MCP tools return snippets, but:
    The first 280 chars of any mail's HTML is the `<head><meta><style>…`
    boilerplate, so every snippet looked like garbage.
 
-Fix (Slice A of `docs/plans/fix-message-bodies-slice-a-backfill.md`):
+Fix (Slice A of `docs/plans/done/fix-message-bodies-slice-a-backfill.md`):
 new `htmlToText` helper, new sync mapper that populates both
 `bodyHtml` and `body` going forward, schema v5 → v6 marker, and this
 one-shot in-place backfill for the ~36k existing messages. No Graph

@@ -3,7 +3,7 @@
 One-shot data migrations that run against the production waldo.WTF lake
 on the Synology. The `/deploy-nas --migrate <name>` skill reads recipes
 from this directory — every file has the schema documented in
-[../plans/deploy-nas-skill.md](../plans/deploy-nas-skill.md) so the skill
+[../plans/done/deploy-nas-skill.md](../plans/done/deploy-nas-skill.md) so the skill
 can drive any of them the same way.
 
 Adding a new migration: drop a new `<name>.md` here following the same

@@ -114,6 +114,26 @@ If you added or removed a file under `/docs/`, update
 [docs/README.md](../../../docs/README.md) so it points to every file
 that exists and none that don't.
 
+## Step 6c — Archive the plan
+
+If this task had a plan file at `docs/plans/<name>.md` and the slice /
+task is now complete (tests green, docs updated, ready to ship),
+**move the plan to `docs/plans/done/<name>.md`**.
+
+- Use `git mv docs/plans/<name>.md docs/plans/done/<name>.md` so the
+  history is preserved.
+- Update every reference to the old path in this repo (PROGRESS.md,
+  changelog.md, other docs, skill files) to point at
+  `docs/plans/done/<name>.md`. A forgotten link is a broken link.
+- `docs/plans/` stays for in-flight plans only. `docs/plans/done/` is
+  the archive. An agent scanning `docs/plans/` should see only work
+  that is still open.
+- If the task was abandoned rather than completed, do NOT move — leave
+  it in `docs/plans/` with a one-line note at the top explaining why.
+  Only finished slices move to `done/`.
+- If a plan covers multiple slices and only some are done, leave it in
+  `docs/plans/` until the last slice closes.
+
 ## Step 7 — Cross-reference check
 
 Before marking done, run these checks:
@@ -142,6 +162,7 @@ Docs updated.
 - Getting started: <changed | unchanged>
 - User guide: <changed sections | unchanged>
 - Docs index: <updated | unchanged>
+- Plan archived: <docs/plans/done/<name>.md | n/a — plan still in-flight>
 ```
 
 ---

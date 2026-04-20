@@ -183,6 +183,12 @@ User-visible changes also touch [setup.md](../../../docs/setup.md),
 Docs that are not updated at the moment of the change will never be
 updated. This step is non-optional.
 
+`/docs-update` also archives the plan file written in Step 0.5: when
+the slice is complete it moves `docs/plans/<name>.md` to
+`docs/plans/done/<name>.md` and rewrites every link in the repo. The
+bare `docs/plans/` directory stays reserved for in-flight work; a
+finished slice must not leave a plan rotting there.
+
 ## Step 12 — REVIEW
 
 Answer each question from [methodology.md §2.7](../../../docs/tdd/methodology.md)
