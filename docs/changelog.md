@@ -19,6 +19,7 @@ skill.
 - OAuth slice 3: `POST /oauth/token` — `authorization_code` grant (PKCE verifier check, issues access + refresh pair) and `refresh_token` grant (rotation: old token invalidated on use). Access TTL 1 h, refresh TTL 30 days. Schema migration v8 → v9: `oauth_access_tokens` table + refresh index.
 - OAuth slice 4: MCP endpoint dual-path auth — accepts valid OAuth access token **or** static bearer (unless `WALDO_DISABLE_STATIC_BEARER=true`). Every 401 with OAuth configured now carries `WWW-Authenticate: Bearer resource_metadata=<publicUrl>/.well-known/oauth-protected-resource` (RFC 6750).
 - OAuth slice 5: `docs/oauth.md` operator guide — setup, curl walkthrough, claude.ai registration steps, admin password rotation, manual SQLite client revocation, troubleshooting table. `.env.example` verified complete.
+- OAuth live smoke passed: claude.ai custom connector registered against `https://waldonas3.tailb07704.ts.net` (Tailscale Funnel), consent accepted, first tool call (`list_accounts` / `get_sync_status`) returned live lake data. NAS deploy of image `waldo-wtf:local` (sha256:f4a83b32de6f) healthy.
 - `.env.example` documents four OAuth vars: `WALDO_PUBLIC_URL`, `WALDO_ADMIN_PASSWORD`, `WALDO_DISABLE_STATIC_BEARER` (new in slice 1), and confirms all are optional with clear defaults.
 
 ## 2026-04-19

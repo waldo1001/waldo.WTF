@@ -342,7 +342,7 @@ Plan: [docs/plans/oauth-mcp-auth-slice-4-resource-guard.md](docs/plans/oauth-mcp
 
 Plan: [docs/plans/oauth-mcp-auth-slice-5-live-smoke.md](docs/plans/oauth-mcp-auth-slice-5-live-smoke.md).
 
-> **Live smoke** (claude.ai connector registration + first mobile query) is a manual step — see [docs/oauth.md §3](oauth.md#3-connecting-claudeai).
+**Live smoke ✅ (2026-04-20)** — claude.ai custom connector registered end-to-end against `https://waldonas3.tailb07704.ts.net` (Tailscale Funnel → NAS container). Full OAuth flow exercised (DCR → consent → PKCE token exchange → `/mcp` tool calls). Static bearer kept on alongside OAuth; `WALDO_DISABLE_STATIC_BEARER` left false so Claude Desktop's bearer path keeps working.
 
 ---
 
