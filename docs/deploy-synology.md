@@ -505,6 +505,62 @@ error is almost always in there. Common causes, in order of likelihood:
    the server binds to loopback only and the published port forwards to a
    dead listener.
 
+### Diagnostics: running a handler inside the container
+
+Use this when a specific MCP tool is failing while others succeed and the
+server logs do not show the cause (with the `[mcp tool handler]` log line
+added in the post-OAuth debuggability work, a silent failure usually
+means the request never reached the dispatcher — see
+[oauth.md §6.1](oauth.md)).
+
+The idea is to bypass the MCP transport entirely and call the handler
+function directly against the live SQLite DB. If that works, the bug is
+in transport / auth / client state; if it fails, the bug is in the
+handler or store.
+
+**Setup facts**
+
+- The DB inside the container lives at `/data/db/lake.db` (bind-mounted
+  from `/volume1/docker/waldo-wtf/db` on the host).
+- Always open the DB with `readonly: true` — the live server holds a
+  WAL writer, and a second writer will contend.
+- Do not use `node --experimental-strip-types`: it rejects TypeScript
+  parameter properties, which the stores use. Use `tsx`.
+- `tsx -e "…"` defaults to CJS, which rejects top-level `await`. Wrap
+  your code in an async IIFE.
+
+**Recipe (swap `list_accounts` for whatever handler you are probing)**
+
+```sh
+cd /volume1/docker/waldo-wtf
+sudo docker compose exec waldo ./node_modules/.bin/tsx -e "
+import Database from 'better-sqlite3';
+import { SqliteMessageStore } from './src/store/sqlite-message-store.ts';
+import { handleListAccounts } from './src/mcp/tools/list-accounts.ts';
+(async () => {
+  const db = new Database('/data/db/lake.db', { readonly: true });
+  const store = new SqliteMessageStore(db);
+  const clock = { now: () => new Date() };
+  try {
+    const out = await handleListAccounts(store, clock);
+    console.log('OK:', JSON.stringify(out, null, 2));
+  } catch (e) {
+    console.error('ERR:', e && e.stack ? e.stack : e);
+  }
+})();
+"
+```
+
+**Interpreting the result**
+
+- `OK: { ... }` — the handler runs against the live DB. The bug is in
+  transport / auth / client-side cache. Go back to
+  [oauth.md §6.1](oauth.md) and re-check the stale-connector fix, or
+  `sudo docker compose logs waldo` for auth-layer rejections.
+- `ERR: …` — the handler or store is faulty. The stack trace is the
+  real error; pair it with the `[mcp tool handler]` log line (if any)
+  from the server to triangulate.
+
 ### `exec /app/node_modules/.bin/tsx: no such file or directory`
 The runtime stage's `npm install tsx` didn't land. Rebuild without cache:
 

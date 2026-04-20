@@ -155,6 +155,11 @@ export function createMcpServer(deps: McpServerDeps): Server {
       if (err instanceof InvalidParamsError) {
         throw new McpError(ErrorCode.InvalidParams, err.message);
       }
+      const detail =
+        err instanceof Error
+          ? `${err.message}\n${err.stack ?? ""}`
+          : String(err);
+      console.error(`[mcp tool handler] ${name} failed: ${detail}`);
       throw new McpError(ErrorCode.InternalError, "internal error");
     }
   });

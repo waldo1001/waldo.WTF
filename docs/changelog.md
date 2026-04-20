@@ -13,6 +13,9 @@ skill.
 
 ## 2026-04-20
 
+- MCP tool-dispatch catch now emits `[mcp tool handler] <tool_name> failed: <message>\n<stack>` to stderr before throwing the generic `InternalError`. Wire response unchanged (no detail leaked to OAuth-authenticated clients). `InvalidParamsError` stays silent (caller error, not server fault). Plan: [plans/post-oauth-debuggability-and-client-cache.md](plans/post-oauth-debuggability-and-client-cache.md).
+- New troubleshooting section in [oauth.md §6.1](oauth.md) documenting the stale-DCR / stale-tool-discovery failure mode after any OAuth-surface change, with per-client remove/re-add fixes (Claude Desktop needs full `Cmd+Q`, claude.ai needs hard reload).
+- New diagnostics recipe in [deploy-synology.md](deploy-synology.md) for running a handler directly inside the container via `docker compose exec … tsx -e "<async IIFE>"` against `/data/db/lake.db` opened `readonly: true` — isolates transport bugs from handler bugs when server logs are inconclusive.
 - Steering rules: hard-exclude-by-default filter on `get_recent_activity` and `search` with new `include_muted` / `muted_count` / `steering_hint` fields. Rules persist in new `steering_rules` table (schema migration v9 → v10). Sync is untouched — steering is a query-time lens, never a delete. Plan: [plans/done/steering-rules.md](plans/done/steering-rules.md).
 - New MCP tools: `get_steering`, `add_steering_rule`, `remove_steering_rule`, `set_steering_enabled`. Chat-driven mute ("not interested in mails from DevOps") writes only to the local `steering_rules` table — no Graph calls — preserving the "no external writes" invariant from brief §9.
 - New CLI flags: `--steer-add-sender|domain|thread|thread-name|body <value>`, `--steer-list`, `--steer-enable|disable|remove <id>`, plus `--reason`, `--source`, `--account` modifiers. Scriptable second path to the same `SteeringStore`.

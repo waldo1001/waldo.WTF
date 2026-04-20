@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import Database from "better-sqlite3";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -158,6 +158,86 @@ describe("createMcpServer (SDK, in-memory transport)", () => {
         arguments: { hours: 1 },
       }),
     ).rejects.toMatchObject({ code: ErrorCode.InternalError });
+  });
+
+  it("logs the original error and tool name when a handler throws", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const throwing = new InMemoryMessageStore();
+      const boom = new Error("kaboom original");
+      throwing.getRecentMessages = async () => {
+        throw boom;
+      };
+      const server = createMcpServer({
+        store: throwing,
+        steering: new InMemorySteeringStore(clock),
+        clock,
+      });
+      const [ct, st] = InMemoryTransport.createLinkedPair();
+      const c = new Client(
+        { name: "c", version: "0.0.0" },
+        { capabilities: {} },
+      );
+      await Promise.all([server.connect(st), c.connect(ct)]);
+      await expect(
+        c.callTool({
+          name: "get_recent_activity",
+          arguments: { hours: 1 },
+        }),
+      ).rejects.toMatchObject({ code: ErrorCode.InternalError });
+      const logged = errSpy.mock.calls.map((a) => a.join(" ")).join("\n");
+      expect(logged).toContain("get_recent_activity");
+      expect(logged).toContain("kaboom original");
+      expect(logged).toMatch(/\n\s+at /); // stack trace frame present
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("does NOT log InvalidParamsError (caller error, not server fault)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(
+        client.callTool({ name: "search", arguments: { query: "" } }),
+      ).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+      const logged = errSpy.mock.calls.map((a) => a.join(" ")).join("\n");
+      expect(logged).not.toContain("search");
+      expect(logged).not.toMatch(/mcp tool handler/i);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("logs non-Error throws (string/number) with the tool name", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const throwing = new InMemoryMessageStore();
+      throwing.getRecentMessages = async () => {
+        throw "stringy-boom";
+      };
+      const server = createMcpServer({
+        store: throwing,
+        steering: new InMemorySteeringStore(clock),
+        clock,
+      });
+      const [ct, st] = InMemoryTransport.createLinkedPair();
+      const c = new Client(
+        { name: "c", version: "0.0.0" },
+        { capabilities: {} },
+      );
+      await Promise.all([server.connect(st), c.connect(ct)]);
+      await expect(
+        c.callTool({
+          name: "get_recent_activity",
+          arguments: { hours: 1 },
+        }),
+      ).rejects.toMatchObject({ code: ErrorCode.InternalError });
+      const logged = errSpy.mock.calls.map((a) => a.join(" ")).join("\n");
+      expect(logged).toContain("get_recent_activity");
+      expect(logged).toContain("stringy-boom");
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   it("server provides multilingual search + steering instructions", () => {

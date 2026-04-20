@@ -197,3 +197,51 @@ sqlite3 data/lake.db \
 | MCP endpoint → 401 even with fresh token | `WALDO_DISABLE_STATIC_BEARER=true` and token lookup failed | Verify `WALDO_PUBLIC_URL` resolves correctly |
 | MCP endpoint → 401 with bare `Bearer` (no resource_metadata) | `WALDO_PUBLIC_URL` not set | OAuth not mounted; static bearer only |
 | `redirect_uri_mismatch` on register | Supplied `redirect_uri` not in client's registered list | Re-register or fix the redirect URI |
+
+### 6.1. Tools error or time out after an OAuth deploy
+
+After any OAuth-surface change (new client registration, admin-password
+rotation, `WALDO_DISABLE_STATIC_BEARER` flip, DCR table migration, or a
+server-side refactor that changes the `/.well-known/*` payload) the client
+holds cached DCR `client_id`, token, or tool-discovery state that is no
+longer valid against the current server. The server is healthy; the client
+is stale. The clients do not advertise this state and do not re-register
+on their own.
+
+**Symptoms**
+
+- **Claude Desktop:** calling the affected tool hangs until the MCP call
+  times out. Other tools on the same connector may still work.
+- **claude.ai web:** calling the affected tool returns a generic
+  *"tool execution error"*, often repeated identically across retries.
+  Other tools on the same connector may still work. The server log
+  (since the debuggability fix in [../src/mcp/mcp-server.ts](../src/mcp/mcp-server.ts))
+  will show nothing for the failing tool — a telltale sign the request
+  never reached the handler at all, and the failure is on the client side.
+
+**Fix — per client**
+
+- **Claude Desktop (macOS):** Settings → Connectors → find the waldo-wtf
+  connector → **Disconnect**. Then **quit Claude Desktop fully** with
+  `Cmd+Q` (closing the window is not enough — the MCP transport keeps
+  running). Relaunch. Settings → Connectors → **Add custom connector** →
+  paste the `https://…ts.net` Tailscale URL → complete the OAuth
+  consent flow.
+- **claude.ai web:** Settings → Connectors → find the connector →
+  **Remove**. Hard-reload the tab (`Cmd+Shift+R`, not a plain reload —
+  service workers cache the DCR client). Re-add the connector and
+  complete the consent flow.
+
+**When to escalate**
+
+If remove/re-add does not resolve it:
+
+1. Check the server log (`sudo docker compose logs waldo | tail -200`
+   on the NAS). With the debuggability fix in place, a failing tool
+   logs `[mcp tool handler] <tool_name> failed: <message>\n<stack>`.
+   If that line appears, the request *is* reaching the server — it is
+   a server bug, not a stale-client bug.
+2. If no log line appears for the failing tool, the request is being
+   dropped before it reaches the dispatcher. Run the in-container
+   diagnostic recipe in [deploy-synology.md](deploy-synology.md) to
+   isolate transport from handler.
