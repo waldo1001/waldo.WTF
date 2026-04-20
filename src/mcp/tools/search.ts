@@ -8,10 +8,14 @@ export const DEFAULT_SEARCH_LIMIT = 20;
 export const MAX_SEARCH_LIMIT = 100;
 
 export interface SearchParams {
-  readonly query: string;
+  readonly query?: string;
   readonly limit?: number;
   readonly include_body?: boolean;
   readonly include_muted?: boolean;
+  readonly sender_email?: string;
+  readonly sender_name?: string;
+  readonly after?: string;
+  readonly before?: string;
 }
 
 export interface ProjectedSearchMessage {
@@ -61,7 +65,30 @@ export const SEARCH_TOOL = {
       query: {
         type: "string",
         minLength: 1,
-        description: "Free-text search query.",
+        description:
+          "Free-text search query. Optional when sender_email or sender_name is set, but at least one of query/sender_email/sender_name is required.",
+      },
+      sender_email: {
+        type: "string",
+        minLength: 1,
+        description:
+          "Structured filter on the sender's email (case-insensitive exact match on the From header, independent of FTS). Useful for 'what has <person> sent me' questions where name/email may not appear in the body.",
+      },
+      sender_name: {
+        type: "string",
+        minLength: 1,
+        description:
+          "Structured filter on the sender's display name (case-insensitive substring match). Handles display-name variations like 'Gunter Peeters' vs 'Peeters, Gunter'.",
+      },
+      after: {
+        type: "string",
+        description:
+          "Inclusive lower bound on sent_at, ISO 8601 (e.g. '2026-03-21T00:00:00Z' or '2026-03-21').",
+      },
+      before: {
+        type: "string",
+        description:
+          "Exclusive upper bound on sent_at, ISO 8601.",
       },
       limit: {
         type: "number",
@@ -80,7 +107,6 @@ export const SEARCH_TOOL = {
           "If true, include hits matching steering rules. Default false (hard-exclude muted items).",
       },
     },
-    required: ["query"],
     additionalProperties: false,
   },
 } as const;
@@ -91,11 +117,40 @@ export async function handleSearch(
   params: SearchParams,
 ): Promise<SearchResult> {
   const query = params.query;
-  if (typeof query !== "string") {
-    throw new InvalidParamsError("query must be a string");
+  const queryProvided = query !== undefined;
+  if (queryProvided) {
+    if (typeof query !== "string") {
+      throw new InvalidParamsError("query must be a string");
+    }
+    if (query.trim().length === 0) {
+      throw new InvalidParamsError("query must be non-empty");
+    }
   }
-  if (query.trim().length === 0) {
-    throw new InvalidParamsError("query must be non-empty");
+  const senderEmail = validateOptionalNonEmptyString(
+    params.sender_email,
+    "sender_email",
+  );
+  const senderName = validateOptionalNonEmptyString(
+    params.sender_name,
+    "sender_name",
+  );
+  if (
+    !queryProvided &&
+    senderEmail === undefined &&
+    senderName === undefined
+  ) {
+    throw new InvalidParamsError(
+      "at least one of query, sender_email, or sender_name is required",
+    );
+  }
+  const after = validateOptionalIso(params.after, "after");
+  const before = validateOptionalIso(params.before, "before");
+  if (
+    after !== undefined &&
+    before !== undefined &&
+    after.getTime() > before.getTime()
+  ) {
+    throw new InvalidParamsError("after must be <= before");
   }
   let limit = params.limit;
   if (limit === undefined) {
@@ -121,8 +176,13 @@ export async function handleSearch(
     throw new InvalidParamsError("include_muted must be a boolean");
   }
   const includeMuted = params.include_muted === true;
-  const { hits, mutedCount } = await store.searchMessages(query, limit, {
+  const storeQuery = queryProvided ? (query as string) : "";
+  const { hits, mutedCount } = await store.searchMessages(storeQuery, limit, {
     includeMuted,
+    ...(senderEmail !== undefined && { senderEmail }),
+    ...(senderName !== undefined && { senderName }),
+    ...(after !== undefined && { after }),
+    ...(before !== undefined && { before }),
   });
   const includeBody = params.include_body === true;
   let remaining = MAX_TOTAL_BODY_CHARS;
@@ -156,6 +216,35 @@ export async function handleSearch(
     muted_count: mutedCount,
     ...(hint !== undefined && { steering_hint: hint }),
   };
+}
+
+function validateOptionalNonEmptyString(
+  value: unknown,
+  name: string,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new InvalidParamsError(`${name} must be a string`);
+  }
+  if (value.trim().length === 0) {
+    throw new InvalidParamsError(`${name} must be non-empty`);
+  }
+  return value;
+}
+
+function validateOptionalIso(
+  value: unknown,
+  name: string,
+): Date | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new InvalidParamsError(`${name} must be an ISO 8601 string`);
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new InvalidParamsError(`${name} must be a valid ISO 8601 string`);
+  }
+  return parsed;
 }
 
 function projectCore(h: SearchHit): ProjectedSearchHit {

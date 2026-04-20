@@ -86,7 +86,7 @@ describe("handleSearch", () => {
     const clock = clockAt("2026-04-13T12:00:00Z");
     await handleSearch(store, clock, { query: "hello" });
     const call = store.calls.find((c) => c.method === "searchMessages");
-    expect(call).toEqual({
+    expect(call).toMatchObject({
       method: "searchMessages",
       query: "hello",
       limit: DEFAULT_SEARCH_LIMIT,
@@ -98,7 +98,7 @@ describe("handleSearch", () => {
     const clock = clockAt("2026-04-13T12:00:00Z");
     await handleSearch(store, clock, { query: "hello", limit: 5 });
     const call = store.calls.find((c) => c.method === "searchMessages");
-    expect(call).toEqual({
+    expect(call).toMatchObject({
       method: "searchMessages",
       query: "hello",
       limit: 5,
@@ -213,10 +213,19 @@ describe("handleSearch", () => {
     expect(Object.keys(withoutT?.message ?? {})).not.toContain("threadId");
   });
 
-  it("exposes a tool descriptor with a valid JSON-schema input", () => {
+  it("exposes a tool descriptor with a valid JSON-schema input advertising structured sender/date filters", () => {
     expect(SEARCH_TOOL.name).toBe("search");
     expect(SEARCH_TOOL.inputSchema.type).toBe("object");
-    expect(SEARCH_TOOL.inputSchema.required).toContain("query");
+    const props = SEARCH_TOOL.inputSchema.properties;
+    expect(props).toHaveProperty("query");
+    expect(props).toHaveProperty("sender_email");
+    expect(props).toHaveProperty("sender_name");
+    expect(props).toHaveProperty("after");
+    expect(props).toHaveProperty("before");
+    // query is no longer required; runtime validates "at least one" instead.
+    expect(
+      (SEARCH_TOOL.inputSchema as { required?: readonly string[] }).required,
+    ).toBeUndefined();
   });
 
   it("description includes multilingual search guidance", () => {
@@ -292,6 +301,326 @@ describe("handleSearch", () => {
     const res = await handleSearch(store, clock, { query: "anything" });
     expect(res.muted_count).toBe(3);
     expect(res.steering_hint).toMatch(/3 hit\(s\) hidden/);
+  });
+
+  it("rejects input with no query and no sender filters", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    await expect(handleSearch(store, clock, {})).rejects.toBeInstanceOf(
+      InvalidParamsError,
+    );
+  });
+
+  it("sender_email alone returns only messages with matching sender_email (case-insensitive)", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mkMessage({
+            id: "hit-lower",
+            senderEmail: "gunter@example.test",
+            body: "alpha",
+          }),
+          mkMessage({
+            id: "hit-mixed",
+            senderEmail: "Gunter@Example.TEST",
+            body: "beta",
+          }),
+          mkMessage({
+            id: "miss",
+            senderEmail: "other@example.test",
+            body: "gamma",
+          }),
+        ],
+      },
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleSearch(store, clock, {
+      sender_email: "GUNTER@example.test",
+    });
+    const ids = result.hits.map((h) => h.message.id).sort();
+    expect(ids).toEqual(["hit-lower", "hit-mixed"]);
+  });
+
+  it("sender_email ignores messages where the address only appears in the body", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mkMessage({
+            id: "from-gunter",
+            senderEmail: "gunter@example.test",
+            senderName: "Gunter Peeters",
+            body: "project update",
+          }),
+          mkMessage({
+            id: "quotes-gunter",
+            senderEmail: "bot@devops.example",
+            senderName: "DevOps",
+            body: "branch owned by gunter@example.test merged",
+          }),
+        ],
+      },
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleSearch(store, clock, {
+      sender_email: "gunter@example.test",
+    });
+    expect(result.hits.map((h) => h.message.id)).toEqual(["from-gunter"]);
+  });
+
+  it("sender_name performs case-insensitive substring match across display-name formats", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mkMessage({ id: "lastname-first", senderName: "Peeters, Gunter", body: "one" }),
+          mkMessage({ id: "firstname-first", senderName: "Gunter Peeters", body: "two" }),
+          mkMessage({ id: "unrelated", senderName: "Gunther Muller", body: "three" }),
+        ],
+      },
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleSearch(store, clock, { sender_name: "peeters" });
+    const ids = result.hits.map((h) => h.message.id).sort();
+    expect(ids).toEqual(["firstname-first", "lastname-first"]);
+  });
+
+  it("query AND sender_email compose with AND semantics", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mkMessage({
+            id: "lunch-from-gunter",
+            senderEmail: "gunter@example.test",
+            body: "lunch tomorrow?",
+          }),
+          mkMessage({
+            id: "deploy-from-gunter",
+            senderEmail: "gunter@example.test",
+            body: "deploy done",
+          }),
+          mkMessage({
+            id: "lunch-from-other",
+            senderEmail: "someone@example.test",
+            body: "lunch plans",
+          }),
+        ],
+      },
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleSearch(store, clock, {
+      query: "lunch",
+      sender_email: "gunter@example.test",
+    });
+    expect(result.hits.map((h) => h.message.id)).toEqual([
+      "lunch-from-gunter",
+    ]);
+  });
+
+  it("after is inclusive and before is exclusive on sent_at", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mkMessage({
+            id: "too-early",
+            senderEmail: "p@x.test",
+            sentAt: new Date("2026-03-31T23:59:59Z"),
+          }),
+          mkMessage({
+            id: "at-after-boundary",
+            senderEmail: "p@x.test",
+            sentAt: new Date("2026-04-01T00:00:00Z"),
+          }),
+          mkMessage({
+            id: "mid",
+            senderEmail: "p@x.test",
+            sentAt: new Date("2026-04-10T12:00:00Z"),
+          }),
+          mkMessage({
+            id: "at-before-boundary",
+            senderEmail: "p@x.test",
+            sentAt: new Date("2026-04-15T00:00:00Z"),
+          }),
+          mkMessage({
+            id: "too-late",
+            senderEmail: "p@x.test",
+            sentAt: new Date("2026-04-16T00:00:00Z"),
+          }),
+        ],
+      },
+    });
+    const clock = clockAt("2026-05-01T00:00:00Z");
+    const result = await handleSearch(store, clock, {
+      sender_email: "p@x.test",
+      after: "2026-04-01T00:00:00Z",
+      before: "2026-04-15T00:00:00Z",
+    });
+    const ids = result.hits.map((h) => h.message.id).sort();
+    expect(ids).toEqual(["at-after-boundary", "mid"]);
+  });
+
+  it("rejects empty-string sender_email with InvalidParamsError", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    await expect(
+      handleSearch(store, clock, { sender_email: "   " }),
+    ).rejects.toBeInstanceOf(InvalidParamsError);
+  });
+
+  it("rejects non-string after with InvalidParamsError", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    await expect(
+      handleSearch(store, clock, {
+        sender_email: "p@x.test",
+        after: 42 as unknown as string,
+      }),
+    ).rejects.toBeInstanceOf(InvalidParamsError);
+  });
+
+  it("rejects invalid ISO in after with InvalidParamsError", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    await expect(
+      handleSearch(store, clock, {
+        sender_email: "p@x.test",
+        after: "not-a-date",
+      }),
+    ).rejects.toBeInstanceOf(InvalidParamsError);
+  });
+
+  it("rejects after > before with InvalidParamsError", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    await expect(
+      handleSearch(store, clock, {
+        sender_email: "p@x.test",
+        after: "2026-05-01T00:00:00Z",
+        before: "2026-04-01T00:00:00Z",
+      }),
+    ).rejects.toBeInstanceOf(InvalidParamsError);
+  });
+
+  it("scopes muted_count to the structured filter, not the full table", async () => {
+    const muted = mkMessage({
+      id: "muted-match",
+      senderEmail: "gunter@example.test",
+      body: "confidential",
+    });
+    const mutedUnrelated = mkMessage({
+      id: "muted-unrelated",
+      senderEmail: "other@example.test",
+      body: "unrelated",
+    });
+    const stubRules = [
+      {
+        id: 1,
+        ruleType: "sender_domain" as const,
+        pattern: "example.test",
+        enabled: true,
+        createdAt: new Date("2026-04-01T00:00:00Z"),
+      },
+    ];
+    const steeringStore = {
+      listRules: async () => stubRules,
+    };
+    const store = new InMemoryMessageStore({
+      seed: { messages: [muted, mutedUnrelated] },
+      steeringStore: steeringStore as unknown as Parameters<
+        typeof InMemoryMessageStore
+      >[0]["steeringStore"],
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleSearch(store, clock, {
+      sender_email: "gunter@example.test",
+    });
+    expect(result.count).toBe(0);
+    expect(result.muted_count).toBe(1);
+    expect(result.steering_hint).toMatch(/1 hit/);
+  });
+
+  it("includes muted sender_email hits when include_muted is true", async () => {
+    const msg = mkMessage({
+      id: "muted",
+      senderEmail: "gunter@example.test",
+      body: "hello",
+    });
+    const stubRules = [
+      {
+        id: 1,
+        ruleType: "sender_email" as const,
+        pattern: "gunter@example.test",
+        enabled: true,
+        createdAt: new Date("2026-04-01T00:00:00Z"),
+      },
+    ];
+    const steeringStore = {
+      listRules: async () => stubRules,
+    };
+    const store = new InMemoryMessageStore({
+      seed: { messages: [msg] },
+      steeringStore: steeringStore as unknown as Parameters<
+        typeof InMemoryMessageStore
+      >[0]["steeringStore"],
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleSearch(store, clock, {
+      sender_email: "gunter@example.test",
+      include_muted: true,
+    });
+    expect(result.count).toBe(1);
+    expect(result.muted_count).toBe(0);
+  });
+
+  it("orders results by sent_at DESC when query is omitted", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mkMessage({
+            id: "oldest",
+            senderEmail: "p@x.test",
+            sentAt: new Date("2026-04-01T00:00:00Z"),
+          }),
+          mkMessage({
+            id: "newest",
+            senderEmail: "p@x.test",
+            sentAt: new Date("2026-04-10T00:00:00Z"),
+          }),
+          mkMessage({
+            id: "middle",
+            senderEmail: "p@x.test",
+            sentAt: new Date("2026-04-05T00:00:00Z"),
+          }),
+        ],
+      },
+    });
+    const clock = clockAt("2026-05-01T00:00:00Z");
+    const result = await handleSearch(store, clock, {
+      sender_email: "p@x.test",
+    });
+    expect(result.hits.map((h) => h.message.id)).toEqual([
+      "newest",
+      "middle",
+      "oldest",
+    ]);
+  });
+
+  it("accepts sender_email alone with no query and does not throw", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mkMessage({
+            id: "m1",
+            senderEmail: "gunter@example.test",
+            body: "lunch tomorrow?",
+          }),
+        ],
+      },
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleSearch(store, clock, {
+      sender_email: "gunter@example.test",
+    });
+    expect(result.count).toBe(1);
+    expect(result.hits[0]?.message.id).toBe("m1");
   });
 
   it("marks bodyBudgetExhausted when cumulative hit bodies exceed the per-call budget", async () => {

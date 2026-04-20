@@ -324,6 +324,134 @@ export function runMessageStoreContract(
       expect((await store.searchMessages("   ", 10)).hits).toEqual([]);
     });
 
+    it("searchMessages filters by senderEmail case-insensitively, ignoring body-only matches", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({
+          id: "from-gunter",
+          senderEmail: "gunter@example.test",
+          senderName: "Gunter Peeters",
+          body: "project update",
+        }),
+        msg({
+          id: "from-gunter-mixed",
+          senderEmail: "Gunter@Example.TEST",
+          body: "another",
+        }),
+        msg({
+          id: "body-mentions",
+          senderEmail: "bot@devops.example",
+          body: "branch owned by gunter@example.test merged",
+        }),
+      ]);
+      const { hits } = await store.searchMessages("", 10, {
+        senderEmail: "gunter@example.test",
+      });
+      const ids = hits.map((h) => h.message.id).sort();
+      expect(ids).toEqual(["from-gunter", "from-gunter-mixed"]);
+    });
+
+    it("searchMessages senderName does a case-insensitive substring match", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({ id: "lastname-first", senderName: "Peeters, Gunter", body: "one" }),
+        msg({ id: "firstname-first", senderName: "Gunter Peeters", body: "two" }),
+        msg({ id: "unrelated", senderName: "Gunther Muller", body: "three" }),
+      ]);
+      const { hits } = await store.searchMessages("", 10, {
+        senderName: "peeters",
+      });
+      const ids = hits.map((h) => h.message.id).sort();
+      expect(ids).toEqual(["firstname-first", "lastname-first"]);
+    });
+
+    it("searchMessages composes FTS query and senderEmail via AND", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({
+          id: "lunch-from-gunter",
+          senderEmail: "gunter@example.test",
+          body: "lunch tomorrow",
+        }),
+        msg({
+          id: "deploy-from-gunter",
+          senderEmail: "gunter@example.test",
+          body: "deploy done",
+        }),
+        msg({
+          id: "lunch-from-other",
+          senderEmail: "someone@x.test",
+          body: "lunch plans",
+        }),
+      ]);
+      const { hits } = await store.searchMessages("lunch", 10, {
+        senderEmail: "gunter@example.test",
+      });
+      expect(hits.map((h) => h.message.id)).toEqual(["lunch-from-gunter"]);
+    });
+
+    it("searchMessages after is inclusive and before is exclusive", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({
+          id: "too-early",
+          senderEmail: "p@x.test",
+          sentAt: new Date("2026-03-31T23:59:59Z"),
+        }),
+        msg({
+          id: "at-after",
+          senderEmail: "p@x.test",
+          sentAt: new Date("2026-04-01T00:00:00Z"),
+        }),
+        msg({
+          id: "mid",
+          senderEmail: "p@x.test",
+          sentAt: new Date("2026-04-10T12:00:00Z"),
+        }),
+        msg({
+          id: "at-before",
+          senderEmail: "p@x.test",
+          sentAt: new Date("2026-04-15T00:00:00Z"),
+        }),
+      ]);
+      const { hits } = await store.searchMessages("", 10, {
+        senderEmail: "p@x.test",
+        after: new Date("2026-04-01T00:00:00Z"),
+        before: new Date("2026-04-15T00:00:00Z"),
+      });
+      const ids = hits.map((h) => h.message.id).sort();
+      expect(ids).toEqual(["at-after", "mid"]);
+    });
+
+    it("searchMessages orders by sent_at DESC when the FTS query is empty", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({
+          id: "oldest",
+          senderEmail: "p@x.test",
+          sentAt: new Date("2026-04-01T00:00:00Z"),
+        }),
+        msg({
+          id: "newest",
+          senderEmail: "p@x.test",
+          sentAt: new Date("2026-04-10T00:00:00Z"),
+        }),
+        msg({
+          id: "middle",
+          senderEmail: "p@x.test",
+          sentAt: new Date("2026-04-05T00:00:00Z"),
+        }),
+      ]);
+      const { hits } = await store.searchMessages("", 10, {
+        senderEmail: "p@x.test",
+      });
+      expect(hits.map((h) => h.message.id)).toEqual([
+        "newest",
+        "middle",
+        "oldest",
+      ]);
+    });
+
     it("getRecentMessages returns empty on an empty store", async () => {
       const { store } = await factory();
       const got = await store.getRecentMessages({

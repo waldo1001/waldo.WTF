@@ -33,6 +33,10 @@ export interface GetRecentMessagesResult {
 
 export interface SearchMessagesOptions {
   readonly includeMuted?: boolean;
+  readonly senderEmail?: string;
+  readonly senderName?: string;
+  readonly after?: Date;
+  readonly before?: Date;
 }
 
 export interface SearchMessagesResult {

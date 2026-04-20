@@ -13,6 +13,7 @@ skill.
 
 ## 2026-04-20
 
+- `search` MCP tool gained optional structured filters `sender_email`, `sender_name`, `after`, `before`. `query` is now optional when any sender filter is present; when omitted, results are ordered `sent_at DESC` instead of BM25. Filters compose with FTS MATCH and steering via AND. `muted_count` is scoped to the same filter set. Closes the "From-header-only" blind spot where FTS over body text missed messages actually sent *by* a person. Plan: [plans/done/feat-search-sender-filters.md](plans/done/feat-search-sender-filters.md).
 - MCP tool-dispatch catch now emits `[mcp tool handler] <tool_name> failed: <message>\n<stack>` to stderr before throwing the generic `InternalError`. Wire response unchanged (no detail leaked to OAuth-authenticated clients). `InvalidParamsError` stays silent (caller error, not server fault). Plan: [plans/done/post-oauth-debuggability-and-client-cache.md](plans/done/post-oauth-debuggability-and-client-cache.md).
 - New troubleshooting section in [oauth.md §6.1](oauth.md) documenting the stale-DCR / stale-tool-discovery failure mode after any OAuth-surface change, with per-client remove/re-add fixes (Claude Desktop needs full `Cmd+Q`, claude.ai needs hard reload).
 - New diagnostics recipe in [deploy-synology.md](deploy-synology.md) for running a handler directly inside the container via `docker compose exec … tsx -e "<async IIFE>"` against `/data/db/lake.db` opened `readonly: true` — isolates transport bugs from handler bugs when server logs are inconclusive.

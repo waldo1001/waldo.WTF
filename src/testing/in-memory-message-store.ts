@@ -30,7 +30,12 @@ export type InMemoryMessageStoreCall =
   | { method: "appendSyncLog"; entry: SyncLogEntry }
   | { method: "upsertAccount"; account: AccountRecord }
   | { method: "listAccounts" }
-  | { method: "searchMessages"; query: string; limit: number }
+  | {
+      method: "searchMessages";
+      query: string;
+      limit: number;
+      opts?: SearchMessagesOptions;
+    }
   | { method: "getRecentMessages"; opts: GetRecentMessagesOptions }
   | { method: "getThread"; opts: GetThreadOptions }
   | { method: "getSyncStatus"; now: Date }
@@ -139,22 +144,58 @@ export class InMemoryMessageStore implements MessageStore {
     limit: number,
     opts?: SearchMessagesOptions,
   ): Promise<SearchMessagesResult> {
-    this.calls.push({ method: "searchMessages", query, limit });
+    this.calls.push({
+      method: "searchMessages",
+      query,
+      limit,
+      ...(opts !== undefined && { opts }),
+    });
     const needle = query.trim().toLowerCase();
-    if (needle === "") return { hits: [], mutedCount: 0 };
+    const hasQuery = needle !== "";
+    const senderEmailNeedle = opts?.senderEmail?.toLowerCase();
+    const senderNameNeedle = opts?.senderName?.toLowerCase();
+    const afterMs = opts?.after?.getTime();
+    const beforeMs = opts?.before?.getTime();
+    const hasStructuredFilter =
+      senderEmailNeedle !== undefined ||
+      senderNameNeedle !== undefined ||
+      afterMs !== undefined ||
+      beforeMs !== undefined;
+    if (!hasQuery && !hasStructuredFilter) {
+      return { hits: [], mutedCount: 0 };
+    }
     const predicate = await this.loadPredicate(opts?.includeMuted);
     const hits: SearchHit[] = [];
     let mutedCount = 0;
     for (const m of this.messages.values()) {
-      const haystack = `${m.body ?? ""}\n${m.threadName ?? ""}\n${m.senderName ?? ""}`.toLowerCase();
-      if (!haystack.includes(needle)) continue;
+      if (hasQuery) {
+        const haystack =
+          `${m.body ?? ""}\n${m.threadName ?? ""}\n${m.senderName ?? ""}`.toLowerCase();
+        if (!haystack.includes(needle)) continue;
+      }
+      if (senderEmailNeedle !== undefined) {
+        if ((m.senderEmail ?? "").toLowerCase() !== senderEmailNeedle) continue;
+      }
+      if (senderNameNeedle !== undefined) {
+        if (!(m.senderName ?? "").toLowerCase().includes(senderNameNeedle))
+          continue;
+      }
+      if (afterMs !== undefined && m.sentAt.getTime() < afterMs) continue;
+      if (beforeMs !== undefined && m.sentAt.getTime() >= beforeMs) continue;
       if (predicate.matches(m)) {
         mutedCount++;
         continue;
       }
-      hits.push({ message: m, snippet: m.body ?? "", rank: 0 });
+      hits.push({
+        message: m,
+        snippet: m.body ?? "",
+        rank: hasQuery ? 0 : -m.sentAt.getTime(),
+      });
     }
-    hits.sort((a, b) => b.message.sentAt.getTime() - a.message.sentAt.getTime());
+    hits.sort((a, b) => {
+      if (hasQuery) return a.rank - b.rank;
+      return b.message.sentAt.getTime() - a.message.sentAt.getTime();
+    });
     return { hits: hits.slice(0, limit), mutedCount };
   }
 

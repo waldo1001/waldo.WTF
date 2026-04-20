@@ -34,19 +34,38 @@ accounts, ordered `sent_at DESC`, within the last `hours`. Filter by
 Typical prompt: *"What happened in the last 4 hours across all my
 accounts?"*
 
-### `search(query, limit?, include_body?)`
+### `search(query?, sender_email?, sender_name?, after?, before?, limit?, include_body?)`
 
 Full-text search via SQLite FTS5 over `thread_name`, `sender_name`,
-`body`. Returns top N ranked matches with snippets. Pass
-`include_body: true` when the user wants the full text of the matched
-messages (e.g. *"read me the mail"*); bodies are head-truncated per
-message (50k chars, flagged with `bodyTruncated: true`) and the
+`body`, plus optional structured filters on the stored From header and
+`sent_at`. At least one of `query`, `sender_email`, or `sender_name`
+must be present.
+
+- `sender_email` — case-insensitive exact match on the From header
+  address. Hits messages *from* that address, not just ones mentioning
+  it in the body.
+- `sender_name` — case-insensitive substring match on the From header
+  display name. Handles "Gunter Peeters" vs "Peeters, Gunter".
+- `after` / `before` — ISO 8601 bounds on `sent_at`. `after` is
+  inclusive, `before` is exclusive.
+- When `query` is omitted, results are ordered `sent_at DESC` instead
+  of BM25 rank.
+
+Structured filters compose with `query` and with steering via AND;
+`muted_count` is scoped to the same filter set.
+
+Pass `include_body: true` when the user wants the full text of the
+matched messages (e.g. *"read me the mail"*); bodies are head-truncated
+per message (50k chars, flagged with `bodyTruncated: true`) and the
 response carries `bodyBudgetExhausted: true` when later hits had to be
 returned without a body to protect context.
 
 Typical prompts:
 - *"Search for any mention of 'Q2 release' in the last month."*
-- *"Find emails from Defrancq about the pricing proposal."*
+- *"What has Gunter Peeters sent me in the last 30 days?"* →
+  `sender_name: "peeters"`, `after: "2026-03-21"`.
+- *"Find emails from Defrancq about the pricing proposal."* →
+  `sender_name: "defrancq"`, `query: "pricing"`.
 
 ### `get_thread(thread_id, limit?, include_body?)`
 

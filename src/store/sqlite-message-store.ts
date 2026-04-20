@@ -436,44 +436,69 @@ export class SqliteMessageStore implements MessageStore {
     opts?: SearchMessagesOptions,
   ): Promise<SearchMessagesResult> {
     const phrase = toFts5Phrase(query);
-    if (phrase === null) return { hits: [], mutedCount: 0 };
+    const filters = buildStructuredFilterSql(opts);
+    if (phrase === null && !filters.hasAny) {
+      return { hits: [], mutedCount: 0 };
+    }
 
     const predicate = await this.loadPredicate(opts?.includeMuted);
+    const useFts = phrase !== null;
+
+    const scopeClauses: string[] = [];
+    const scopeParams: (string | number)[] = [];
+    if (useFts) {
+      scopeClauses.push("messages_fts MATCH ?");
+      scopeParams.push(phrase);
+    }
+    scopeClauses.push(...filters.clauses);
+    scopeParams.push(...filters.params);
 
     let mutedCount = 0;
     if (predicate.sqlFragment !== null) {
       const countSql = `
         SELECT COUNT(*) AS n
-        FROM messages_fts
-        JOIN messages m ON m.rowid = messages_fts.rowid
-        WHERE messages_fts MATCH ? AND ${predicate.sqlFragment}
+        FROM ${useFts ? "messages_fts JOIN messages m ON m.rowid = messages_fts.rowid" : "messages m"}
+        WHERE ${scopeClauses.join(" AND ")} AND ${predicate.sqlFragment}
       `;
       const countRow = this.db
         .prepare(countSql)
-        .get(phrase, ...predicate.params) as { n: number };
+        .get(...scopeParams, ...predicate.params) as { n: number };
       mutedCount = countRow.n;
     }
 
-    const whereParts = ["messages_fts MATCH ?"];
-    const sqlParams: (string | number)[] = [phrase];
+    const whereParts = [...scopeClauses];
+    const sqlParams: (string | number)[] = [...scopeParams];
     if (predicate.sqlFragment !== null) {
       whereParts.push(`NOT ${predicate.sqlFragment}`);
       sqlParams.push(...predicate.params);
     }
     sqlParams.push(limit);
-    const sql = `
-      SELECT m.id, m.source, m.account, m.native_id,
-             m.thread_id, m.thread_name, m.sender_name, m.sender_email,
-             m.sent_at, m.imported_at, m.is_read, m.body, m.body_html, m.raw_json,
-             m.chat_type, m.reply_to_id, m.mentions_json,
-             snippet(messages_fts, 0, '[', ']', '…', 16) AS snippet,
-             bm25(messages_fts) AS rank
-      FROM messages_fts
-      JOIN messages m ON m.rowid = messages_fts.rowid
-      WHERE ${whereParts.join(" AND ")}
-      ORDER BY rank
-      LIMIT ?
-    `;
+    const sql = useFts
+      ? `
+        SELECT m.id, m.source, m.account, m.native_id,
+               m.thread_id, m.thread_name, m.sender_name, m.sender_email,
+               m.sent_at, m.imported_at, m.is_read, m.body, m.body_html, m.raw_json,
+               m.chat_type, m.reply_to_id, m.mentions_json,
+               snippet(messages_fts, 0, '[', ']', '…', 16) AS snippet,
+               bm25(messages_fts) AS rank
+        FROM messages_fts
+        JOIN messages m ON m.rowid = messages_fts.rowid
+        WHERE ${whereParts.join(" AND ")}
+        ORDER BY rank
+        LIMIT ?
+      `
+      : `
+        SELECT m.id, m.source, m.account, m.native_id,
+               m.thread_id, m.thread_name, m.sender_name, m.sender_email,
+               m.sent_at, m.imported_at, m.is_read, m.body, m.body_html, m.raw_json,
+               m.chat_type, m.reply_to_id, m.mentions_json,
+               '' AS snippet,
+               (-m.sent_at) AS rank
+        FROM messages m
+        WHERE ${whereParts.join(" AND ")}
+        ORDER BY m.sent_at DESC, m.id DESC
+        LIMIT ?
+      `;
     const rows = this.db.prepare(sql).all(...sqlParams) as (MessageRow & {
       snippet: string;
       rank: number;
@@ -487,6 +512,30 @@ export class SqliteMessageStore implements MessageStore {
       mutedCount,
     };
   }
+}
+
+function buildStructuredFilterSql(
+  opts: SearchMessagesOptions | undefined,
+): { clauses: string[]; params: (string | number)[]; hasAny: boolean } {
+  const clauses: string[] = [];
+  const params: (string | number)[] = [];
+  if (opts?.senderEmail !== undefined) {
+    clauses.push("LOWER(m.sender_email) = LOWER(?)");
+    params.push(opts.senderEmail);
+  }
+  if (opts?.senderName !== undefined) {
+    clauses.push("LOWER(m.sender_name) LIKE LOWER(?)");
+    params.push(`%${opts.senderName}%`);
+  }
+  if (opts?.after !== undefined) {
+    clauses.push("m.sent_at >= ?");
+    params.push(opts.after.getTime());
+  }
+  if (opts?.before !== undefined) {
+    clauses.push("m.sent_at < ?");
+    params.push(opts.before.getTime());
+  }
+  return { clauses, params, hasAny: clauses.length > 0 };
 }
 
 function toFts5Phrase(raw: string): string | null {
