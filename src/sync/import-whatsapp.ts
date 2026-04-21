@@ -32,6 +32,28 @@ export class WhatsAppImportError extends Error {
   }
 }
 
+export class WhatsAppParseError extends WhatsAppImportError {
+  constructor(
+    message: string,
+    filePath: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, filePath, options);
+    this.name = "WhatsAppParseError";
+  }
+}
+
+export class WhatsAppArchiveError extends WhatsAppImportError {
+  constructor(
+    message: string,
+    filePath: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, filePath, options);
+    this.name = "WhatsAppArchiveError";
+  }
+}
+
 const CHAT_FILENAME_RE = /^WhatsApp Chat - (.+)\.(?:txt|zip)$/;
 
 function extractChatTextFromZip(buffer: Buffer, filePath: string): string {
@@ -39,7 +61,7 @@ function extractChatTextFromZip(buffer: Buffer, filePath: string): string {
   try {
     zip = new AdmZip(buffer);
   } catch (err) {
-    throw new WhatsAppImportError(
+    throw new WhatsAppParseError(
       `failed to open WhatsApp zip export`,
       filePath,
       { cause: err },
@@ -47,7 +69,7 @@ function extractChatTextFromZip(buffer: Buffer, filePath: string): string {
   }
   const entry = zip.getEntry("_chat.txt");
   if (!entry) {
-    throw new WhatsAppImportError(
+    throw new WhatsAppParseError(
       `WhatsApp zip export is missing _chat.txt`,
       filePath,
     );
@@ -116,7 +138,7 @@ export async function importWhatsAppFile(
       timezone: "Europe/Brussels",
     });
   } catch (err) {
-    throw new WhatsAppImportError(
+    throw new WhatsAppParseError(
       `failed to parse WhatsApp export`,
       filePath,
       { cause: err },
@@ -128,9 +150,19 @@ export async function importWhatsAppFile(
   const upsert = await store.upsertMessages(messages);
 
   const archiveDir = `${archiveRoot}/${yearMonth(importedAt)}`;
-  await fs.mkdir(archiveDir);
-  const archivedTo = await resolveArchiveTarget(fs, archiveDir, filename);
-  await fs.rename(filePath, archivedTo);
+  let archivedTo: string;
+  try {
+    await fs.mkdir(archiveDir);
+    archivedTo = await resolveArchiveTarget(fs, archiveDir, filename);
+    await fs.rename(filePath, archivedTo);
+  } catch (err) {
+    const cause = err instanceof Error ? err.message : String(err);
+    throw new WhatsAppArchiveError(
+      `failed to archive WhatsApp export (${cause})`,
+      filePath,
+      { cause: err },
+    );
+  }
 
   return {
     chat,

@@ -292,8 +292,14 @@ sudo ls /volume1/docker/waldo-wtf/data/whatsapp-inbox \
 ```
 
 Inbox empty, file in archive, no error lines in the logs = end-to-end
-working. The watcher logs only on failures, not successes — silent
-success is the design.
+working. On every container start the watcher also sweeps any files
+already sitting in `whatsapp-inbox/` (so a restart mid-drop doesn't
+strand them) and emits one `whatsapp_sweep_complete: files=<N>
+imported=<M>` line. Per-file failures log as
+`whatsapp_parse_failed` (bad zip / unparseable chat) or
+`whatsapp_archive_failed` (rename to archive dir failed, usually
+EACCES / ENOSPC) — the file stays in the inbox and the next sweep
+retries, safe because message ids are content-hashed.
 
 ### 6c. Downloads → WaldoInbox relay (optional but recommended)
 

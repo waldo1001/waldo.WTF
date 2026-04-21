@@ -3,7 +3,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { FakeClock } from "../testing/fake-clock.js";
 import { InMemoryFileSystem } from "../testing/in-memory-file-system.js";
 import { InMemoryMessageStore } from "../testing/in-memory-message-store.js";
-import { importWhatsAppFile, WhatsAppImportError } from "./import-whatsapp.js";
+import {
+  importWhatsAppFile,
+  WhatsAppArchiveError,
+  WhatsAppImportError,
+  WhatsAppParseError,
+} from "./import-whatsapp.js";
 
 function makeZip(entries: Record<string, string>): Buffer {
   const zip = new AdmZip();
@@ -297,6 +302,67 @@ describe("importWhatsAppFile", () => {
       }),
     ).rejects.toThrow(WhatsAppImportError);
     expect(await deps.fs.exists(src)).toBe(true);
+  });
+
+  it("throws WhatsAppParseError when the zip buffer is corrupted", async () => {
+    const src = `${DOWNLOADS}/WhatsApp Chat - Mom.zip`;
+    await deps.fs.writeFile(src, Buffer.from("not a real zip", "utf8"));
+
+    await expect(
+      importWhatsAppFile({
+        ...deps,
+        filePath: src,
+        account: ACCOUNT,
+        archiveRoot: ARCHIVE,
+      }),
+    ).rejects.toThrow(WhatsAppParseError);
+    // Subclass invariant — existing callers matching WhatsAppImportError still work.
+    await expect(
+      importWhatsAppFile({
+        ...deps,
+        filePath: src,
+        account: ACCOUNT,
+        archiveRoot: ARCHIVE,
+      }),
+    ).rejects.toThrow(WhatsAppImportError);
+    expect(await deps.fs.exists(src)).toBe(true);
+  });
+
+  it("throws WhatsAppArchiveError when fs.rename rejects and leaves the file in place", async () => {
+    const src = `${DOWNLOADS}/WhatsApp Chat - Mom.txt`;
+    await deps.fs.writeFile(src, CHAT_FIXTURE);
+
+    const breakingFs = Object.assign(deps.fs, {
+      rename: async (_from: string, _to: string) => {
+        const err: NodeJS.ErrnoException = new Error(
+          "EACCES: permission denied",
+        );
+        err.code = "EACCES";
+        throw err;
+      },
+    });
+
+    await expect(
+      importWhatsAppFile({
+        fs: breakingFs,
+        clock: deps.clock,
+        store: deps.store,
+        filePath: src,
+        account: ACCOUNT,
+        archiveRoot: ARCHIVE,
+      }),
+    ).rejects.toThrow(WhatsAppArchiveError);
+
+    // File still present in the inbox — next sweep can retry.
+    expect(await deps.fs.exists(src)).toBe(true);
+    // Messages were already upserted before the archive step failed.
+    const recent = (
+      await deps.store.getRecentMessages({
+        since: new Date("2026-04-15T00:00:00.000Z"),
+        limit: 10,
+      })
+    ).messages;
+    expect(recent).toHaveLength(2);
   });
 
   it("falls back to filename stem when the pattern does not match", async () => {
