@@ -227,6 +227,102 @@ describe("syncSent", () => {
     expect(second.removed).toBe(1);
   });
 
+  it("converts HTML body to text and preserves bodyHtml", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const graph = new FakeGraphClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({
+            value: [
+              sentMsg({
+                id: "html-1",
+                body: { contentType: "html", content: "<p>Hello <b>there</b></p>" },
+              }),
+            ],
+            "@odata.deltaLink": "d",
+          }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncSent({ account, auth, graph, store, clock });
+
+    const thread = await store.getThread({ threadId: "conv-1" });
+    expect(thread[0]?.bodyHtml).toBe("<p>Hello <b>there</b></p>");
+    expect(thread[0]?.body).toContain("Hello");
+    expect(thread[0]?.body).toContain("there");
+  });
+
+  it("handles messages with null subject and absent body", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const graph = new FakeGraphClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({
+            value: [
+              sentMsg({
+                id: "bare-1",
+                subject: null as unknown as string,
+                body: undefined,
+              }),
+            ],
+            "@odata.deltaLink": "d",
+          }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncSent({ account, auth, graph, store, clock });
+
+    const thread = await store.getThread({ threadId: "conv-1" });
+    expect(thread).toHaveLength(1);
+    expect(thread[0]?.threadName).toBeUndefined();
+    expect(thread[0]?.body).toBeUndefined();
+    expect(thread[0]?.bodyHtml).toBeUndefined();
+  });
+
+  it("follows @odata.nextLink pagination before storing final deltaLink", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const graph = new FakeGraphClient({
+      steps: [
+        {
+          kind: "ok",
+          response: okResponse({
+            value: [sentMsg({ id: "page1-a" })],
+            "@odata.nextLink": "https://graph/delta?page=2",
+          }),
+        },
+        {
+          kind: "ok",
+          response: okResponse({
+            value: [sentMsg({ id: "page2-a", conversationId: "conv-2" })],
+            "@odata.deltaLink": "https://graph/delta?token=final",
+          }),
+        },
+      ],
+    });
+    const auth = authWithToken();
+
+    const result = await syncSent({ account, auth, graph, store, clock });
+
+    expect(result.added).toBe(2);
+    expect(graph.calls).toHaveLength(2);
+    expect(graph.calls[1]?.url).toBe("https://graph/delta?page=2");
+    const sent = await store.getSyncState(
+      account.username,
+      "outlook",
+      "sentitems",
+    );
+    expect(sent?.deltaToken).toBe("https://graph/delta?token=final");
+  });
+
   it("synthesizes senderEmail from account.username when from field is missing (draft)", async () => {
     const store = new InMemoryMessageStore();
     const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
