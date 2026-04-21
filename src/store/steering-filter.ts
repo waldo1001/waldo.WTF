@@ -97,7 +97,12 @@ export function buildSteeringPredicate(
     return { sqlFragment: null, params: [], matches: () => false };
   }
   const built = enabled.map(buildClause);
-  const sqlFragment = `(${built.map((c) => c.sql).join(" OR ")})`;
+  // COALESCE guards against SQL three-valued logic: a clause like
+  // `LOWER(m.sender_email) = ?` yields NULL (not FALSE) when the column is
+  // NULL, which would make `NOT <fragment>` evaluate to NULL and silently
+  // drop rows with null columns (e.g. every whatsapp message under a
+  // sender_email rule). Forcing NULL → 0 keeps those rows in results.
+  const sqlFragment = `COALESCE((${built.map((c) => c.sql).join(" OR ")}), 0)`;
   const params: (string | number)[] = [];
   for (const c of built) params.push(...c.params);
   return {

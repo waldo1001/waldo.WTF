@@ -212,6 +212,70 @@ for (const [label, factory] of [
       expect(res.mutedCount).toBe(0);
     });
 
+    it("keeps messages with null sender_email when a sender_email rule is active", async () => {
+      const { store, steering } = factory(label);
+      await store.upsertMessages([
+        msg({
+          id: "wa1",
+          source: "whatsapp",
+          account: "whatsapp-local",
+          senderName: "~ Someone",
+          body: "hello from whatsapp",
+        }),
+        msg({
+          id: "ol1",
+          source: "outlook",
+          senderEmail: "alice@ex.test",
+          body: "hello from outlook",
+        }),
+      ]);
+      await steering.addRule({
+        ruleType: "sender_email",
+        pattern: "noisy@bar.com",
+      });
+      const got = await store.getRecentMessages({ since, limit: 50 });
+      expect(got.messages.map((m) => m.id).sort()).toEqual(["ol1", "wa1"]);
+    });
+
+    it("reports mutedCount 0 when no messages match an active sender_email rule", async () => {
+      const { store, steering } = factory(label);
+      await store.upsertMessages([
+        msg({
+          id: "wa1",
+          source: "whatsapp",
+          account: "whatsapp-local",
+          senderName: "~ Someone",
+          body: "hello from whatsapp",
+        }),
+      ]);
+      await steering.addRule({
+        ruleType: "sender_email",
+        pattern: "noisy@bar.com",
+      });
+      const got = await store.getRecentMessages({ since, limit: 50 });
+      expect(got.mutedCount).toBe(0);
+    });
+
+    it("searchMessages keeps null-sender_email hits when a sender_email rule is active", async () => {
+      const { store, steering } = factory(label);
+      await store.upsertMessages([
+        msg({
+          id: "wa1",
+          source: "whatsapp",
+          account: "whatsapp-local",
+          senderName: "~ Someone",
+          body: "kangaroo on the beach",
+        }),
+      ]);
+      await steering.addRule({
+        ruleType: "sender_email",
+        pattern: "noisy@bar.com",
+      });
+      const res = await store.searchMessages("kangaroo", 10);
+      expect(res.hits.map((h) => h.message.id)).toEqual(["wa1"]);
+      expect(res.mutedCount).toBe(0);
+    });
+
     it("getThread is unaffected by steering rules", async () => {
       const { store, steering } = factory(label);
       await store.upsertMessages([

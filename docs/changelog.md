@@ -11,6 +11,10 @@ skill.
 
 ---
 
+## 2026-04-21
+
+- Fixed silent-filter bug in `buildSteeringPredicate` ([src/store/steering-filter.ts](../src/store/steering-filter.ts)): SQL OR-chain wrapped in `COALESCE((...), 0)` so rows with NULL columns (e.g. every WhatsApp message has NULL `sender_email`) aren't dropped when a `sender_email`/`sender_domain` rule is active. Before the fix, `get_recent_activity` / `search` returned zero WhatsApp hits once any email-sender rule existed, with `muted_count: 0` and no steering_hint — invisible to the caller. Plan: [plans/done/fix-steering-predicate-null-columns.md](plans/done/fix-steering-predicate-null-columns.md).
+
 ## 2026-04-20
 
 - `search` MCP tool gained optional structured filters `sender_email`, `sender_name`, `after`, `before`. `query` is now optional when any sender filter is present; when omitted, results are ordered `sent_at DESC` instead of BM25. Filters compose with FTS MATCH and steering via AND. `muted_count` is scoped to the same filter set. Closes the "From-header-only" blind spot where FTS over body text missed messages actually sent *by* a person. Plan: [plans/done/feat-search-sender-filters.md](plans/done/feat-search-sender-filters.md).
