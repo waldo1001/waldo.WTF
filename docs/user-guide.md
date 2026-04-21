@@ -92,6 +92,22 @@ needs no guessing.
 Which accounts are known to the sync worker. Used by Claude at the
 start of a session so it knows which tenants exist.
 
+### `list_threads(source)`
+
+Diagnostic inventory of every distinct thread stored for a given
+source (`outlook`, `teams`, or `whatsapp`), with `messageCount` and
+`newestSentAt` / `oldestSentAt`. Ordered newest-first by the latest
+message in each thread.
+
+Use it to: (a) discover the opaque `threadId` values that `get_thread`
+expects, (b) detect bifurcated threads — e.g. a WhatsApp export
+re-imported under a different filename produces two rows with the same
+display name but distinct `threadId`s. **Not affected by steering
+rules** — diagnostic tools always return the full inventory.
+
+Typical prompt: *"List every WhatsApp thread in the lake — are any of
+them split into duplicates?"*
+
 ### `get_sync_status()`
 
 Per-`(account, source)`: `lastSyncAt`, `lastOkAt`, `lastStatus`,
@@ -187,7 +203,10 @@ The end-to-end flow, once set up:
 No terminal command after step 2. Re-exporting the same chat is
 idempotent (sha256 dedup on primary key) — re-import as often as you
 like. If the export contains 1170 new messages and 50 old ones,
-you'll see 1170 new rows land.
+you'll see 1170 new rows land. Chat names are normalized on import
+(whitespace collapsed, trailing ` (…)` parenthetical suffix stripped),
+so `WhatsApp Chat - General chat.zip` and `WhatsApp Chat - General
+chat (BC Dev Talk).zip` converge on the same thread.
 
 ### 6a. Why `~/WaldoInbox` and not `~/Downloads`
 

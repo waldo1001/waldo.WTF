@@ -951,6 +951,160 @@ export function runMessageStoreContract(
       expect(rows[0]?.mentions).toEqual(["alice@example.test"]);
     });
 
+    it("listThreadSummaries returns one row per distinct (source, thread_id) with counts and date range, ordered newestSentAt desc", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({
+          id: "w1",
+          source: "whatsapp",
+          threadId: "General chat",
+          threadName: "General chat",
+          sentAt: new Date("2026-04-09T10:00:00Z"),
+          body: "old a",
+        }),
+        msg({
+          id: "w2",
+          source: "whatsapp",
+          threadId: "General chat",
+          threadName: "General chat",
+          sentAt: new Date("2026-04-09T11:00:00Z"),
+          body: "old b",
+        }),
+        msg({
+          id: "w3",
+          source: "whatsapp",
+          threadId: "General chat (BC Dev Talk)",
+          threadName: "General chat (BC Dev Talk)",
+          sentAt: new Date("2026-04-20T09:00:00Z"),
+          body: "new a",
+        }),
+        msg({
+          id: "w4",
+          source: "whatsapp",
+          threadId: "General chat (BC Dev Talk)",
+          threadName: "General chat (BC Dev Talk)",
+          sentAt: new Date("2026-04-21T08:00:00Z"),
+          body: "new b",
+        }),
+        msg({
+          id: "w5",
+          source: "whatsapp",
+          threadId: "General chat (BC Dev Talk)",
+          threadName: "General chat (BC Dev Talk)",
+          sentAt: new Date("2026-04-21T12:00:00Z"),
+          body: "new c",
+        }),
+      ]);
+      const rows = await store.listThreadSummaries({ source: "whatsapp" });
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toEqual({
+        source: "whatsapp",
+        threadId: "General chat (BC Dev Talk)",
+        threadName: "General chat (BC Dev Talk)",
+        messageCount: 3,
+        newestSentAt: new Date("2026-04-21T12:00:00Z"),
+        oldestSentAt: new Date("2026-04-20T09:00:00Z"),
+      });
+      expect(rows[1]).toEqual({
+        source: "whatsapp",
+        threadId: "General chat",
+        threadName: "General chat",
+        messageCount: 2,
+        newestSentAt: new Date("2026-04-09T11:00:00Z"),
+        oldestSentAt: new Date("2026-04-09T10:00:00Z"),
+      });
+    });
+
+    it("listThreadSummaries scopes by source and ignores other sources", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({
+          id: "t1",
+          source: "teams",
+          threadId: "chat-teams-1",
+          threadName: "Team Chat",
+          sentAt: new Date("2026-04-13T10:00:00Z"),
+        }),
+        msg({
+          id: "w1",
+          source: "whatsapp",
+          threadId: "chat-whatsapp-1",
+          threadName: "WhatsApp Chat",
+          sentAt: new Date("2026-04-13T10:00:00Z"),
+        }),
+      ]);
+      const teams = await store.listThreadSummaries({ source: "teams" });
+      expect(teams).toHaveLength(1);
+      expect(teams[0]?.threadId).toBe("chat-teams-1");
+      const whatsapp = await store.listThreadSummaries({ source: "whatsapp" });
+      expect(whatsapp).toHaveLength(1);
+      expect(whatsapp[0]?.threadId).toBe("chat-whatsapp-1");
+    });
+
+    it("listThreadSummaries skips messages with NULL thread_id", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({
+          id: "orphan",
+          source: "outlook",
+          sentAt: new Date("2026-04-13T10:00:00Z"),
+        }),
+        msg({
+          id: "grouped",
+          source: "outlook",
+          threadId: "thread-x",
+          threadName: "Subject X",
+          sentAt: new Date("2026-04-13T10:00:00Z"),
+        }),
+      ]);
+      const rows = await store.listThreadSummaries({ source: "outlook" });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.threadId).toBe("thread-x");
+    });
+
+    it("listThreadSummaries picks threadName from the latest message in each thread", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({
+          id: "x1",
+          source: "whatsapp",
+          threadId: "General chat",
+          threadName: "General chat",
+          sentAt: new Date("2026-04-09T10:00:00Z"),
+        }),
+        msg({
+          id: "x2",
+          source: "whatsapp",
+          threadId: "General chat",
+          threadName: "General chat (renamed)",
+          sentAt: new Date("2026-04-21T10:00:00Z"),
+        }),
+      ]);
+      const rows = await store.listThreadSummaries({ source: "whatsapp" });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.threadName).toBe("General chat (renamed)");
+    });
+
+    it("listThreadSummaries returns [] for a source with no messages", async () => {
+      const { store } = await factory();
+      expect(await store.listThreadSummaries({ source: "teams" })).toEqual([]);
+    });
+
+    it("listThreadSummaries returns threadName=undefined when every row in the thread has a NULL thread_name", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({
+          id: "bare",
+          source: "outlook",
+          threadId: "bare-thread",
+          sentAt: new Date("2026-04-13T10:00:00Z"),
+        }),
+      ]);
+      const rows = await store.listThreadSummaries({ source: "outlook" });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.threadName).toBeUndefined();
+    });
+
     it("getRecentMessages honours the limit", async () => {
       const { store } = await factory();
       await store.upsertMessages([

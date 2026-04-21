@@ -35,6 +35,22 @@ export interface BackfillCliResult {
   readonly processed: number;
 }
 
+export interface RethreadWhatsAppCliResult {
+  readonly groups: number;
+  readonly mergedGroups: number;
+  readonly rowsUpdated: number;
+  readonly duplicatesDropped: number;
+}
+
+export interface RethreadWhatsAppCliOptions {
+  readonly dryRun?: boolean;
+}
+
+export type RethreadWhatsAppImpl = (
+  dbPath: string,
+  opts: RethreadWhatsAppCliOptions,
+) => Promise<RethreadWhatsAppCliResult>;
+
 export interface ImportWhatsAppCliResult {
   readonly files: number;
   readonly imported: number;
@@ -73,11 +89,19 @@ export interface RunCliOptions extends AddAccountOptions {
   readonly backfillImpl?: (dbPath: string) => Promise<BackfillCliResult>;
   readonly importWhatsAppImpl?: ImportWhatsAppImpl;
   readonly steerImpl?: SteerImpl;
+  readonly rethreadWhatsAppImpl?: RethreadWhatsAppImpl;
 }
 
 export type RunCliResult =
   | { readonly mode: "add-account"; readonly account: Account }
   | { readonly mode: "backfill"; readonly processed: number }
+  | {
+      readonly mode: "rethread-whatsapp";
+      readonly groups: number;
+      readonly mergedGroups: number;
+      readonly rowsUpdated: number;
+      readonly duplicatesDropped: number;
+    }
   | {
       readonly mode: "import-whatsapp";
       readonly files: number;
@@ -90,6 +114,8 @@ const BOOLEAN_FLAGS = new Set([
   "--add-account",
   "--backfill-bodies",
   "--import-whatsapp",
+  "--rethread-whatsapp",
+  "--dry-run",
   "--steer-list",
 ]);
 
@@ -354,6 +380,28 @@ async function realImportWhatsApp(
   }
 }
 
+async function realRethreadWhatsApp(
+  dbPath: string,
+  opts: RethreadWhatsAppCliOptions,
+): Promise<RethreadWhatsAppCliResult> {
+  const { default: Database } = await import("better-sqlite3");
+  const { applyMigrations } = await import("./store/schema.js");
+  const { rethreadWhatsApp } = await import("./store/rethread-whatsapp.js");
+  const db = new Database(dbPath);
+  try {
+    db.pragma("journal_mode = WAL");
+    applyMigrations(db);
+    const r = rethreadWhatsApp(
+      db,
+      opts.dryRun === true ? { dryRun: true } : {},
+    );
+    db.pragma("wal_checkpoint(TRUNCATE)");
+    return r;
+  } finally {
+    db.close();
+  }
+}
+
 async function realBackfill(dbPath: string): Promise<BackfillCliResult> {
   const { default: Database } = await import("better-sqlite3");
   const { applyMigrations } = await import("./store/schema.js");
@@ -480,6 +528,25 @@ export async function runCli(
       imported: result.imported,
     };
   }
+  if (parsed.boolean.has("--rethread-whatsapp")) {
+    const env = resolveEnv(opts);
+    const config = loadConfig(env);
+    /* c8 ignore next -- default console.log only in production */
+    const print: PrintFn = opts.print ?? ((m) => console.log(m));
+    const impl = opts.rethreadWhatsAppImpl ?? realRethreadWhatsApp;
+    const dryRun = parsed.boolean.has("--dry-run");
+    const result = await impl(config.dbPath, { dryRun });
+    print(
+      `rethread-whatsapp ${dryRun ? "(dry-run) " : ""}complete: ${result.rowsUpdated} rows updated, ${result.duplicatesDropped} duplicates dropped across ${result.mergedGroups}/${result.groups} groups`,
+    );
+    return {
+      mode: "rethread-whatsapp",
+      groups: result.groups,
+      mergedGroups: result.mergedGroups,
+      rowsUpdated: result.rowsUpdated,
+      duplicatesDropped: result.duplicatesDropped,
+    };
+  }
   if (parsed.boolean.has("--backfill-bodies")) {
     const env = resolveEnv(opts);
     const config = loadConfig(env);
@@ -515,6 +582,11 @@ if (isMain) {
       } else if (r.mode === "import-whatsapp") {
         console.log(
           `WhatsApp import done: ${r.imported} new messages from ${r.files} files`,
+        );
+        process.exit(0);
+      } else if (r.mode === "rethread-whatsapp") {
+        console.log(
+          `WhatsApp rethread done: ${r.rowsUpdated} rows updated, ${r.duplicatesDropped} duplicates dropped across ${r.mergedGroups}/${r.groups} groups`,
         );
         process.exit(0);
       }

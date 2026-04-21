@@ -122,6 +122,55 @@ describe("runCli", () => {
     expect(prints.some((p) => p.includes("42"))).toBe(true);
   });
 
+  it("dispatches --rethread-whatsapp to the injected impl and prints counts", async () => {
+    const prints: string[] = [];
+    let captured: { dbPath: string; dryRun: boolean } | undefined;
+    const result = await runCli(["--rethread-whatsapp"], {
+      env: ENV,
+      loadDotenv: false,
+      print: (m) => prints.push(m),
+      rethreadWhatsAppImpl: async (dbPath, opts) => {
+        captured = { dbPath, dryRun: opts.dryRun === true };
+        return {
+          groups: 3,
+          mergedGroups: 1,
+          rowsUpdated: 7,
+          duplicatesDropped: 2,
+        };
+      },
+    });
+    expect(result).toEqual({
+      mode: "rethread-whatsapp",
+      groups: 3,
+      mergedGroups: 1,
+      rowsUpdated: 7,
+      duplicatesDropped: 2,
+    });
+    expect(captured?.dbPath).toMatch(/lake\.db$/);
+    expect(captured?.dryRun).toBe(false);
+    expect(prints.some((p) => p.includes("7") && p.includes("2"))).toBe(true);
+  });
+
+  it("dispatches --rethread-whatsapp --dry-run and passes dryRun:true", async () => {
+    let captured: { dryRun: boolean } | undefined;
+    const result = await runCli(["--rethread-whatsapp", "--dry-run"], {
+      env: ENV,
+      loadDotenv: false,
+      print: () => {},
+      rethreadWhatsAppImpl: async (_dbPath, opts) => {
+        captured = { dryRun: opts.dryRun === true };
+        return {
+          groups: 1,
+          mergedGroups: 1,
+          rowsUpdated: 2,
+          duplicatesDropped: 0,
+        };
+      },
+    });
+    expect(captured?.dryRun).toBe(true);
+    expect(result).toMatchObject({ mode: "rethread-whatsapp", rowsUpdated: 2 });
+  });
+
   it("dispatches --steer-add-sender: lowercases email and passes AddSteeringRuleInput", async () => {
     const calls: SteerCommand[] = [];
     const rule: SteeringRule = {

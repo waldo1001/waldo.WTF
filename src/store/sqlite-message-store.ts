@@ -5,6 +5,7 @@ import {
   type GetRecentMessagesOptions,
   type GetRecentMessagesResult,
   type GetThreadOptions,
+  type ListThreadSummariesOptions,
   type MessageStore,
   type SearchMessagesOptions,
   type SearchMessagesResult,
@@ -22,6 +23,7 @@ import type {
   SyncLogEntry,
   SyncStateEntry,
   SyncStatusRow,
+  ThreadSummary,
 } from "./types.js";
 
 interface MessageRow {
@@ -301,6 +303,44 @@ export class SqliteMessageStore implements MessageStore {
       )
       .all(opts.threadId, limit) as MessageRow[];
     return rows.map(fromRow);
+  }
+
+  async listThreadSummaries(
+    opts: ListThreadSummariesOptions,
+  ): Promise<readonly ThreadSummary[]> {
+    const rows = this.db
+      .prepare(
+        `
+      SELECT
+        thread_id AS threadId,
+        COUNT(*) AS messageCount,
+        MAX(sent_at) AS newestSentAt,
+        MIN(sent_at) AS oldestSentAt,
+        (SELECT thread_name FROM messages m2
+           WHERE m2.source = m1.source AND m2.thread_id = m1.thread_id
+           ORDER BY m2.sent_at DESC, m2.id DESC
+           LIMIT 1) AS threadName
+      FROM messages m1
+      WHERE source = ? AND thread_id IS NOT NULL
+      GROUP BY thread_id
+      ORDER BY newestSentAt DESC
+    `,
+      )
+      .all(opts.source) as {
+      threadId: string;
+      messageCount: number;
+      newestSentAt: number;
+      oldestSentAt: number;
+      threadName: string | null;
+    }[];
+    return rows.map((r) => ({
+      source: opts.source,
+      threadId: r.threadId,
+      ...(r.threadName !== null && { threadName: r.threadName }),
+      messageCount: r.messageCount,
+      newestSentAt: new Date(r.newestSentAt),
+      oldestSentAt: new Date(r.oldestSentAt),
+    }));
   }
 
   async getRecentMessages(

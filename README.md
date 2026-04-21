@@ -42,9 +42,10 @@ built.
 One Node + TypeScript process, one SQLite file (WAL mode, via
 `better-sqlite3`), two logical components sharing the db: a sync worker
 (MSAL-authed Microsoft Graph delta queries, 5-minute polling, multi-account)
-and an HTTP MCP server (bearer-token auth, five read-only tools:
+and an HTTP MCP server (bearer-token auth, read-only tools:
 `get_recent_activity`, `search`, `get_thread`, `list_accounts`,
-`get_sync_status`). Runs locally during development, eventually on a
+`list_threads`, `get_sync_status`, plus four steering tools that write
+only to the local `steering_rules` table). Runs locally during development, eventually on a
 Synology NAS behind Tailscale. Claude does all the summarizing — tools
 return raw rows, Claude reasons over them.
 

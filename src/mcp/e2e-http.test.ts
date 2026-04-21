@@ -121,6 +121,7 @@ describe("MCP HTTP server end-to-end (SQLite + SDK client over HTTP)", () => {
       "get_sync_status",
       "get_thread",
       "list_accounts",
+      "list_threads",
       "remove_steering_rule",
       "search",
       "set_steering_enabled",

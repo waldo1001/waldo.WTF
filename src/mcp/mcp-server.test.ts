@@ -55,6 +55,7 @@ describe("createMcpServer (SDK, in-memory transport)", () => {
       "get_sync_status",
       "get_thread",
       "list_accounts",
+      "list_threads",
       "remove_steering_rule",
       "search",
       "set_steering_enabled",
@@ -74,6 +75,38 @@ describe("createMcpServer (SDK, in-memory transport)", () => {
       type: "object",
       required: ["rule_type", "pattern"],
     });
+  });
+
+  it("wraps list_threads result in a text content block with ISO timestamps", async () => {
+    await store.upsertMessages([
+      mkMessage({
+        id: "w1",
+        source: "whatsapp",
+        threadId: "General chat",
+        threadName: "General chat",
+        sentAt: new Date("2026-04-09T10:00:00Z"),
+      }),
+      mkMessage({
+        id: "w2",
+        source: "whatsapp",
+        threadId: "General chat (BC Dev Talk)",
+        threadName: "General chat (BC Dev Talk)",
+        sentAt: new Date("2026-04-21T08:00:00Z"),
+      }),
+    ]);
+    const res = await client.callTool({
+      name: "list_threads",
+      arguments: { source: "whatsapp" },
+    });
+    const content = res.content as Array<{ type: string; text: string }>;
+    const parsed = JSON.parse(content[0]!.text) as {
+      count: number;
+      threads: Array<{ threadId: string; newestSentAt: string }>;
+    };
+    expect(parsed.count).toBe(2);
+    expect(parsed.threads[0]?.threadId).toBe("General chat (BC Dev Talk)");
+    expect(parsed.threads[0]?.newestSentAt).toBe("2026-04-21T08:00:00.000Z");
+    expect(parsed.threads[1]?.threadId).toBe("General chat");
   });
 
   it("wraps get_recent_activity result in a text content block", async () => {

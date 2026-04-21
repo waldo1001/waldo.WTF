@@ -7,6 +7,7 @@ import type {
   SyncLogEntry,
   SyncStateEntry,
   SyncStatusRow,
+  ThreadSummary,
 } from "./types.js";
 
 export interface UpsertResult {
@@ -49,6 +50,10 @@ export interface GetThreadOptions {
   readonly limit?: number;
 }
 
+export interface ListThreadSummariesOptions {
+  readonly source: MessageSource;
+}
+
 export const DEFAULT_GET_THREAD_LIMIT = 200;
 export const MAX_GET_THREAD_LIMIT = 500;
 
@@ -72,6 +77,9 @@ export interface MessageStore {
     opts: GetRecentMessagesOptions,
   ): Promise<GetRecentMessagesResult>;
   getThread(opts: GetThreadOptions): Promise<readonly Message[]>;
+  listThreadSummaries(
+    opts: ListThreadSummariesOptions,
+  ): Promise<readonly ThreadSummary[]>;
   getSyncStatus(now: Date): Promise<readonly SyncStatusRow[]>;
   getChatCursor(
     account: string,

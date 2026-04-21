@@ -57,6 +57,15 @@ export interface ChatCursorEntry {
   readonly cursor: string;
 }
 
+export interface ThreadSummary {
+  readonly source: MessageSource;
+  readonly threadId: string;
+  readonly threadName?: string;
+  readonly messageCount: number;
+  readonly newestSentAt: Date;
+  readonly oldestSentAt: Date;
+}
+
 export interface AccountRecord {
   readonly username: string;
   readonly displayName?: string;

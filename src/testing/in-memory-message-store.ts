@@ -4,6 +4,7 @@ import {
   type GetRecentMessagesOptions,
   type GetRecentMessagesResult,
   type GetThreadOptions,
+  type ListThreadSummariesOptions,
   type MessageStore,
   type SearchMessagesOptions,
   type SearchMessagesResult,
@@ -20,6 +21,7 @@ import type {
   SyncLogEntry,
   SyncStateEntry,
   SyncStatusRow,
+  ThreadSummary,
 } from "../store/types.js";
 
 export type InMemoryMessageStoreCall =
@@ -38,6 +40,10 @@ export type InMemoryMessageStoreCall =
     }
   | { method: "getRecentMessages"; opts: GetRecentMessagesOptions }
   | { method: "getThread"; opts: GetThreadOptions }
+  | {
+      method: "listThreadSummaries";
+      opts: ListThreadSummariesOptions;
+    }
   | { method: "getSyncStatus"; now: Date }
   | { method: "getChatCursor"; account: string; chatId: string }
   | { method: "setChatCursor"; entry: ChatCursorEntry }
@@ -286,6 +292,53 @@ export class InMemoryMessageStore implements MessageStore {
       return t !== 0 ? t : a.id.localeCompare(b.id);
     });
     return rows.slice(0, limit);
+  }
+
+  async listThreadSummaries(
+    opts: ListThreadSummariesOptions,
+  ): Promise<readonly ThreadSummary[]> {
+    this.calls.push({ method: "listThreadSummaries", opts });
+    const groups = new Map<
+      string,
+      {
+        threadId: string;
+        messages: Message[];
+      }
+    >();
+    for (const m of this.messages.values()) {
+      if (m.source !== opts.source) continue;
+      if (m.threadId === undefined) continue;
+      const g = groups.get(m.threadId);
+      if (g === undefined) {
+        groups.set(m.threadId, { threadId: m.threadId, messages: [m] });
+      } else {
+        g.messages.push(m);
+      }
+    }
+    const out: ThreadSummary[] = [];
+    for (const g of groups.values()) {
+      const sorted = g.messages
+        .slice()
+        .sort((a, b) => {
+          const t = b.sentAt.getTime() - a.sentAt.getTime();
+          if (t !== 0) return t;
+          return b.id.localeCompare(a.id);
+        });
+      const latest = sorted[0]!;
+      const oldest = sorted[sorted.length - 1]!;
+      out.push({
+        source: opts.source,
+        threadId: g.threadId,
+        ...(latest.threadName !== undefined && {
+          threadName: latest.threadName,
+        }),
+        messageCount: sorted.length,
+        newestSentAt: latest.sentAt,
+        oldestSentAt: oldest.sentAt,
+      });
+    }
+    out.sort((a, b) => b.newestSentAt.getTime() - a.newestSentAt.getTime());
+    return out;
   }
 
   async getRecentMessages(

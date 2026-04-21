@@ -27,7 +27,7 @@ export const GET_STEERING_TOOL = {
   description: [
     "List every steering rule (enabled + disabled). Use this to self-explain why a message was hidden (e.g. \"because you muted sender_domain github.com on 2026-04-20\"), or to review before adding a new rule. Read-only.",
     "",
-    "Steering rules filter messages out of `get_recent_activity` and `search` at query time — they never delete data. `get_thread` and `list_accounts` are unaffected.",
+    "Steering rules filter messages out of `get_recent_activity` and `search` at query time — they never delete data. `get_thread`, `list_accounts`, and `list_threads` are unaffected.",
   ].join("\n"),
   inputSchema: {
     type: "object",

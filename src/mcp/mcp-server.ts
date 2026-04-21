@@ -37,6 +37,11 @@ import {
   handleListAccounts,
 } from "./tools/list-accounts.js";
 import {
+  LIST_THREADS_TOOL,
+  handleListThreads,
+  type ListThreadsParams,
+} from "./tools/list-threads.js";
+import {
   REMOVE_STEERING_RULE_TOOL,
   handleRemoveSteeringRule,
   type RemoveSteeringRuleParams,
@@ -72,6 +77,7 @@ const TOOL_DESCRIPTORS = [
   SEARCH_TOOL,
   GET_THREAD_TOOL,
   LIST_ACCOUNTS_TOOL,
+  LIST_THREADS_TOOL,
   GET_STEERING_TOOL,
   ADD_STEERING_RULE_TOOL,
   REMOVE_STEERING_RULE_TOOL,
@@ -88,6 +94,8 @@ const TOOL_HANDLERS: Record<string, ToolHandler> = {
   [GET_THREAD_TOOL.name]: (ctx, args) =>
     handleGetThread(ctx.store, ctx.clock, args as GetThreadParams),
   [LIST_ACCOUNTS_TOOL.name]: (ctx) => handleListAccounts(ctx.store, ctx.clock),
+  [LIST_THREADS_TOOL.name]: (ctx, args) =>
+    handleListThreads(ctx.store, ctx.clock, args as ListThreadsParams),
   [GET_STEERING_TOOL.name]: (ctx) => handleGetSteering(ctx.steering, ctx.clock),
   [ADD_STEERING_RULE_TOOL.name]: (ctx, args) =>
     handleAddSteeringRule(ctx.steering, ctx.clock, args as AddSteeringRuleParams),
@@ -119,7 +127,7 @@ export function createMcpServer(deps: McpServerDeps): Server {
         "",
         "Steering rules:",
         '- get_recent_activity and search hide "muted" messages by default and report muted_count + a steering_hint. Pass include_muted=true to see them, or call get_steering to review active rules.',
-        "- get_thread and list_accounts are unaffected by steering.",
+        "- get_thread, list_accounts, and list_threads are unaffected by steering.",
         '- Add a rule via add_steering_rule when the user asks to stop seeing a sender / domain / thread / keyword. Confirm the intended rule in chat before calling — rules are reversible via remove_steering_rule or set_steering_enabled(id, false).',
       ].join("\n"),
     },
