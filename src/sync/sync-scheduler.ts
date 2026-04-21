@@ -4,6 +4,7 @@ import type { MessageStore } from "../store/message-store.js";
 import type { GraphClient } from "../sources/graph.js";
 import type { TeamsClient } from "../sources/teams.js";
 import { syncInbox } from "./sync-inbox.js";
+import { syncSent } from "./sync-sent.js";
 import { syncTeams } from "./sync-teams.js";
 
 export const DEFAULT_SYNC_INTERVAL_MS = 300_000;
@@ -63,6 +64,35 @@ export class SyncScheduler {
         });
         try {
           const r = await syncInbox({
+            account,
+            auth: this.deps.auth,
+            graph: this.deps.graph,
+            store: this.deps.store,
+            clock: this.deps.clock,
+            ...(this.deps.backfillDays !== undefined && {
+              backfillDays: this.deps.backfillDays,
+            }),
+          });
+          await this.deps.store.appendSyncLog({
+            ts: this.deps.clock.now(),
+            account: account.username,
+            source: "outlook",
+            status: "ok",
+            messagesAdded: r.added,
+          });
+          okCount += 1;
+        } catch (err) {
+          await this.deps.store.appendSyncLog({
+            ts: this.deps.clock.now(),
+            account: account.username,
+            source: "outlook",
+            status: "error",
+            errorMessage: errorToString(err),
+          });
+          errorCount += 1;
+        }
+        try {
+          const r = await syncSent({
             account,
             auth: this.deps.auth,
             graph: this.deps.graph,

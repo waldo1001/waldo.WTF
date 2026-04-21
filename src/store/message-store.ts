@@ -63,6 +63,7 @@ export interface MessageStore {
   getSyncState(
     account: string,
     source: MessageSource,
+    folder?: string,
   ): Promise<SyncStateEntry | null>;
   setSyncState(entry: SyncStateEntry): Promise<void>;
   appendSyncLog(entry: SyncLogEntry): Promise<void>;

@@ -20,11 +20,13 @@ export interface Message {
   readonly chatType?: ChatType;
   readonly replyToId?: string;
   readonly mentions?: readonly string[];
+  readonly fromMe?: boolean;
 }
 
 export interface SyncStateEntry {
   readonly account: string;
   readonly source: MessageSource;
+  readonly folder?: string;
   readonly deltaToken?: string;
   readonly lastSyncAt?: Date;
 }

@@ -377,4 +377,50 @@ describe("handleGetThread", () => {
       }),
     ).rejects.toBeInstanceOf(InvalidParamsError);
   });
+
+  it("AC-R1/R2: interleaves inbox + sent rows in sent_at order with fromMe surfaced", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mk({
+            id: "outlook:a@example.test:inbound-1",
+            source: "outlook",
+            threadId: "conv-1",
+            senderEmail: "gunter@example.test",
+            sentAt: new Date("2026-04-13T09:00:00Z"),
+            body: "Can you confirm?",
+          }),
+          mk({
+            id: "outlook:a@example.test:reply-1",
+            source: "outlook",
+            threadId: "conv-1",
+            senderEmail: "a@example.test",
+            fromMe: true,
+            sentAt: new Date("2026-04-13T10:00:00Z"),
+            body: "Confirmed — shipping today.",
+          }),
+          mk({
+            id: "outlook:a@example.test:inbound-2",
+            source: "outlook",
+            threadId: "conv-1",
+            senderEmail: "gunter@example.test",
+            sentAt: new Date("2026-04-13T11:00:00Z"),
+            body: "Thanks.",
+          }),
+        ],
+      },
+    });
+    const result = await handleGetThread(store, clock, {
+      thread_id: "conv-1",
+    });
+    expect(result.count).toBe(3);
+    expect(result.messages.map((m) => m.id)).toEqual([
+      "outlook:a@example.test:inbound-1",
+      "outlook:a@example.test:reply-1",
+      "outlook:a@example.test:inbound-2",
+    ]);
+    expect(result.messages[0]?.fromMe).toBeUndefined();
+    expect(result.messages[1]?.fromMe).toBe(true);
+    expect(result.messages[2]?.fromMe).toBeUndefined();
+  });
 });

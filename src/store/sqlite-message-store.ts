@@ -44,11 +44,13 @@ interface MessageRow {
   chat_type: string | null;
   reply_to_id: string | null;
   mentions_json: string | null;
+  from_me: number;
 }
 
 interface SyncStateRow {
   account: string;
   source: string;
+  folder: string;
   delta_token: string | null;
   last_sync_at: number | null;
 }
@@ -72,9 +74,9 @@ export class SqliteMessageStore implements MessageStore {
   private readonly existsStmt: Statement<[string]>;
   private readonly upsertStmt: Statement<MessageRow>;
   private readonly deleteStmt: Statement<[string]>;
-  private readonly getSyncStmt: Statement<[string, string]>;
+  private readonly getSyncStmt: Statement<[string, string, string]>;
   private readonly setSyncStmt: Statement<
-    [string, string, string | null, number | null]
+    [string, string, string, string | null, number | null]
   >;
   private readonly appendSyncLogStmt: Statement<
     [number, string, string, string, number | null, string | null]
@@ -99,12 +101,12 @@ export class SqliteMessageStore implements MessageStore {
         id, source, account, native_id,
         thread_id, thread_name, sender_name, sender_email,
         sent_at, imported_at, is_read, body, body_html, raw_json,
-        chat_type, reply_to_id, mentions_json
+        chat_type, reply_to_id, mentions_json, from_me
       ) VALUES (
         @id, @source, @account, @native_id,
         @thread_id, @thread_name, @sender_name, @sender_email,
         @sent_at, @imported_at, @is_read, @body, @body_html, @raw_json,
-        @chat_type, @reply_to_id, @mentions_json
+        @chat_type, @reply_to_id, @mentions_json, @from_me
       )
       ON CONFLICT(id) DO UPDATE SET
         source = excluded.source,
@@ -122,16 +124,17 @@ export class SqliteMessageStore implements MessageStore {
         raw_json = excluded.raw_json,
         chat_type = excluded.chat_type,
         reply_to_id = excluded.reply_to_id,
-        mentions_json = excluded.mentions_json
+        mentions_json = excluded.mentions_json,
+        from_me = excluded.from_me
     `);
     this.deleteStmt = db.prepare("DELETE FROM messages WHERE id = ?");
     this.getSyncStmt = db.prepare(
-      "SELECT account, source, delta_token, last_sync_at FROM sync_state WHERE account = ? AND source = ?",
+      "SELECT account, source, folder, delta_token, last_sync_at FROM sync_state WHERE account = ? AND source = ? AND folder = ?",
     );
     this.setSyncStmt = db.prepare(`
-      INSERT INTO sync_state (account, source, delta_token, last_sync_at)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(account, source) DO UPDATE SET
+      INSERT INTO sync_state (account, source, folder, delta_token, last_sync_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(account, source, folder) DO UPDATE SET
         delta_token = excluded.delta_token,
         last_sync_at = excluded.last_sync_at
     `);
@@ -200,14 +203,16 @@ export class SqliteMessageStore implements MessageStore {
   async getSyncState(
     account: string,
     source: MessageSource,
+    folder?: string,
   ): Promise<SyncStateEntry | null> {
-    const row = this.getSyncStmt.get(account, source) as
+    const row = this.getSyncStmt.get(account, source, folder ?? "") as
       | SyncStateRow
       | undefined;
     if (row === undefined) return null;
     const entry: SyncStateEntry = {
       account: row.account,
       source: row.source as MessageSource,
+      ...(row.folder !== "" && { folder: row.folder }),
     };
     return {
       ...entry,
@@ -222,6 +227,7 @@ export class SqliteMessageStore implements MessageStore {
     this.setSyncStmt.run(
       entry.account,
       entry.source,
+      entry.folder ?? "",
       nullable(entry.deltaToken),
       entry.lastSyncAt === undefined ? null : entry.lastSyncAt.getTime(),
     );
@@ -294,7 +300,7 @@ export class SqliteMessageStore implements MessageStore {
       SELECT id, source, account, native_id,
              thread_id, thread_name, sender_name, sender_email,
              sent_at, imported_at, is_read, body, body_html, raw_json,
-             chat_type, reply_to_id, mentions_json
+             chat_type, reply_to_id, mentions_json, from_me
       FROM messages
       WHERE thread_id = ?
       ORDER BY sent_at ASC, id ASC
@@ -387,7 +393,7 @@ export class SqliteMessageStore implements MessageStore {
       SELECT m.id, m.source, m.account, m.native_id,
              m.thread_id, m.thread_name, m.sender_name, m.sender_email,
              m.sent_at, m.imported_at, m.is_read, m.body, m.body_html, m.raw_json,
-             m.chat_type, m.reply_to_id, m.mentions_json
+             m.chat_type, m.reply_to_id, m.mentions_json, m.from_me
       FROM messages m
       WHERE ${dataClauses.join(" AND ")}
       ORDER BY m.sent_at DESC, m.id DESC
@@ -421,7 +427,7 @@ export class SqliteMessageStore implements MessageStore {
         p.account AS account,
         p.source AS source,
         (SELECT last_sync_at FROM sync_state
-           WHERE account = p.account AND source = p.source) AS last_sync_at,
+           WHERE account = p.account AND source = p.source AND folder = '') AS last_sync_at,
         (SELECT ts FROM sync_log
            WHERE account = p.account AND source = p.source AND status = 'ok'
            ORDER BY ts DESC LIMIT 1) AS last_ok_at,
@@ -518,7 +524,7 @@ export class SqliteMessageStore implements MessageStore {
         SELECT m.id, m.source, m.account, m.native_id,
                m.thread_id, m.thread_name, m.sender_name, m.sender_email,
                m.sent_at, m.imported_at, m.is_read, m.body, m.body_html, m.raw_json,
-               m.chat_type, m.reply_to_id, m.mentions_json,
+               m.chat_type, m.reply_to_id, m.mentions_json, m.from_me,
                snippet(messages_fts, 0, '[', ']', '…', 16) AS snippet,
                bm25(messages_fts) AS rank
         FROM messages_fts
@@ -531,7 +537,7 @@ export class SqliteMessageStore implements MessageStore {
         SELECT m.id, m.source, m.account, m.native_id,
                m.thread_id, m.thread_name, m.sender_name, m.sender_email,
                m.sent_at, m.imported_at, m.is_read, m.body, m.body_html, m.raw_json,
-               m.chat_type, m.reply_to_id, m.mentions_json,
+               m.chat_type, m.reply_to_id, m.mentions_json, m.from_me,
                '' AS snippet,
                (-m.sent_at) AS rank
         FROM messages m
@@ -617,6 +623,7 @@ function fromRow(r: MessageRow): Message {
     ...(r.chat_type !== null && { chatType: r.chat_type as ChatType }),
     ...(r.reply_to_id !== null && { replyToId: r.reply_to_id }),
     ...(mentions !== undefined && { mentions }),
+    ...(r.from_me === 1 && { fromMe: true as const }),
   };
 }
 
@@ -639,5 +646,6 @@ function toRow(m: Message): MessageRow {
     chat_type: nullable(m.chatType),
     reply_to_id: nullable(m.replyToId),
     mentions_json: m.mentions === undefined ? null : JSON.stringify(m.mentions),
+    from_me: m.fromMe === true ? 1 : 0,
   };
 }

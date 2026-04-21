@@ -29,6 +29,7 @@ export interface ProjectedThreadMessage {
   readonly chatType?: ChatType;
   readonly replyToId?: string;
   readonly mentions?: readonly string[];
+  readonly fromMe?: true;
   readonly body?: string;
   readonly bodyTruncated?: true;
 }
@@ -150,5 +151,6 @@ function projectCore(m: Message): ProjectedThreadMessage {
     ...(m.chatType !== undefined && { chatType: m.chatType }),
     ...(m.replyToId !== undefined && { replyToId: m.replyToId }),
     ...(m.mentions !== undefined && { mentions: m.mentions }),
+    ...(m.fromMe === true && { fromMe: true as const }),
   };
 }

@@ -1,6 +1,6 @@
 import type { Database } from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 10;
+export const CURRENT_SCHEMA_VERSION = 11;
 
 const MIGRATION_1 = `
 CREATE TABLE IF NOT EXISTS messages (
@@ -159,6 +159,42 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_steering_dedupe
   ON steering_rules(rule_type, pattern, IFNULL(source,''), IFNULL(account,''));
 `;
 
+// v11 adds Sent Items support:
+// - `messages.from_me` marks rows ingested from /me/mailFolders/sentitems.
+// - `sync_state.folder` lets a single (account, source) carry multiple cursors
+//   (inbox vs. sentitems). PK becomes (account, source, folder); legacy rows
+//   get folder=''.
+function migrateV11(db: Database): void {
+  const msgCols = db.prepare("PRAGMA table_info(messages)").all() as {
+    name: string;
+  }[];
+  if (!msgCols.some((c) => c.name === "from_me")) {
+    db.exec(
+      "ALTER TABLE messages ADD COLUMN from_me INTEGER NOT NULL DEFAULT 0",
+    );
+  }
+
+  const ssCols = db.prepare("PRAGMA table_info(sync_state)").all() as {
+    name: string;
+  }[];
+  if (ssCols.length > 0 && !ssCols.some((c) => c.name === "folder")) {
+    db.exec(`
+      CREATE TABLE sync_state_new (
+        account TEXT NOT NULL,
+        source TEXT NOT NULL,
+        folder TEXT NOT NULL DEFAULT '',
+        delta_token TEXT,
+        last_sync_at INTEGER,
+        PRIMARY KEY (account, source, folder)
+      );
+      INSERT INTO sync_state_new (account, source, folder, delta_token, last_sync_at)
+        SELECT account, source, '', delta_token, last_sync_at FROM sync_state;
+      DROP TABLE sync_state;
+      ALTER TABLE sync_state_new RENAME TO sync_state;
+    `);
+  }
+}
+
 export function applyMigrations(db: Database): void {
   const current = (
     db.prepare("PRAGMA user_version").get() as { user_version: number }
@@ -196,6 +232,9 @@ export function applyMigrations(db: Database): void {
     }
     if (current < 10) {
       db.exec(MIGRATION_10);
+    }
+    if (current < 11) {
+      migrateV11(db);
     }
     db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
   });

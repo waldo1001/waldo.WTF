@@ -149,6 +149,93 @@ describe("buildSteeringPredicate", () => {
     ).toBe(false);
   });
 
+  it("AC-T1: sender_email rule does NOT mute a fromMe row", () => {
+    const p = buildSteeringPredicate([
+      rule({ id: 1, ruleType: "sender_email", pattern: "gunter@example.test" }),
+    ]);
+    // Inbound row from gunter: muted.
+    expect(
+      p.matches(
+        baseMsg({ id: "inbound", senderEmail: "gunter@example.test" }),
+      ),
+    ).toBe(true);
+    // User's own reply in the same thread, stored with sender=account: not muted.
+    expect(
+      p.matches(
+        baseMsg({
+          id: "reply",
+          senderEmail: "a@example.test",
+          fromMe: true,
+        }),
+      ),
+    ).toBe(false);
+    // And the SQL fragment constrains the clause to from_me = 0 so SQLite
+    // filtering stays in lockstep with the in-memory predicate.
+    expect(p.sqlFragment).toContain("m.from_me = 0");
+  });
+
+  it("AC-T2: sender_domain rule does NOT mute a fromMe row", () => {
+    const p = buildSteeringPredicate([
+      rule({ id: 1, ruleType: "sender_domain", pattern: "example.test" }),
+    ]);
+    expect(
+      p.matches(baseMsg({ id: "in", senderEmail: "x@example.test" })),
+    ).toBe(true);
+    expect(
+      p.matches(
+        baseMsg({ id: "mine", senderEmail: "x@example.test", fromMe: true }),
+      ),
+    ).toBe(false);
+  });
+
+  it("AC-T3: body_contains rule does NOT mute a fromMe row", () => {
+    const p = buildSteeringPredicate([
+      rule({ id: 1, ruleType: "body_contains", pattern: "status update" }),
+    ]);
+    expect(
+      p.matches(baseMsg({ id: "in", body: "here is your status update now" })),
+    ).toBe(true);
+    expect(
+      p.matches(
+        baseMsg({
+          id: "mine",
+          body: "sending the status update shortly",
+          fromMe: true,
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("AC-T4: thread_id rule DOES mute a fromMe row (whole-thread intent)", () => {
+    const p = buildSteeringPredicate([
+      rule({ id: 1, ruleType: "thread_id", pattern: "conv-1" }),
+    ]);
+    expect(
+      p.matches(baseMsg({ id: "in", threadId: "conv-1" })),
+    ).toBe(true);
+    expect(
+      p.matches(baseMsg({ id: "mine", threadId: "conv-1", fromMe: true })),
+    ).toBe(true);
+    // thread_id clause has no from_me guard.
+    expect(p.sqlFragment).not.toMatch(
+      /m\.thread_id = \? AND m\.from_me = 0/,
+    );
+  });
+
+  it("thread_name_contains still mutes fromMe rows (thread-level intent)", () => {
+    const p = buildSteeringPredicate([
+      rule({ id: 1, ruleType: "thread_name_contains", pattern: "jira" }),
+    ]);
+    expect(
+      p.matches(baseMsg({ id: "in", threadName: "[JIRA] ticket" })),
+    ).toBe(true);
+    expect(
+      p.matches(
+        baseMsg({ id: "mine", threadName: "[JIRA] ticket", fromMe: true }),
+      ),
+    ).toBe(true);
+  });
+
   it("produces a sqlFragment and params for each enabled rule", () => {
     const p = buildSteeringPredicate([
       rule({ id: 1, ruleType: "sender_email", pattern: "foo@bar.com" }),

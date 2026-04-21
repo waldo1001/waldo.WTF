@@ -23,7 +23,7 @@ describe("schema / applyMigrations", () => {
     expect(userVersion(db)).toBe(0);
     applyMigrations(db);
     expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
-    expect(CURRENT_SCHEMA_VERSION).toBe(10);
+    expect(CURRENT_SCHEMA_VERSION).toBe(11);
   });
 
   it("creates all four tables and expected indices", () => {
@@ -720,6 +720,133 @@ describe("schema / oauth_clients (migration 7)", () => {
   });
 
   it("is idempotent at the current schema version (from v7 base)", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    applyMigrations(db);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+});
+
+describe("schema / sent-items support (migration 11)", () => {
+  function hasColumn(
+    db: Database.Database,
+    table: string,
+    column: string,
+  ): boolean {
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all() as {
+      name: string;
+    }[];
+    return rows.some((r) => r.name === column);
+  }
+
+  it("adds from_me column to messages with default 0", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    expect(hasColumn(db, "messages", "from_me")).toBe(true);
+
+    insertMessageRow(db, { id: "m1", body: "hi" });
+    const row = db
+      .prepare("SELECT from_me FROM messages WHERE id = ?")
+      .get("m1") as { from_me: number };
+    expect(row.from_me).toBe(0);
+  });
+
+  it("adds folder column to sync_state with default ''", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    expect(hasColumn(db, "sync_state", "folder")).toBe(true);
+
+    db.prepare(
+      "INSERT INTO sync_state (account, source, delta_token, last_sync_at) VALUES (?, ?, ?, ?)",
+    ).run("a@example.test", "outlook", "tok", 1);
+    const row = db
+      .prepare(
+        "SELECT folder FROM sync_state WHERE account = ? AND source = ?",
+      )
+      .get("a@example.test", "outlook") as { folder: string };
+    expect(row.folder).toBe("");
+  });
+
+  it("sync_state PK is (account, source, folder) — same (account, source) allowed for different folder", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const insert = db.prepare(
+      "INSERT INTO sync_state (account, source, delta_token, last_sync_at, folder) VALUES (?, ?, ?, ?, ?)",
+    );
+    insert.run("a@example.test", "outlook", "tok-inbox", 1, "");
+    expect(() =>
+      insert.run("a@example.test", "outlook", "tok-sent", 2, "sentitems"),
+    ).not.toThrow();
+    // But duplicate (account, source, folder) still rejects.
+    expect(() =>
+      insert.run("a@example.test", "outlook", "tok-dup", 3, ""),
+    ).toThrow();
+  });
+
+  it("upgrades a pre-existing v10 database to v11 preserving messages + sync_state data", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    insertMessageRow(db, { id: "before-v11", body: "rows survive" });
+    db.prepare(
+      "INSERT INTO sync_state (account, source, delta_token, last_sync_at) VALUES (?, ?, ?, ?)",
+    ).run("a@example.test", "outlook", "existing-token", 42);
+    db.exec("PRAGMA user_version = 10");
+    // Simulate a v10 schema where from_me + folder do not exist yet.
+    db.exec(`
+      CREATE TABLE _msg_old AS SELECT
+        id, source, account, native_id, thread_id, thread_name,
+        sender_name, sender_email, sent_at, imported_at, is_read,
+        body, body_html, raw_json, chat_type, reply_to_id, mentions_json
+      FROM messages;
+      DROP TABLE messages;
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY, source TEXT NOT NULL, account TEXT NOT NULL,
+        native_id TEXT NOT NULL, thread_id TEXT, thread_name TEXT,
+        sender_name TEXT, sender_email TEXT, sent_at INTEGER NOT NULL,
+        imported_at INTEGER NOT NULL, is_read INTEGER, body TEXT,
+        body_html TEXT, raw_json TEXT, chat_type TEXT, reply_to_id TEXT,
+        mentions_json TEXT
+      );
+      INSERT INTO messages SELECT * FROM _msg_old;
+      DROP TABLE _msg_old;
+
+      CREATE TABLE _ss_old AS SELECT account, source, delta_token, last_sync_at
+      FROM sync_state;
+      DROP TABLE sync_state;
+      CREATE TABLE sync_state (
+        account TEXT NOT NULL, source TEXT NOT NULL,
+        delta_token TEXT, last_sync_at INTEGER,
+        PRIMARY KEY (account, source)
+      );
+      INSERT INTO sync_state SELECT * FROM _ss_old;
+      DROP TABLE _ss_old;
+    `);
+
+    applyMigrations(db);
+
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+    expect(hasColumn(db, "messages", "from_me")).toBe(true);
+    expect(hasColumn(db, "sync_state", "folder")).toBe(true);
+
+    const msgRow = db
+      .prepare("SELECT id, from_me FROM messages WHERE id = ?")
+      .get("before-v11") as { id: string; from_me: number };
+    expect(msgRow.id).toBe("before-v11");
+    expect(msgRow.from_me).toBe(0);
+
+    const ssRow = db
+      .prepare(
+        "SELECT delta_token, folder FROM sync_state WHERE account = ? AND source = ?",
+      )
+      .get("a@example.test", "outlook") as {
+      delta_token: string;
+      folder: string;
+    };
+    expect(ssRow.delta_token).toBe("existing-token");
+    expect(ssRow.folder).toBe("");
+  });
+
+  it("is idempotent at v11 (current schema)", () => {
     const db = new Database(":memory:");
     applyMigrations(db);
     applyMigrations(db);

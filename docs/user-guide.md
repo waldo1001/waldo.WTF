@@ -31,8 +31,14 @@ accounts, ordered `sent_at DESC`, within the last `hours`. Filter by
 `sources` (`["outlook", "teams", "whatsapp"]`) or `accounts`
 (`["eric.wauters@dynex.be"]`) to narrow.
 
+Each message carries an optional `replied: boolean` — true iff the
+latest in-window message in that thread has `fromMe: true` (your own
+reply). Answers *"did I reply to X?"* in a single call. Messages
+without a `threadId` are not annotated.
+
 Typical prompt: *"What happened in the last 4 hours across all my
-accounts?"*
+accounts?"* or *"Which mails from today am I still on the hook for?"*
+— Claude reads `replied=false` rows to build the second answer.
 
 ### `search(query?, sender_email?, sender_name?, after?, before?, limit?, include_body?)`
 
@@ -80,6 +86,12 @@ their next delta touch; clear the delta token for a forced resync.
 Pass `include_body: true` when the user wants the message text itself
 (e.g. *"what did it say"*, *"summarize"*). Same truncation and budget
 semantics as `search`.
+
+Outlook threads interleave inbound and outbound: messages the user
+sent (ingested from the Sent Items folder) appear alongside inbound
+replies in `sent_at` order, each marked with `fromMe: true`. This
+makes *"read back my last reply in this thread"* and *"did I answer
+clearly?"* directly answerable.
 
 Typical flow: Claude calls `search` → picks a result → calls
 `get_thread` with the result's `thread_id` → reads the full exchange.
@@ -449,6 +461,17 @@ pattern="devops.example.com", reason="too noisy")`. Next `search` or
 
 `get_thread` and `list_accounts` are **not** filtered — once you open a
 thread you see everything in it, and account listing is metadata.
+
+### Carve-out for your own replies
+
+`sender_email`, `sender_domain`, and `body_contains` rules **do not
+mute rows with `fromMe: true`** — ingested from Outlook Sent Items.
+Muting a correspondent must not hide your own outgoing reply in that
+thread, otherwise `replied=true` annotations would under-report. The
+two thread-level rule types (`thread_id`, `thread_name_contains`)
+still mute fromMe rows because muting a whole conversation is a
+stronger, explicit intent. `muted_count` reflects what was actually
+muted.
 
 ### Via the CLI (for bulk setup and recovery)
 

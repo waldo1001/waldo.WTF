@@ -328,4 +328,87 @@ describe("handleGetRecentActivity", () => {
       "source-of-truth probe",
     );
   });
+
+  it("AC-R3: replied=true when the latest message in the thread is fromMe", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mkMessage({
+            id: "outlook:a@example.test:inbound-1",
+            threadId: "conv-1",
+            senderEmail: "gunter@example.test",
+            sentAt: new Date("2026-04-13T10:00:00Z"),
+          }),
+          mkMessage({
+            id: "outlook:a@example.test:reply-1",
+            threadId: "conv-1",
+            senderEmail: "a@example.test",
+            fromMe: true,
+            sentAt: new Date("2026-04-13T11:30:00Z"),
+          }),
+        ],
+      },
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleGetRecentActivity(store, clock, { hours: 6 });
+    expect(result.count).toBe(2);
+    // Annotation is attached to every row of the thread.
+    for (const m of result.messages) {
+      if (m.threadId === "conv-1") expect(m.replied).toBe(true);
+    }
+  });
+
+  it("AC-R4: replied=false when the latest message in the thread is inbound", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mkMessage({
+            id: "outlook:a@example.test:reply-1",
+            threadId: "conv-2",
+            fromMe: true,
+            sentAt: new Date("2026-04-13T09:00:00Z"),
+          }),
+          mkMessage({
+            id: "outlook:a@example.test:inbound-2",
+            threadId: "conv-2",
+            senderEmail: "gunter@example.test",
+            sentAt: new Date("2026-04-13T11:30:00Z"),
+          }),
+        ],
+      },
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleGetRecentActivity(store, clock, { hours: 6 });
+    for (const m of result.messages) {
+      if (m.threadId === "conv-2") expect(m.replied).toBe(false);
+    }
+  });
+
+  it("AC-R5: replied annotation does not change message ordering", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mkMessage({
+            id: "outlook:a@example.test:reply-1",
+            threadId: "conv-3",
+            fromMe: true,
+            sentAt: new Date("2026-04-13T11:30:00Z"),
+          }),
+          mkMessage({
+            id: "outlook:a@example.test:other-1",
+            threadId: "conv-4",
+            senderEmail: "gunter@example.test",
+            sentAt: new Date("2026-04-13T11:45:00Z"),
+          }),
+        ],
+      },
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleGetRecentActivity(store, clock, { hours: 6 });
+    // DESC order preserved regardless of fromMe rows.
+    expect(result.messages.map((m) => m.id)).toEqual([
+      "outlook:a@example.test:other-1",
+      "outlook:a@example.test:reply-1",
+    ]);
+  });
 });

@@ -35,26 +35,35 @@ function buildScopeSql(rule: SteeringRule): {
   return { sql: parts.length === 0 ? "1" : parts.join(" AND "), params };
 }
 
+// Rules that target the correspondent or a topical body match must not mute
+// the user's own outgoing replies — otherwise a user muting a sender would
+// also hide their own answers to that sender, making "did I reply?" unusable.
+// Thread-level rules (thread_id, thread_name_contains) keep muting fromMe
+// rows, because muting a whole thread is a stronger, explicit intent.
+const isFromMe = (msg: Message): boolean => msg.fromMe === true;
+
 function buildClause(rule: SteeringRule): ClauseBuild {
   const scope = buildScopeSql(rule);
   switch (rule.ruleType) {
     case "sender_email": {
       const needle = rule.pattern;
       return {
-        sql: `(${scope.sql} AND LOWER(m.sender_email) = ?)`,
+        sql: `(${scope.sql} AND m.from_me = 0 AND LOWER(m.sender_email) = ?)`,
         params: [...scope.params, needle],
         match: (msg) =>
           scopeMatchesMessage(rule, msg) &&
+          !isFromMe(msg) &&
           (msg.senderEmail ?? "").toLowerCase() === needle,
       };
     }
     case "sender_domain": {
       const needle = `%@${rule.pattern}`;
       return {
-        sql: `(${scope.sql} AND LOWER(m.sender_email) LIKE ?)`,
+        sql: `(${scope.sql} AND m.from_me = 0 AND LOWER(m.sender_email) LIKE ?)`,
         params: [...scope.params, needle],
         match: (msg) =>
           scopeMatchesMessage(rule, msg) &&
+          !isFromMe(msg) &&
           (msg.senderEmail ?? "").toLowerCase().endsWith(`@${rule.pattern}`),
       };
     }
@@ -79,10 +88,11 @@ function buildClause(rule: SteeringRule): ClauseBuild {
     case "body_contains": {
       const ftsPhrase = `"${rule.pattern.replace(/"/g, '""')}"`;
       return {
-        sql: `(${scope.sql} AND m.rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?))`,
+        sql: `(${scope.sql} AND m.from_me = 0 AND m.rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?))`,
         params: [...scope.params, ftsPhrase],
         match: (msg) =>
           scopeMatchesMessage(rule, msg) &&
+          !isFromMe(msg) &&
           (msg.body ?? "").toLowerCase().includes(rule.pattern),
       };
     }

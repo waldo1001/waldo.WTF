@@ -151,6 +151,58 @@ export function runMessageStoreContract(
       expect(got?.deltaToken).toBe("second");
     });
 
+    it("sync state is isolated by folder for the same (account, source)", async () => {
+      const { store } = await factory();
+      await store.setSyncState({
+        account: "a@example.test",
+        source: "outlook",
+        folder: "",
+        deltaToken: "inbox-cursor",
+      });
+      await store.setSyncState({
+        account: "a@example.test",
+        source: "outlook",
+        folder: "sentitems",
+        deltaToken: "sent-cursor",
+      });
+      const inbox = await store.getSyncState("a@example.test", "outlook");
+      const sent = await store.getSyncState(
+        "a@example.test",
+        "outlook",
+        "sentitems",
+      );
+      expect(inbox?.deltaToken).toBe("inbox-cursor");
+      expect(sent?.deltaToken).toBe("sent-cursor");
+    });
+
+    it("upsertMessages round-trips fromMe=true", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([
+        msg({
+          id: "sent-1",
+          threadId: "t1",
+          fromMe: true,
+        }),
+      ]);
+      const { messages } = await store.getRecentMessages({
+        since: new Date("2026-04-13T00:00:00Z"),
+        limit: 10,
+      });
+      const sent = messages.find((m) => m.id === "sent-1");
+      expect(sent?.fromMe).toBe(true);
+    });
+
+    it("upsertMessages with fromMe absent is treated as not-from-me", async () => {
+      const { store } = await factory();
+      await store.upsertMessages([msg({ id: "inbox-1", threadId: "t1" })]);
+      const { messages } = await store.getRecentMessages({
+        since: new Date("2026-04-13T00:00:00Z"),
+        limit: 10,
+      });
+      const inbox = messages.find((m) => m.id === "inbox-1");
+      expect(inbox?.fromMe === true).toBe(false);
+    });
+
     it("sync state is isolated by (account, source) pair", async () => {
       const { store } = await factory();
       await store.setSyncState({

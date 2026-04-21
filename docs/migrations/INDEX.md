@@ -17,6 +17,7 @@ remove an obsolete recipe — mark its `Status` as `obsolete` or
 | --- | --- | --- | --- |
 | [body-backfill](body-backfill.md) | 2026-04-15 | active | Derives plain `body` from `body_html` in place + rebuilds FTS5 so mail content is searchable. Schema v5 → v6 marker. |
 | [whatsapp-rethread](whatsapp-rethread.md) | 2026-04-21 | active | Heals bifurcated WhatsApp threads by normalizing `thread_id`, rewriting `thread_name` (latest-imported wins), and recomputing message `id` on the normalized chat. No schema change. |
+| [sent-items-schema](sent-items-schema.md) | 2026-04-21 | active | Schema v10 → v11. Adds `messages.from_me` and widens `sync_state` PK to `(account, source, folder)` so Outlook Sent Items tracks its own delta cursor. Runs automatically at boot; recipe documents pre/post-verify and rollback. |
 
 ## Obsolete / deprecated
 

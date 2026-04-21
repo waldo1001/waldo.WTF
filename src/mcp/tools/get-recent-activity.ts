@@ -39,6 +39,7 @@ export interface ProjectedMessage {
   readonly chatType?: ChatType;
   readonly replyToId?: string;
   readonly mentions?: readonly string[];
+  readonly replied?: boolean;
 }
 
 export interface GetRecentActivityResult {
@@ -126,12 +127,32 @@ export async function handleGetRecentActivity(
     !includeMuted && mutedCount > 0
       ? `${mutedCount} message(s) hidden by steering rules. Pass include_muted=true to see them, or call get_steering to review active rules.`
       : undefined;
+  const repliedByThread = computeRepliedByThread(messages);
   return {
     count: messages.length,
-    messages: messages.map(project),
+    messages: messages.map((m) => project(m, repliedByThread)),
     muted_count: mutedCount,
     ...(hint !== undefined && { steering_hint: hint }),
   };
+}
+
+// For each thread appearing in the result window, the annotation reflects the
+// latest-by-sentAt row's fromMe. Threads with no in-window rows get no entry;
+// messages without a threadId are never annotated.
+function computeRepliedByThread(
+  messages: readonly Message[],
+): Map<string, boolean> {
+  const latestByThread = new Map<string, Message>();
+  for (const m of messages) {
+    if (m.threadId === undefined) continue;
+    const prev = latestByThread.get(m.threadId);
+    if (prev === undefined || m.sentAt.getTime() > prev.sentAt.getTime()) {
+      latestByThread.set(m.threadId, m);
+    }
+  }
+  const out = new Map<string, boolean>();
+  for (const [tid, m] of latestByThread) out.set(tid, m.fromMe === true);
+  return out;
 }
 
 function snippetFrom(m: Message): string | undefined {
@@ -140,8 +161,13 @@ function snippetFrom(m: Message): string | undefined {
   return raw.length > SNIPPET_MAX ? raw.slice(0, SNIPPET_MAX) : raw;
 }
 
-function project(m: Message): ProjectedMessage {
+function project(
+  m: Message,
+  repliedByThread: ReadonlyMap<string, boolean>,
+): ProjectedMessage {
   const snippet = snippetFrom(m);
+  const replied =
+    m.threadId !== undefined ? repliedByThread.get(m.threadId) : undefined;
   return {
     id: m.id,
     source: m.source,
@@ -155,5 +181,6 @@ function project(m: Message): ProjectedMessage {
     ...(m.chatType !== undefined && { chatType: m.chatType }),
     ...(m.replyToId !== undefined && { replyToId: m.replyToId }),
     ...(m.mentions !== undefined && { mentions: m.mentions }),
+    ...(replied !== undefined && { replied }),
   };
 }

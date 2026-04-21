@@ -58,8 +58,11 @@ export interface InMemoryMessageStoreOptions {
   steeringStore?: SteeringStore;
 }
 
-const syncKey = (account: string, source: MessageSource): string =>
-  `${account}::${source}`;
+const syncKey = (
+  account: string,
+  source: MessageSource,
+  folder: string,
+): string => `${account}::${source}::${folder}`;
 
 export class InMemoryMessageStore implements MessageStore {
   readonly calls: InMemoryMessageStoreCall[] = [];
@@ -75,7 +78,7 @@ export class InMemoryMessageStore implements MessageStore {
       this.messages.set(m.id, m);
     }
     for (const s of opts.seed?.syncState ?? []) {
-      this.syncState.set(syncKey(s.account, s.source), s);
+      this.syncState.set(syncKey(s.account, s.source, s.folder ?? ""), s);
     }
     for (const a of opts.seed?.accounts ?? []) {
       this.accounts.set(a.username, a);
@@ -117,14 +120,18 @@ export class InMemoryMessageStore implements MessageStore {
   async getSyncState(
     account: string,
     source: MessageSource,
+    folder?: string,
   ): Promise<SyncStateEntry | null> {
     this.calls.push({ method: "getSyncState", account, source });
-    return this.syncState.get(syncKey(account, source)) ?? null;
+    return this.syncState.get(syncKey(account, source, folder ?? "")) ?? null;
   }
 
   async setSyncState(entry: SyncStateEntry): Promise<void> {
     this.calls.push({ method: "setSyncState", entry });
-    this.syncState.set(syncKey(entry.account, entry.source), entry);
+    this.syncState.set(
+      syncKey(entry.account, entry.source, entry.folder ?? ""),
+      entry,
+    );
   }
 
   async appendSyncLog(entry: SyncLogEntry): Promise<void> {
@@ -208,14 +215,16 @@ export class InMemoryMessageStore implements MessageStore {
   async getSyncStatus(now: Date): Promise<readonly SyncStatusRow[]> {
     this.calls.push({ method: "getSyncStatus", now });
     const pairs = new Map<string, { account: string; source: MessageSource }>();
+    const pairKey = (account: string, source: MessageSource): string =>
+      `${account}::${source}`;
     for (const s of this.syncState.values()) {
-      pairs.set(syncKey(s.account, s.source), {
+      pairs.set(pairKey(s.account, s.source), {
         account: s.account,
         source: s.source,
       });
     }
     for (const entry of this.syncLog) {
-      pairs.set(syncKey(entry.account, entry.source), {
+      pairs.set(pairKey(entry.account, entry.source), {
         account: entry.account,
         source: entry.source,
       });
@@ -223,7 +232,7 @@ export class InMemoryMessageStore implements MessageStore {
     const since24h = now.getTime() - 24 * 3600 * 1000;
     const rows: SyncStatusRow[] = [];
     for (const { account, source } of pairs.values()) {
-      const state = this.syncState.get(syncKey(account, source));
+      const state = this.syncState.get(syncKey(account, source, ""));
       const logs = this.syncLog
         .filter((e) => e.account === account && e.source === source)
         .slice()

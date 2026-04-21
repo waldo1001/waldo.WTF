@@ -30,6 +30,14 @@ const ok = (r: Partial<GraphDeltaResponse>): GraphDeltaResponse => ({
   ...r,
 });
 
+// Per Outlook account, the scheduler calls /inbox/delta then /sentitems/delta.
+// Tests that only care about inbox behavior append this step to satisfy the
+// second call.
+const sentOk = {
+  kind: "ok" as const,
+  response: ok({ "@odata.deltaLink": "sent-link" }),
+};
+
 interface RecordedTimer {
   fn: () => void;
   ms: number;
@@ -85,14 +93,16 @@ describe("SyncScheduler", () => {
     expect(store.syncLog).toHaveLength(0);
   });
 
-  it("runOnce with two accounts appends one ok sync_log row per account", async () => {
+  it("runOnce with two accounts appends one ok sync_log row per account per folder", async () => {
     const a1 = acc("alice");
     const a2 = acc("bob");
     const store = new InMemoryMessageStore();
     const graph = new FakeGraphClient({
       steps: [
         { kind: "ok", response: ok({ value: [], "@odata.deltaLink": "d1" }) },
+        sentOk,
         { kind: "ok", response: ok({ value: [], "@odata.deltaLink": "d2" }) },
+        sentOk,
       ],
     });
     const auth = new FakeAuthClient({
@@ -114,22 +124,30 @@ describe("SyncScheduler", () => {
       intervalMs: 1000,
     });
     await scheduler.runOnce();
-    expect(store.syncLog).toHaveLength(2);
+    expect(store.syncLog).toHaveLength(4);
     expect(store.syncLog.every((e) => e.status === "ok")).toBe(true);
     expect(store.syncLog.map((e) => e.account).sort()).toEqual([
       a1.username,
+      a1.username,
+      a2.username,
       a2.username,
     ]);
   });
 
-  it("runOnce: one account throws — other still runs, error row has stringified message", async () => {
+  it("runOnce: one account's inbox throws — sent still runs for it, other account still runs", async () => {
     const a1 = acc("alice");
     const a2 = acc("bob");
     const store = new InMemoryMessageStore();
     const graph = new FakeGraphClient({
       steps: [
+        // alice inbox: error
         { kind: "error", error: new Error("boom-alice") },
+        // alice sent: ok
+        sentOk,
+        // bob inbox: ok
         { kind: "ok", response: ok({ value: [], "@odata.deltaLink": "d2" }) },
+        // bob sent: ok
+        sentOk,
       ],
     });
     const auth = new FakeAuthClient({
@@ -151,12 +169,94 @@ describe("SyncScheduler", () => {
       intervalMs: 1000,
     });
     await scheduler.runOnce();
+    expect(store.syncLog).toHaveLength(4);
+    const aliceRows = store.syncLog.filter((e) => e.account === a1.username);
+    const bobRows = store.syncLog.filter((e) => e.account === a2.username);
+    // Alice: inbox errored, sent ok.
+    const aliceErr = aliceRows.find((e) => e.status === "error");
+    const aliceOk = aliceRows.find((e) => e.status === "ok");
+    expect(aliceErr?.errorMessage).toContain("boom-alice");
+    expect(aliceOk).toBeDefined();
+    expect(bobRows.every((e) => e.status === "ok")).toBe(true);
+  });
+
+  it("per Outlook account runs inbox, then sent; both logged as ok", async () => {
+    const a1 = acc("alice");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "inbox-link" }) },
+        { kind: "ok", response: ok({ "@odata.deltaLink": "sent-link" }) },
+      ],
+    });
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+
+    // Inbox first, then sent.
+    expect(graph.calls.map((c) => c.url)).toEqual([
+      "/me/mailFolders/inbox/messages/delta",
+      "/me/mailFolders/sentitems/messages/delta",
+    ]);
+    // Two ok log rows, both for outlook.
     expect(store.syncLog).toHaveLength(2);
-    const aliceRow = store.syncLog.find((e) => e.account === a1.username);
-    const bobRow = store.syncLog.find((e) => e.account === a2.username);
-    expect(aliceRow?.status).toBe("error");
-    expect(aliceRow?.errorMessage).toContain("boom-alice");
-    expect(bobRow?.status).toBe("ok");
+    expect(store.syncLog.every((e) => e.source === "outlook")).toBe(true);
+    expect(store.syncLog.every((e) => e.status === "ok")).toBe(true);
+    // Each has its own sync_state row.
+    const inbox = await store.getSyncState(a1.username, "outlook");
+    const sent = await store.getSyncState(a1.username, "outlook", "sentitems");
+    expect(inbox?.deltaToken).toBe("inbox-link");
+    expect(sent?.deltaToken).toBe("sent-link");
+  });
+
+  it("sent failure does not swallow inbox ok (and vice versa): both rows appended", async () => {
+    const a1 = acc("alice");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "inbox-ok" }) },
+        { kind: "error", error: new Error("sent-boom") },
+      ],
+    });
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+
+    expect(store.syncLog).toHaveLength(2);
+    const okRow = store.syncLog.find((e) => e.status === "ok");
+    const errRow = store.syncLog.find((e) => e.status === "error");
+    expect(okRow?.source).toBe("outlook");
+    expect(errRow?.source).toBe("outlook");
+    expect(errRow?.errorMessage).toContain("sent-boom");
+    // The inbox cursor still advanced.
+    const inbox = await store.getSyncState(a1.username, "outlook");
+    expect(inbox?.deltaToken).toBe("inbox-ok");
   });
 
   it("upserts each account into the store on every tick", async () => {
@@ -166,7 +266,9 @@ describe("SyncScheduler", () => {
     const graph = new FakeGraphClient({
       steps: [
         { kind: "ok", response: ok({ value: [], "@odata.deltaLink": "d1" }) },
+        sentOk,
         { kind: "ok", response: ok({ value: [], "@odata.deltaLink": "d2" }) },
+        sentOk,
       ],
     });
     const auth = new FakeAuthClient({
@@ -201,7 +303,10 @@ describe("SyncScheduler", () => {
   it("start() awaits first runOnce then arms the timer with intervalMs", async () => {
     const store = new InMemoryMessageStore();
     const graph = new FakeGraphClient({
-      steps: [{ kind: "ok", response: ok({ "@odata.deltaLink": "d1" }) }],
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "d1" }) },
+        sentOk,
+      ],
     });
     const a1 = acc("alice");
     const auth = new FakeAuthClient({
@@ -220,7 +325,7 @@ describe("SyncScheduler", () => {
       intervalMs: 42_000,
     });
     await scheduler.start();
-    expect(store.syncLog).toHaveLength(1);
+    expect(store.syncLog).toHaveLength(2);
     expect(timer.timers).toHaveLength(1);
     expect(timer.timers[0]?.ms).toBe(42_000);
     // Fire the armed timer so the callback body is exercised.
@@ -230,7 +335,10 @@ describe("SyncScheduler", () => {
   it("stop() clears the active timer", async () => {
     const store = new InMemoryMessageStore();
     const graph = new FakeGraphClient({
-      steps: [{ kind: "ok", response: ok({ "@odata.deltaLink": "d1" }) }],
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "d1" }) },
+        sentOk,
+      ],
     });
     const a1 = acc("alice");
     const auth = new FakeAuthClient({
@@ -253,11 +361,14 @@ describe("SyncScheduler", () => {
     expect(timer.timers[0]?.cleared).toBe(true);
   });
 
-  it("with teams dep: runOnce appends one outlook + one teams row per account", async () => {
+  it("with teams dep: runOnce appends inbox + sent + teams rows per account", async () => {
     const a1 = acc("alice");
     const store = new InMemoryMessageStore();
     const graph = new FakeGraphClient({
-      steps: [{ kind: "ok", response: ok({ "@odata.deltaLink": "do" }) }],
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
     });
     const teams = new FakeTeamsClient({
       steps: [{ kind: "listChatsOk", response: { value: [] } }],
@@ -279,8 +390,9 @@ describe("SyncScheduler", () => {
       intervalMs: 1000,
     });
     await scheduler.runOnce();
-    expect(store.syncLog).toHaveLength(2);
+    expect(store.syncLog).toHaveLength(3);
     expect(store.syncLog.map((e) => e.source).sort()).toEqual([
+      "outlook",
       "outlook",
       "teams",
     ]);
@@ -291,7 +403,10 @@ describe("SyncScheduler", () => {
     const a1 = acc("alice");
     const store = new InMemoryMessageStore();
     const graph = new FakeGraphClient({
-      steps: [{ kind: "ok", response: ok({ "@odata.deltaLink": "do" }) }],
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
     });
     const auth = new FakeAuthClient({
       accounts: [a1],
@@ -309,15 +424,18 @@ describe("SyncScheduler", () => {
       intervalMs: 1000,
     });
     await scheduler.runOnce();
-    expect(store.syncLog).toHaveLength(1);
-    expect(store.syncLog[0]?.source).toBe("outlook");
+    expect(store.syncLog).toHaveLength(2);
+    expect(store.syncLog.every((e) => e.source === "outlook")).toBe(true);
   });
 
   it("teams error does not block outlook: both rows appended, teams row is error", async () => {
     const a1 = acc("alice");
     const store = new InMemoryMessageStore();
     const graph = new FakeGraphClient({
-      steps: [{ kind: "ok", response: ok({ "@odata.deltaLink": "do" }) }],
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
     });
     const teams = new FakeTeamsClient({
       steps: [{ kind: "error", error: new Error("teams-boom") }],
@@ -339,10 +457,11 @@ describe("SyncScheduler", () => {
       intervalMs: 1000,
     });
     await scheduler.runOnce();
-    expect(store.syncLog).toHaveLength(2);
-    const outlookRow = store.syncLog.find((e) => e.source === "outlook");
+    expect(store.syncLog).toHaveLength(3);
+    const outlookRows = store.syncLog.filter((e) => e.source === "outlook");
     const teamsRow = store.syncLog.find((e) => e.source === "teams");
-    expect(outlookRow?.status).toBe("ok");
+    expect(outlookRows).toHaveLength(2);
+    expect(outlookRows.every((r) => r.status === "ok")).toBe(true);
     expect(teamsRow?.status).toBe("error");
     expect(teamsRow?.errorMessage).toContain("teams-boom");
   });
@@ -389,7 +508,10 @@ describe("SyncScheduler", () => {
     const a1 = acc("alice");
     const store = new InMemoryMessageStore();
     const graph = new FakeGraphClient({
-      steps: [{ kind: "ok", response: ok({ "@odata.deltaLink": "do" }) }],
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
     });
     const teams = new FakeTeamsClient({
       steps: [
@@ -434,8 +556,14 @@ describe("SyncScheduler", () => {
     const store = new InMemoryMessageStore();
     const graph = new FakeGraphClient({
       steps: [
+        // alice inbox: ok
         { kind: "ok", response: ok({ value: [], "@odata.deltaLink": "d1" }) },
+        // alice sent: ok
+        sentOk,
+        // bob inbox: error
         { kind: "error", error: new Error("boom") },
+        // bob sent: ok
+        sentOk,
       ],
     });
     const auth = new FakeAuthClient({
@@ -467,9 +595,9 @@ describe("SyncScheduler", () => {
       errorCount: number;
     };
     expect(summary.accounts).toBe(2);
-    expect(summary.okCount).toBe(1);
+    expect(summary.okCount).toBe(3);
     expect(summary.errorCount).toBe(1);
     // Contract: callback fires after sync_log has been written
-    expect(store.syncLog).toHaveLength(2);
+    expect(store.syncLog).toHaveLength(4);
   });
 });
