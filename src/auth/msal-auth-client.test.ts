@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { MsalAuthClient, DEFAULT_AUTHORITY } from "./msal-auth-client.js";
+import { MsalAuthClient, DEFAULT_AUTHORITY, SCOPES } from "./msal-auth-client.js";
 import { AuthError, type Account } from "./types.js";
 import { TokenCacheStore } from "./token-cache-store.js";
 import { InMemoryFileSystem } from "../testing/in-memory-file-system.js";
@@ -76,6 +76,12 @@ describe("MsalAuthClient", () => {
     expect(DEFAULT_AUTHORITY).toBe("https://login.microsoftonline.com/common");
   });
 
+  it("SCOPES includes Mail.Read, Chat.Read, and Community.Read.All", () => {
+    expect(SCOPES).toContain("Mail.Read");
+    expect(SCOPES).toContain("Chat.Read");
+    expect(SCOPES).toContain("Community.Read.All");
+  });
+
   it("listAccounts maps MSAL AccountInfo[] to Account[] preserving order", async () => {
     const pca = new FakePca({
       accounts: [
@@ -105,7 +111,7 @@ describe("MsalAuthClient", () => {
     expect(await client.listAccounts()).toEqual([]);
   });
 
-  it("getTokenSilent requests Mail.Read + Chat.Read scopes and returns AccessToken", async () => {
+  it("getTokenSilent requests Mail.Read + Chat.Read + Community.Read.All scopes and returns AccessToken", async () => {
     const info = makeAccountInfo();
     const expires = new Date("2026-04-13T10:00:00Z");
     const pca = new FakePca({
@@ -125,7 +131,11 @@ describe("MsalAuthClient", () => {
     const token = await client.getTokenSilent(account);
     expect(token).toEqual({ token: "tok-123", expiresOn: expires, account });
     expect(pca.silentCalls).toHaveLength(1);
-    expect(pca.silentCalls[0]?.scopes).toEqual(["Mail.Read", "Chat.Read"]);
+    expect(pca.silentCalls[0]?.scopes).toEqual([
+      "Mail.Read",
+      "Chat.Read",
+      "Community.Read.All",
+    ]);
     expect(pca.silentCalls[0]?.account.homeAccountId).toBe("home-1");
   });
 
@@ -167,7 +177,7 @@ describe("MsalAuthClient", () => {
     }
   });
 
-  it("loginWithDeviceCode forwards the device-code message to onPrompt and returns the account", async () => {
+  it("loginWithDeviceCode requests Mail.Read + Chat.Read + Community.Read.All scopes via device code flow", async () => {
     const info = makeAccountInfo({ username: "new@x.invalid", homeAccountId: "h-new" });
     const pca = new FakePca({
       deviceCodeMessage: "go to https://microsoft.com/devicelogin and enter ABC123",
@@ -188,7 +198,11 @@ describe("MsalAuthClient", () => {
       homeAccountId: "h-new",
       tenantId: "tenant-1",
     });
-    expect(pca.deviceCodeCalls[0]?.scopes).toEqual(["Mail.Read", "Chat.Read"]);
+    expect(pca.deviceCodeCalls[0]?.scopes).toEqual([
+      "Mail.Read",
+      "Chat.Read",
+      "Community.Read.All",
+    ]);
   });
 
   it("loginWithDeviceCode wraps MSAL failure as AuthError('device-code-failed')", async () => {

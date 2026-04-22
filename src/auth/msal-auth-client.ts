@@ -8,7 +8,7 @@ import { AuthError, type AccessToken, type Account } from "./types.js";
 import { TokenCacheStore } from "./token-cache-store.js";
 
 export const DEFAULT_AUTHORITY = "https://login.microsoftonline.com/common";
-const SCOPES = ["Mail.Read", "Chat.Read"] as const;
+export const SCOPES = ["Mail.Read", "Chat.Read", "Community.Read.All"] as const;
 
 interface MsalAccountInfo {
   readonly username: string;

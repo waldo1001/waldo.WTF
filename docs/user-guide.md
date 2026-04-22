@@ -195,6 +195,12 @@ tick (within 5 minutes). No restart needed.
 
 ## 5b. Subscribing to Viva Engage communities
 
+**First time on this version?** If you upgraded from a version prior to
+2026-04-22, MSAL's token cache is missing the `Community.Read.All`
+scope. Re-run `--add-account <username>` once per account that should
+sync Viva — the device-code flow re-prompts for consent and refreshes
+the token cache in place. No entries need to be removed first.
+
 Viva Engage subscriptions are explicit per `(account, community)` —
 nothing is auto-discovered, so the lake only ingests communities you
 opted into. The CLI lives next to the existing `--steer-*` family.

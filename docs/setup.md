@@ -48,6 +48,13 @@ One-time, per developer. Required for MSAL device code flow.
    - For Viva Engage subscriptions (optional): `Community.Read.All`
      (delegated). Only required if you intend to subscribe to one or
      more Viva communities via `--viva-subscribe`.
+
+   Consent is granted the first time you run `--add-account <username>`
+   — MSAL requests all scopes in one device-code prompt. **If you are
+   upgrading from a version prior to 2026-04-22**, every existing
+   account must re-run `--add-account <username>` to pick up the new
+   `Community.Read.All` scope; silent token refresh will fail until you
+   do. See the Viva section of [user-guide.md](user-guide.md).
 7. Copy the **Application (client) ID** — you'll put it in `.env`.
 
 ## 3. Environment variables
