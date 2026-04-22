@@ -579,7 +579,7 @@ async function buildDefaultVivaAuth(config: Config): Promise<AuthClient> {
   });
   return new MsalAuthClient({
     clientId: config.msClientId,
-    tokenCacheStore: cacheStore,
+    cacheStore,
   });
 }
 
@@ -702,6 +702,9 @@ export async function realViva(
         return { action: "subscribe", sub };
       }
     }
+    /* c8 ignore next 2 -- exhaustive switch above; only reachable if VivaCommand grows */
+    const _exhaustive: never = command;
+    throw new Error(`unhandled viva action: ${JSON.stringify(_exhaustive)}`);
   } finally {
     if (db !== null) db.close();
   }
