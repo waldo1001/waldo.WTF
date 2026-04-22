@@ -195,11 +195,14 @@ tick (within 5 minutes). No restart needed.
 
 ## 5b. Subscribing to Viva Engage communities
 
-**First time on this version?** If you upgraded from a version prior to
-2026-04-22, MSAL's token cache is missing the `Community.Read.All`
-scope. Re-run `--add-account <username>` once per account that should
-sync Viva — the device-code flow re-prompts for consent and refreshes
-the token cache in place. No entries need to be removed first.
+**Upgrading from before 2026-04-22 (hotfix)?** Earlier builds mixed
+Graph and Yammer scopes in a single token request, causing
+`--add-account` to fail with `invalid_grant`. Delete the MSAL cache
+file (`sudo rm /volume1/docker/waldo-wtf/auth/token-cache.json` on
+the NAS) then re-run `--add-account <username>` once per account.
+The Graph scopes (`Mail.Read`, `Chat.Read`) are consented at login;
+the Yammer scope (`api.yammer.com/user_impersonation`) is acquired
+separately on first Viva sync via the multi-resource token chain.
 
 Viva Engage subscriptions are explicit per `(account, community)` —
 nothing is auto-discovered, so the lake only ingests communities you
@@ -229,8 +232,8 @@ Once subscribed, the next sync tick pulls posts under
 `source: "viva-engage"` and threads them as
 `viva:{networkId}:{communityId}:{conversationId}`. Per-community
 errors are isolated — a single failing community does not stop the
-others on the same tick. Requires the `Community.Read.All` Entra
-delegated permission (see [setup.md §2](setup.md)).
+others on the same tick. Requires the Yammer `user_impersonation`
+Entra delegated permission (see [setup.md §2](setup.md)).
 
 ## 6. Adding WhatsApp exports (Weekend 6+)
 

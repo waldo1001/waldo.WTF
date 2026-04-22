@@ -1,4 +1,5 @@
 import type { AuthClient } from "../auth/auth-client.js";
+import { YAMMER_SCOPE } from "../auth/msal-auth-client.js";
 import type { Account } from "../auth/types.js";
 import type { Clock } from "../clock.js";
 import type { MessageStore } from "../store/message-store.js";
@@ -175,7 +176,7 @@ async function syncOneCommunity(deps: {
 
 export async function syncViva(deps: SyncVivaDeps): Promise<SyncVivaResult> {
   const { account, auth, viva, store, subs, clock } = deps;
-  const token = await auth.getTokenSilent(account);
+  const token = await auth.getTokenSilent(account, { scopes: [YAMMER_SCOPE] });
 
   const enabled = await subs.listEnabledForAccount(account.username);
 

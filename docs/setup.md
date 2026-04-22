@@ -45,16 +45,20 @@ One-time, per developer. Required for MSAL device code flow.
    - `User.Read` (added automatically)
    - `Mail.Read`
    - Later (Weekend 4): `Chat.Read`, `ChannelMessage.Read.All`
-   - For Viva Engage subscriptions (optional): `Community.Read.All`
-     (delegated). Only required if you intend to subscribe to one or
-     more Viva communities via `--viva-subscribe`.
+   - For Viva Engage subscriptions (optional): **Yammer** →
+     `user_impersonation` (delegated). Add this under **APIs my
+     organisation uses** → search "Yammer". Only required if you intend
+     to subscribe to one or more Viva communities via `--viva-subscribe`.
 
-   Consent is granted the first time you run `--add-account <username>`
-   — MSAL requests all scopes in one device-code prompt. **If you are
-   upgrading from a version prior to 2026-04-22**, every existing
-   account must re-run `--add-account <username>` to pick up the new
-   `Community.Read.All` scope; silent token refresh will fail until you
-   do. See the Viva section of [user-guide.md](user-guide.md).
+   `--add-account` requests only the two Graph scopes (`Mail.Read`,
+   `Chat.Read`) in one device-code prompt. The Yammer scope is requested
+   separately, on first Viva sync, via MSAL's incremental-consent /
+   multi-resource token chain. **If you are upgrading from a version
+   prior to 2026-04-22 (hotfix)**, every existing account must re-run
+   `--add-account <username>` to clear the stale mixed-resource token
+   cache; `--add-account` was broken by an earlier commit that mixed
+   Graph and Yammer scopes in one request. See the Viva section of
+   [user-guide.md](user-guide.md).
 7. Copy the **Application (client) ID** — you'll put it in `.env`.
 
 ## 3. Environment variables

@@ -24,6 +24,7 @@ import { AuthError, type Account } from "./auth/types.js";
 import { SqliteSteeringStore } from "./store/steering-store.js";
 import type { AddSteeringRuleInput, SteeringRule } from "./store/types.js";
 import { FakeClock } from "./testing/fake-clock.js";
+import { YAMMER_SCOPE } from "./auth/msal-auth-client.js";
 
 const ACCT: Account = {
   username: "new.user@example.invalid",
@@ -1086,6 +1087,37 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
         token: "tok-123",
         nextLink: "https://graph.example.invalid/next-page-2",
       });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("--viva-discover acquires token with the Yammer scope", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-scope-"));
+    try {
+      const dbPath = path.join(dir, "lake.db");
+      const db = new Database(dbPath);
+      applyMigrations(db);
+      db.close();
+
+      const auth = makeAuth("tok-scope");
+      const viva = new FakeVivaClient({
+        steps: [{ kind: "listCommunitiesOk", response: { value: [] } }],
+      });
+
+      const config = makeConfig(dbPath);
+      await realViva(
+        config,
+        { action: "discover", account: "a@example.test" },
+        { auth, viva },
+      );
+
+      const tokenCall = auth.calls.find((c) => c.method === "getTokenSilent");
+      expect(tokenCall).toBeDefined();
+      expect(
+        (tokenCall as Extract<typeof tokenCall, { method: "getTokenSilent" }>)
+          ?.scopes,
+      ).toEqual([YAMMER_SCOPE]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -81,11 +81,11 @@ describe("MsalAuthClient", () => {
     expect(DEFAULT_AUTHORITY).toBe("https://login.microsoftonline.com/common");
   });
 
-  it("SCOPES contains Mail.Read, Chat.Read, and the Yammer user_impersonation scope, and no longer contains Community.Read.All", () => {
+  it("SCOPES contains only the two Graph scopes and does not include Yammer", () => {
     expect(YAMMER_SCOPE).toBe("https://api.yammer.com/user_impersonation");
     expect(SCOPES).toContain("Mail.Read");
     expect(SCOPES).toContain("Chat.Read");
-    expect(SCOPES).toContain(YAMMER_SCOPE);
+    expect(SCOPES).not.toContain(YAMMER_SCOPE);
     expect(SCOPES).not.toContain("Community.Read.All");
   });
 
@@ -118,7 +118,7 @@ describe("MsalAuthClient", () => {
     expect(await client.listAccounts()).toEqual([]);
   });
 
-  it("getTokenSilent without scopes override requests the default Mail.Read + Chat.Read + Yammer scopes", async () => {
+  it("getTokenSilent without scopes override uses only the two Graph scopes", async () => {
     const info = makeAccountInfo();
     const expires = new Date("2026-04-13T10:00:00Z");
     const pca = new FakePca({
@@ -138,11 +138,7 @@ describe("MsalAuthClient", () => {
     const token = await client.getTokenSilent(account);
     expect(token).toEqual({ token: "tok-123", expiresOn: expires, account });
     expect(pca.silentCalls).toHaveLength(1);
-    expect(pca.silentCalls[0]?.scopes).toEqual([
-      "Mail.Read",
-      "Chat.Read",
-      "https://api.yammer.com/user_impersonation",
-    ]);
+    expect(pca.silentCalls[0]?.scopes).toEqual(["Mail.Read", "Chat.Read"]);
     expect(pca.silentCalls[0]?.account.homeAccountId).toBe("home-1");
   });
 
@@ -206,7 +202,7 @@ describe("MsalAuthClient", () => {
     }
   });
 
-  it("loginWithDeviceCode requests Mail.Read + Chat.Read + Yammer user_impersonation scopes in one consent", async () => {
+  it("loginWithDeviceCode requests only Graph scopes (Mail.Read + Chat.Read) — no Yammer", async () => {
     const info = makeAccountInfo({ username: "new@x.invalid", homeAccountId: "h-new" });
     const pca = new FakePca({
       deviceCodeMessage: "go to https://microsoft.com/devicelogin and enter ABC123",
@@ -227,11 +223,7 @@ describe("MsalAuthClient", () => {
       homeAccountId: "h-new",
       tenantId: "tenant-1",
     });
-    expect(pca.deviceCodeCalls[0]?.scopes).toEqual([
-      "Mail.Read",
-      "Chat.Read",
-      "https://api.yammer.com/user_impersonation",
-    ]);
+    expect(pca.deviceCodeCalls[0]?.scopes).toEqual(["Mail.Read", "Chat.Read"]);
   });
 
   it("loginWithDeviceCode wraps MSAL failure as AuthError('device-code-failed')", async () => {

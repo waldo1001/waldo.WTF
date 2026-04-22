@@ -6,6 +6,7 @@ import { InMemoryMessageStore } from "../testing/in-memory-message-store.js";
 import { InMemoryVivaSubscriptionStore } from "../testing/in-memory-viva-subscription-store.js";
 import { FakeClock } from "../testing/fake-clock.js";
 import type { Account, AccessToken } from "../auth/types.js";
+import { YAMMER_SCOPE } from "../auth/msal-auth-client.js";
 import {
   GraphRateLimitedError,
   TokenExpiredError,
@@ -559,5 +560,27 @@ describe("syncViva", () => {
       c.method === "upsertMessages" ? c.messages : [],
     );
     expect(upserted[0]?.threadName?.length).toBe(200);
+  });
+
+  it("syncViva acquires token with YAMMER_SCOPE so the Viva API call uses the correct audience", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryVivaSubscriptionStore();
+    await seedSub(subs);
+    const clock = new FakeClock(new Date("2026-04-22T10:00:00Z"));
+    const viva = new FakeVivaClient({
+      steps: [
+        { kind: "listThreadsOk", response: threadsPage([]) },
+      ],
+    });
+    const auth = authWithToken();
+
+    await syncViva({ account, auth, viva, store, subs, clock });
+
+    const tokenCall = auth.calls.find((c) => c.method === "getTokenSilent");
+    expect(tokenCall).toBeDefined();
+    expect(
+      (tokenCall as Extract<typeof tokenCall, { method: "getTokenSilent" }>)
+        ?.scopes,
+    ).toEqual([YAMMER_SCOPE]);
   });
 });

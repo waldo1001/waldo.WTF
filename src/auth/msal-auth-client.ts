@@ -9,7 +9,7 @@ import { TokenCacheStore } from "./token-cache-store.js";
 
 export const DEFAULT_AUTHORITY = "https://login.microsoftonline.com/common";
 export const YAMMER_SCOPE = "https://api.yammer.com/user_impersonation";
-export const SCOPES = ["Mail.Read", "Chat.Read", YAMMER_SCOPE] as const;
+export const SCOPES = ["Mail.Read", "Chat.Read"] as const;
 
 interface MsalAccountInfo {
   readonly username: string;

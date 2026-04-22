@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { config as loadDotenv } from "dotenv";
 import { loadConfig, type Config } from "./config.js";
-import { MsalAuthClient } from "./auth/msal-auth-client.js";
+import { MsalAuthClient, YAMMER_SCOPE } from "./auth/msal-auth-client.js";
 import { TokenCacheStore } from "./auth/token-cache-store.js";
 import type { AuthClient } from "./auth/auth-client.js";
 import type { Account } from "./auth/types.js";
@@ -624,7 +624,7 @@ async function discoverForAccount(
 ): Promise<{ readonly communities: readonly VivaCommunity[] }> {
   const auth = deps.auth ?? (await buildDefaultVivaAuth(config));
   const account = await resolveVivaAccount(auth, accountUsername);
-  const accessToken = await auth.getTokenSilent(account);
+  const accessToken = await auth.getTokenSilent(account, { scopes: [YAMMER_SCOPE] });
   const viva = deps.viva ?? (await buildDefaultVivaClient());
   const communities = await discoverAllCommunities(viva, accessToken.token);
   return { communities };
