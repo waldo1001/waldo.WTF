@@ -14,7 +14,8 @@ import type {
   SteeringRuleType,
   VivaSubscription,
 } from "./store/types.js";
-import type { VivaCommunity } from "./sources/viva.js";
+import type { VivaClient, VivaCommunity } from "./sources/viva.js";
+import type { VivaSubscriptionStore } from "./store/viva-subscription-store.js";
 
 export type Env = Readonly<Record<string, string | undefined>>;
 export type PrintFn = (message: string) => void;
@@ -112,9 +113,16 @@ export type VivaCliResult =
   | { readonly action: "subscribe"; readonly sub: VivaSubscription }
   | { readonly action: "unsubscribe"; readonly removed: boolean };
 
+export interface VivaDeps {
+  readonly auth?: AuthClient;
+  readonly viva?: VivaClient;
+  readonly store?: VivaSubscriptionStore;
+}
+
 export type VivaImpl = (
   config: Config,
   command: VivaCommand,
+  deps?: VivaDeps,
 ) => Promise<VivaCliResult>;
 
 export interface RunCliOptions extends AddAccountOptions {
@@ -564,38 +572,138 @@ async function realBackfill(dbPath: string): Promise<BackfillCliResult> {
   }
 }
 
-async function realViva(
+async function buildDefaultVivaAuth(config: Config): Promise<AuthClient> {
+  const cacheStore = new TokenCacheStore({
+    fs: nodeFileSystem,
+    path: path.join(config.authDir, "token-cache.json"),
+  });
+  return new MsalAuthClient({
+    clientId: config.msClientId,
+    tokenCacheStore: cacheStore,
+  });
+}
+
+async function buildDefaultVivaClient(): Promise<VivaClient> {
+  const { HttpVivaClient } = await import("./sources/http-viva-client.js");
+  return new HttpVivaClient({ fetch: globalThis.fetch.bind(globalThis) });
+}
+
+async function resolveVivaAccount(
+  auth: AuthClient,
+  username: string,
+): Promise<Account> {
+  const accounts = await auth.listAccounts();
+  const target = username.toLowerCase();
+  const found = accounts.find((a) => a.username.toLowerCase() === target);
+  if (!found) {
+    throw new CliUsageError(
+      `unknown account: ${username} — run --add-account first, or check --account spelling`,
+    );
+  }
+  return found;
+}
+
+async function discoverAllCommunities(
+  viva: VivaClient,
+  token: string,
+): Promise<readonly VivaCommunity[]> {
+  const all: VivaCommunity[] = [];
+  let nextLink: string | undefined;
+  do {
+    const page = await viva.listCommunities(token, nextLink);
+    all.push(...page.value);
+    nextLink = page["@odata.nextLink"];
+  } while (nextLink !== undefined);
+  return all;
+}
+
+async function discoverForAccount(
+  config: Config,
+  deps: VivaDeps,
+  accountUsername: string,
+): Promise<{ readonly communities: readonly VivaCommunity[] }> {
+  const auth = deps.auth ?? (await buildDefaultVivaAuth(config));
+  const account = await resolveVivaAccount(auth, accountUsername);
+  const accessToken = await auth.getTokenSilent(account);
+  const viva = deps.viva ?? (await buildDefaultVivaClient());
+  const communities = await discoverAllCommunities(viva, accessToken.token);
+  return { communities };
+}
+
+export async function realViva(
   config: Config,
   command: VivaCommand,
+  deps: VivaDeps = {},
 ): Promise<VivaCliResult> {
-  const { default: Database } = await import("better-sqlite3");
-  const { SqliteVivaSubscriptionStore } = await import(
-    "./store/viva-subscription-store.js"
-  );
-  const db = new Database(config.dbPath);
-  try {
+  const needsStore =
+    command.action === "list" ||
+    command.action === "unsubscribe" ||
+    command.action === "subscribe";
+
+  let db: import("better-sqlite3").Database | null = null;
+  let store: VivaSubscriptionStore | null = deps.store ?? null;
+
+  if (needsStore && store === null) {
+    const { default: Database } = await import("better-sqlite3");
+    const { SqliteVivaSubscriptionStore } = await import(
+      "./store/viva-subscription-store.js"
+    );
+    db = new Database(config.dbPath);
     db.pragma("journal_mode = WAL");
-    const store = new SqliteVivaSubscriptionStore(db);
+    store = new SqliteVivaSubscriptionStore(db);
+  }
+
+  try {
     switch (command.action) {
       case "list": {
-        const subs = await store.listForAccount(command.account);
+        const subs = await store!.listForAccount(command.account);
         return { action: "list", subs };
       }
       case "unsubscribe": {
-        const r = await store.unsubscribe(command.account, command.communityId);
+        const r = await store!.unsubscribe(
+          command.account,
+          command.communityId,
+        );
         return { action: "unsubscribe", removed: r.removed };
       }
-      case "subscribe":
-      case "discover":
-        // Discover + subscribe-validation require a live VivaClient; they go
-        // through the injected vivaImpl in tests, and through main() in
-        // production once Slice 5 wires the Graph adapter.
-        throw new Error(
-          `viva ${command.action} requires VivaClient — not available in CLI default impl yet`,
+      case "discover": {
+        const { communities } = await discoverForAccount(
+          config,
+          deps,
+          command.account,
         );
+        return { action: "discover", communities };
+      }
+      case "subscribe": {
+        const { communities } = await discoverForAccount(
+          config,
+          deps,
+          command.account,
+        );
+        const match = communities.find(
+          (c) => c.id.toLowerCase() === command.communityId.toLowerCase(),
+        );
+        if (!match) {
+          throw new CliUsageError(
+            `unknown community: ${command.communityId} — run --viva-discover --account ${command.account} to list available communities`,
+          );
+        }
+        const sub = await store!.subscribe({
+          account: command.account,
+          networkId: match.networkId,
+          communityId: match.id,
+          ...(match.networkName !== undefined && {
+            networkName: match.networkName,
+          }),
+          ...(match.displayName !== undefined && {
+            communityName: match.displayName,
+          }),
+        });
+        return { action: "subscribe", sub };
+      }
     }
   } finally {
-    db.close();
+    if (db !== null) db.close();
   }
 }
 

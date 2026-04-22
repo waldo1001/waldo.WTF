@@ -209,7 +209,14 @@ opted into. The CLI lives next to the existing `--steer-*` family.
 # List Viva subscriptions for an account
 npm run dev -- --account eric.wauters@dynex.be --viva-list
 
-# Subscribe to a community (you supply the Graph community id)
+# Discover: enumerate every community the account can see.
+# Hits Graph directly and paginates across @odata.nextLink.
+npm run dev -- --account eric.wauters@dynex.be --viva-discover
+
+# Subscribe: pick an id from --viva-discover. The CLI re-queries Graph
+# to capture the (networkId, networkName, displayName) so re-syncs don't
+# have to rediscover the network. Unknown ids fail fast with a pointer
+# back to --viva-discover.
 npm run dev -- --account eric.wauters@dynex.be \
   --viva-subscribe 00000000-0000-0000-0000-000000000001
 

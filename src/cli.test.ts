@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import Database from "better-sqlite3";
-import { runCli, addAccount, CliUsageError } from "./cli.js";
+import { runCli, addAccount, CliUsageError, realViva } from "./cli.js";
 import type {
   SteerCommand,
   SteerCliResult,
@@ -11,10 +11,15 @@ import type {
   VivaCommand,
   VivaCliResult,
   VivaImpl,
+  VivaDeps,
 } from "./cli.js";
 import type { VivaSubscription } from "./store/types.js";
+import type { Config } from "./config.js";
 import { ConfigError } from "./config.js";
 import { FakeAuthClient } from "./testing/fake-auth-client.js";
+import { FakeVivaClient } from "./testing/fake-viva-client.js";
+import { SqliteVivaSubscriptionStore } from "./store/viva-subscription-store.js";
+import { applyMigrations } from "./store/schema.js";
 import { AuthError, type Account } from "./auth/types.js";
 import { SqliteSteeringStore } from "./store/steering-store.js";
 import type { AddSteeringRuleInput, SteeringRule } from "./store/types.js";
@@ -971,5 +976,255 @@ describe("addAccount", () => {
       print: (m) => prints.push(m),
     });
     expect(prints).toEqual(["enter code XYZ"]);
+  });
+});
+
+describe("realViva (default Viva impl wired in cli.ts)", () => {
+  function makeConfig(dbPath: string): Config {
+    return {
+      msClientId: "client-xyz",
+      bearerToken: "bearer-abc",
+      dbPath,
+      authDir: path.dirname(dbPath),
+      port: 18765,
+      syncIntervalMs: 30_000,
+      bindHost: "127.0.0.1",
+      whatsappDownloadsPath: path.join(path.dirname(dbPath), "wa"),
+      whatsappArchivePath: path.join(path.dirname(dbPath), "wa-archive"),
+      whatsappAccount: "whatsapp@example.invalid",
+      whatsappWatch: false,
+    };
+  }
+
+  const VIVA_ACCOUNT: Account = {
+    username: "a@example.test",
+    homeAccountId: "home-a",
+    tenantId: "tenant-a",
+  };
+
+  function makeAuth(token = "access-token-xyz"): FakeAuthClient {
+    return new FakeAuthClient({
+      accounts: [VIVA_ACCOUNT],
+      tokens: new Map([
+        [
+          VIVA_ACCOUNT.homeAccountId,
+          {
+            token,
+            expiresOn: new Date("2099-01-01T00:00:00Z"),
+            account: VIVA_ACCOUNT,
+          },
+        ],
+      ]),
+    });
+  }
+
+  it("realViva --viva-discover paginates listCommunities across @odata.nextLink pages", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-"));
+    try {
+      const dbPath = path.join(dir, "lake.db");
+      const db = new Database(dbPath);
+      applyMigrations(db);
+      db.close();
+
+      const auth = makeAuth("tok-123");
+      const viva = new FakeVivaClient({
+        steps: [
+          {
+            kind: "listCommunitiesOk",
+            response: {
+              value: [
+                {
+                  id: "com-1",
+                  displayName: "Alpha",
+                  networkId: "net-1",
+                  networkName: "Acme",
+                },
+                {
+                  id: "com-2",
+                  displayName: "Beta",
+                  networkId: "net-1",
+                  networkName: "Acme",
+                },
+              ],
+              "@odata.nextLink": "https://graph.example.invalid/next-page-2",
+            },
+          },
+          {
+            kind: "listCommunitiesOk",
+            response: {
+              value: [
+                {
+                  id: "com-3",
+                  displayName: "Gamma",
+                  networkId: "net-1",
+                  networkName: "Acme",
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+      const config = makeConfig(dbPath);
+      const deps: VivaDeps = { auth, viva };
+      const result = await realViva(
+        config,
+        { action: "discover", account: "a@example.test" },
+        deps,
+      );
+
+      expect(result.action).toBe("discover");
+      const communities =
+        (result as Extract<VivaCliResult, { action: "discover" }>).communities;
+      expect(communities.map((c) => c.id)).toEqual(["com-1", "com-2", "com-3"]);
+
+      const calls = viva.calls.filter((c) => c.method === "listCommunities");
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toMatchObject({ token: "tok-123" });
+      expect(calls[0]!.nextLink).toBeUndefined();
+      expect(calls[1]).toMatchObject({
+        token: "tok-123",
+        nextLink: "https://graph.example.invalid/next-page-2",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("realViva --viva-subscribe inserts a row carrying networkId + names from discover", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-"));
+    try {
+      const dbPath = path.join(dir, "lake.db");
+      const db = new Database(dbPath);
+      applyMigrations(db);
+      const store = new SqliteVivaSubscriptionStore(db);
+
+      const auth = makeAuth("tok-sub");
+      const viva = new FakeVivaClient({
+        steps: [
+          {
+            kind: "listCommunitiesOk",
+            response: {
+              value: [
+                {
+                  id: "COM-7",
+                  displayName: "Sales",
+                  networkId: "net-42",
+                  networkName: "Acme Corp",
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+      const config = makeConfig(dbPath);
+      const result = await realViva(
+        config,
+        {
+          action: "subscribe",
+          account: "a@example.test",
+          communityId: "COM-7",
+        },
+        { auth, viva, store },
+      );
+
+      expect(result.action).toBe("subscribe");
+      const sub = (result as Extract<VivaCliResult, { action: "subscribe" }>)
+        .sub;
+      expect(sub).toMatchObject({
+        account: "a@example.test",
+        networkId: "net-42",
+        networkName: "Acme Corp",
+        communityId: "COM-7",
+        communityName: "Sales",
+        enabled: true,
+      });
+
+      const rows = await store.listForAccount("a@example.test");
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        communityId: "COM-7",
+        networkId: "net-42",
+        communityName: "Sales",
+      });
+
+      db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("realViva --viva-subscribe throws CliUsageError when communityId is not in the discover response", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-"));
+    try {
+      const dbPath = path.join(dir, "lake.db");
+      const db = new Database(dbPath);
+      applyMigrations(db);
+      const store = new SqliteVivaSubscriptionStore(db);
+
+      const auth = makeAuth();
+      const viva = new FakeVivaClient({
+        steps: [
+          {
+            kind: "listCommunitiesOk",
+            response: {
+              value: [
+                {
+                  id: "com-real",
+                  displayName: "Real",
+                  networkId: "net-1",
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+      const config = makeConfig(dbPath);
+      await expect(
+        realViva(
+          config,
+          {
+            action: "subscribe",
+            account: "a@example.test",
+            communityId: "com-bogus",
+          },
+          { auth, viva, store },
+        ),
+      ).rejects.toBeInstanceOf(CliUsageError);
+
+      expect(await store.listForAccount("a@example.test")).toEqual([]);
+      db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("realViva throws CliUsageError with an add-account hint when --account is not logged in", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-"));
+    try {
+      const dbPath = path.join(dir, "lake.db");
+      const db = new Database(dbPath);
+      applyMigrations(db);
+      const store = new SqliteVivaSubscriptionStore(db);
+      db.close();
+
+      const auth = new FakeAuthClient({ accounts: [] });
+      const viva = new FakeVivaClient({ steps: [] });
+      const config = makeConfig(dbPath);
+
+      const err = await realViva(
+        config,
+        { action: "discover", account: "ghost@example.test" },
+        { auth, viva, store },
+      ).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(CliUsageError);
+      expect((err as Error).message).toMatch(/ghost@example\.test/);
+      expect((err as Error).message).toMatch(/--add-account/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
