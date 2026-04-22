@@ -48,6 +48,25 @@ describe("FakeAuthClient", () => {
     await expect(client.getTokenSilent(alice)).rejects.toBe(boom);
   });
 
+  it("getTokenSilent records the scopes override when supplied", async () => {
+    const client = new FakeAuthClient({
+      accounts: [alice],
+      tokens: new Map([[alice.homeAccountId, tokenFor(alice)]]),
+    });
+    await client.getTokenSilent(alice, {
+      scopes: ["https://api.yammer.com/user_impersonation"],
+    });
+    await client.getTokenSilent(alice);
+    expect(client.calls).toEqual([
+      {
+        method: "getTokenSilent",
+        account: alice,
+        scopes: ["https://api.yammer.com/user_impersonation"],
+      },
+      { method: "getTokenSilent", account: alice },
+    ]);
+  });
+
   it("getTokenSilent throws AuthError(silent-failed) for an unscripted account", async () => {
     const client = new FakeAuthClient({ accounts: [] });
     await expect(client.getTokenSilent(alice)).rejects.toBeInstanceOf(

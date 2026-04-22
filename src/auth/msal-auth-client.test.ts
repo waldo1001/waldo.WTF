@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
-import { MsalAuthClient, DEFAULT_AUTHORITY, SCOPES } from "./msal-auth-client.js";
+import {
+  MsalAuthClient,
+  DEFAULT_AUTHORITY,
+  SCOPES,
+  YAMMER_SCOPE,
+} from "./msal-auth-client.js";
 import { AuthError, type Account } from "./types.js";
 import { TokenCacheStore } from "./token-cache-store.js";
 import { InMemoryFileSystem } from "../testing/in-memory-file-system.js";
@@ -76,10 +81,12 @@ describe("MsalAuthClient", () => {
     expect(DEFAULT_AUTHORITY).toBe("https://login.microsoftonline.com/common");
   });
 
-  it("SCOPES includes Mail.Read, Chat.Read, and Community.Read.All", () => {
+  it("SCOPES contains Mail.Read, Chat.Read, and the Yammer user_impersonation scope, and no longer contains Community.Read.All", () => {
+    expect(YAMMER_SCOPE).toBe("https://api.yammer.com/user_impersonation");
     expect(SCOPES).toContain("Mail.Read");
     expect(SCOPES).toContain("Chat.Read");
-    expect(SCOPES).toContain("Community.Read.All");
+    expect(SCOPES).toContain(YAMMER_SCOPE);
+    expect(SCOPES).not.toContain("Community.Read.All");
   });
 
   it("listAccounts maps MSAL AccountInfo[] to Account[] preserving order", async () => {
@@ -111,7 +118,7 @@ describe("MsalAuthClient", () => {
     expect(await client.listAccounts()).toEqual([]);
   });
 
-  it("getTokenSilent requests Mail.Read + Chat.Read + Community.Read.All scopes and returns AccessToken", async () => {
+  it("getTokenSilent without scopes override requests the default Mail.Read + Chat.Read + Yammer scopes", async () => {
     const info = makeAccountInfo();
     const expires = new Date("2026-04-13T10:00:00Z");
     const pca = new FakePca({
@@ -134,9 +141,31 @@ describe("MsalAuthClient", () => {
     expect(pca.silentCalls[0]?.scopes).toEqual([
       "Mail.Read",
       "Chat.Read",
-      "Community.Read.All",
+      "https://api.yammer.com/user_impersonation",
     ]);
     expect(pca.silentCalls[0]?.account.homeAccountId).toBe("home-1");
+  });
+
+  it("getTokenSilent with scopes override forwards those scopes verbatim to MSAL acquireTokenSilent", async () => {
+    const info = makeAccountInfo();
+    const expires = new Date("2026-04-22T10:00:00Z");
+    const pca = new FakePca({
+      silentResult: { accessToken: "tok-ym", expiresOn: expires, account: info },
+    });
+    const client = new MsalAuthClient({
+      clientId: "cid",
+      cacheStore: makeCacheStore(),
+      pca: pca as unknown as never,
+    });
+    const account: Account = makeAccountInfo();
+    const token = await client.getTokenSilent(account, {
+      scopes: ["https://api.yammer.com/user_impersonation"],
+    });
+    expect(token.token).toBe("tok-ym");
+    expect(pca.silentCalls).toHaveLength(1);
+    expect(pca.silentCalls[0]?.scopes).toEqual([
+      "https://api.yammer.com/user_impersonation",
+    ]);
   });
 
   it("getTokenSilent falls back to epoch when MSAL returns null expiresOn", async () => {
@@ -177,7 +206,7 @@ describe("MsalAuthClient", () => {
     }
   });
 
-  it("loginWithDeviceCode requests Mail.Read + Chat.Read + Community.Read.All scopes via device code flow", async () => {
+  it("loginWithDeviceCode requests Mail.Read + Chat.Read + Yammer user_impersonation scopes in one consent", async () => {
     const info = makeAccountInfo({ username: "new@x.invalid", homeAccountId: "h-new" });
     const pca = new FakePca({
       deviceCodeMessage: "go to https://microsoft.com/devicelogin and enter ABC123",
@@ -201,7 +230,7 @@ describe("MsalAuthClient", () => {
     expect(pca.deviceCodeCalls[0]?.scopes).toEqual([
       "Mail.Read",
       "Chat.Read",
-      "Community.Read.All",
+      "https://api.yammer.com/user_impersonation",
     ]);
   });
 

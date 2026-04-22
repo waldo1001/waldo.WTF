@@ -1,8 +1,15 @@
 import type { AccessToken, Account } from "./types.js";
 
+export interface GetTokenOptions {
+  readonly scopes?: readonly string[];
+}
+
 export interface AuthClient {
   listAccounts(): Promise<readonly Account[]>;
-  getTokenSilent(account: Account): Promise<AccessToken>;
+  getTokenSilent(
+    account: Account,
+    options?: GetTokenOptions,
+  ): Promise<AccessToken>;
   loginWithDeviceCode(
     onPrompt: (message: string) => void,
   ): Promise<Account>;

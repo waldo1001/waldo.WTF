@@ -3,12 +3,13 @@ import {
   type AuthenticationResult,
   type AccountInfo as MsalAccountInfoReal,
 } from "@azure/msal-node";
-import type { AuthClient } from "./auth-client.js";
+import type { AuthClient, GetTokenOptions } from "./auth-client.js";
 import { AuthError, type AccessToken, type Account } from "./types.js";
 import { TokenCacheStore } from "./token-cache-store.js";
 
 export const DEFAULT_AUTHORITY = "https://login.microsoftonline.com/common";
-export const SCOPES = ["Mail.Read", "Chat.Read", "Community.Read.All"] as const;
+export const YAMMER_SCOPE = "https://api.yammer.com/user_impersonation";
+export const SCOPES = ["Mail.Read", "Chat.Read", YAMMER_SCOPE] as const;
 
 interface MsalAccountInfo {
   readonly username: string;
@@ -114,7 +115,10 @@ export class MsalAuthClient implements AuthClient {
     return infos.map(toAccount);
   }
 
-  async getTokenSilent(account: Account): Promise<AccessToken> {
+  async getTokenSilent(
+    account: Account,
+    options?: GetTokenOptions,
+  ): Promise<AccessToken> {
     try {
       const res = await this.pca.acquireTokenSilent({
         account: {
@@ -122,7 +126,7 @@ export class MsalAuthClient implements AuthClient {
           homeAccountId: account.homeAccountId,
           tenantId: account.tenantId,
         },
-        scopes: SCOPES,
+        scopes: options?.scopes ?? SCOPES,
       });
       return {
         token: res.accessToken,

@@ -1,9 +1,13 @@
-import type { AuthClient } from "../auth/auth-client.js";
+import type { AuthClient, GetTokenOptions } from "../auth/auth-client.js";
 import { AuthError, type AccessToken, type Account } from "../auth/types.js";
 
 export type FakeAuthClientCall =
   | { method: "listAccounts" }
-  | { method: "getTokenSilent"; account: Account }
+  | {
+      method: "getTokenSilent";
+      account: Account;
+      scopes?: readonly string[];
+    }
   | { method: "loginWithDeviceCode" };
 
 export interface FakeAuthClientOptions {
@@ -23,8 +27,15 @@ export class FakeAuthClient implements AuthClient {
     return this.opts.accounts;
   }
 
-  async getTokenSilent(account: Account): Promise<AccessToken> {
-    this.calls.push({ method: "getTokenSilent", account });
+  async getTokenSilent(
+    account: Account,
+    options?: GetTokenOptions,
+  ): Promise<AccessToken> {
+    const call: FakeAuthClientCall =
+      options?.scopes !== undefined
+        ? { method: "getTokenSilent", account, scopes: options.scopes }
+        : { method: "getTokenSilent", account };
+    this.calls.push(call);
     const scripted = this.opts.tokens?.get(account.homeAccountId);
     if (scripted === undefined) {
       throw new AuthError(
