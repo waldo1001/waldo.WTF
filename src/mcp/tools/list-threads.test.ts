@@ -28,6 +28,7 @@ describe("LIST_THREADS_TOOL descriptor", () => {
       "outlook",
       "teams",
       "whatsapp",
+      "viva-engage",
     ]);
   });
 

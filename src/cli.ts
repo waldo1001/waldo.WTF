@@ -12,7 +12,9 @@ import type {
   MessageSource,
   SteeringRule,
   SteeringRuleType,
+  VivaSubscription,
 } from "./store/types.js";
+import type { VivaCommunity } from "./sources/viva.js";
 
 export type Env = Readonly<Record<string, string | undefined>>;
 export type PrintFn = (message: string) => void;
@@ -84,12 +86,44 @@ export type SteerImpl = (
   command: SteerCommand,
 ) => Promise<SteerCliResult>;
 
+export type VivaCommand =
+  | { readonly action: "list"; readonly account: string }
+  | { readonly action: "discover"; readonly account: string }
+  | {
+      readonly action: "subscribe";
+      readonly account: string;
+      readonly communityId: string;
+    }
+  | {
+      readonly action: "unsubscribe";
+      readonly account: string;
+      readonly communityId: string;
+    };
+
+export type VivaCliResult =
+  | {
+      readonly action: "list";
+      readonly subs: readonly VivaSubscription[];
+    }
+  | {
+      readonly action: "discover";
+      readonly communities: readonly VivaCommunity[];
+    }
+  | { readonly action: "subscribe"; readonly sub: VivaSubscription }
+  | { readonly action: "unsubscribe"; readonly removed: boolean };
+
+export type VivaImpl = (
+  config: Config,
+  command: VivaCommand,
+) => Promise<VivaCliResult>;
+
 export interface RunCliOptions extends AddAccountOptions {
   readonly mainImpl?: (opts: MainOptions) => Promise<MainResult>;
   readonly backfillImpl?: (dbPath: string) => Promise<BackfillCliResult>;
   readonly importWhatsAppImpl?: ImportWhatsAppImpl;
   readonly steerImpl?: SteerImpl;
   readonly rethreadWhatsAppImpl?: RethreadWhatsAppImpl;
+  readonly vivaImpl?: VivaImpl;
 }
 
 export type RunCliResult =
@@ -108,6 +142,7 @@ export type RunCliResult =
       readonly imported: number;
     }
   | { readonly mode: "steer"; readonly result: SteerCliResult }
+  | { readonly mode: "viva"; readonly result: VivaCliResult }
   | { readonly mode: "server"; readonly main: MainResult };
 
 const BOOLEAN_FLAGS = new Set([
@@ -117,6 +152,13 @@ const BOOLEAN_FLAGS = new Set([
   "--rethread-whatsapp",
   "--dry-run",
   "--steer-list",
+  "--viva-list",
+  "--viva-discover",
+]);
+
+const VIVA_VALUE_FLAGS = new Set([
+  "--viva-subscribe",
+  "--viva-unsubscribe",
 ]);
 
 const STEER_TOGGLE_ACTIONS: Readonly<
@@ -147,7 +189,12 @@ const STEER_MODIFIER_FLAGS = new Set([
   "--account",
 ]);
 
-const KNOWN_SOURCES = new Set<MessageSource>(["outlook", "teams", "whatsapp"]);
+const KNOWN_SOURCES = new Set<MessageSource>([
+  "outlook",
+  "teams",
+  "whatsapp",
+  "viva-engage",
+]);
 
 function parseArgv(argv: readonly string[]): {
   readonly boolean: Set<string>;
@@ -166,7 +213,8 @@ function parseArgv(argv: readonly string[]): {
     if (
       Object.prototype.hasOwnProperty.call(STEER_ADD_FLAGS, a) ||
       STEER_TOGGLE_FLAGS.has(a) ||
-      STEER_MODIFIER_FLAGS.has(a)
+      STEER_MODIFIER_FLAGS.has(a) ||
+      VIVA_VALUE_FLAGS.has(a)
     ) {
       const v = argv[i + 1];
       if (v === undefined) {
@@ -180,7 +228,7 @@ function parseArgv(argv: readonly string[]): {
       continue;
     }
     throw new CliUsageError(
-      `Unknown flag: ${a}. Usage: waldo-wtf [--add-account | --backfill-bodies | --import-whatsapp | --steer-*]`,
+      `Unknown flag: ${a}. Usage: waldo-wtf [--add-account | --backfill-bodies | --import-whatsapp | --steer-* | --viva-*]`,
     );
   }
   return { boolean, values };
@@ -331,6 +379,92 @@ function printRuleList(
   }
 }
 
+function resolveVivaCommand(parsed: {
+  readonly boolean: Set<string>;
+  readonly values: Map<string, string>;
+}): VivaCommand | null {
+  const list = parsed.boolean.has("--viva-list");
+  const discover = parsed.boolean.has("--viva-discover");
+  const subscribe = parsed.values.get("--viva-subscribe");
+  const unsubscribe = parsed.values.get("--viva-unsubscribe");
+
+  const activeCount =
+    (list ? 1 : 0) +
+    (discover ? 1 : 0) +
+    (subscribe !== undefined ? 1 : 0) +
+    (unsubscribe !== undefined ? 1 : 0);
+  if (activeCount === 0) return null;
+  if (activeCount > 1) {
+    throw new CliUsageError(
+      "only one --viva-* command may be given per invocation",
+    );
+  }
+
+  const account = parsed.values.get("--account");
+  if (account === undefined || account.trim() === "") {
+    throw new CliUsageError("--viva-* commands require --account <username>");
+  }
+
+  if (list) return { action: "list", account };
+  if (discover) return { action: "discover", account };
+  if (subscribe !== undefined) {
+    if (subscribe.trim() === "") {
+      throw new CliUsageError("--viva-subscribe pattern must not be empty");
+    }
+    return { action: "subscribe", account, communityId: subscribe };
+  }
+  /* c8 ignore next 4 -- unsubscribe is the only remaining branch */
+  if (unsubscribe === undefined) return null;
+  if (unsubscribe.trim() === "") {
+    throw new CliUsageError("--viva-unsubscribe pattern must not be empty");
+  }
+  return { action: "unsubscribe", account, communityId: unsubscribe };
+}
+
+function reportVivaResult(result: VivaCliResult, print: PrintFn): void {
+  switch (result.action) {
+    case "list":
+      if (result.subs.length === 0) {
+        print("no viva subscriptions");
+        return;
+      }
+      print(["community_id", "network_id", "name", "enabled"].join("\t"));
+      for (const s of result.subs) {
+        print(
+          [
+            s.communityId,
+            s.networkId,
+            s.communityName ?? "-",
+            s.enabled ? "yes" : "no",
+          ].join("\t"),
+        );
+      }
+      return;
+    case "discover":
+      if (result.communities.length === 0) {
+        print("no viva communities visible to this account");
+        return;
+      }
+      print(["community_id", "network_id", "display_name"].join("\t"));
+      for (const c of result.communities) {
+        print([c.id, c.networkId, c.displayName].join("\t"));
+      }
+      return;
+    case "subscribe":
+      print(
+        `subscribed to viva community ${result.sub.communityId} (network=${result.sub.networkId})`,
+      );
+      return;
+    case "unsubscribe":
+      print(
+        result.removed
+          ? "unsubscribed 1 community"
+          : "no subscription removed",
+      );
+      return;
+  }
+}
+
 function resolveEnv(opts: AddAccountOptions): Env {
   /* c8 ignore next -- dotenv side-effect, loaded only in production */
   if (opts.loadDotenv !== false && !opts.env) loadDotenv();
@@ -430,6 +564,41 @@ async function realBackfill(dbPath: string): Promise<BackfillCliResult> {
   }
 }
 
+async function realViva(
+  config: Config,
+  command: VivaCommand,
+): Promise<VivaCliResult> {
+  const { default: Database } = await import("better-sqlite3");
+  const { SqliteVivaSubscriptionStore } = await import(
+    "./store/viva-subscription-store.js"
+  );
+  const db = new Database(config.dbPath);
+  try {
+    db.pragma("journal_mode = WAL");
+    const store = new SqliteVivaSubscriptionStore(db);
+    switch (command.action) {
+      case "list": {
+        const subs = await store.listForAccount(command.account);
+        return { action: "list", subs };
+      }
+      case "unsubscribe": {
+        const r = await store.unsubscribe(command.account, command.communityId);
+        return { action: "unsubscribe", removed: r.removed };
+      }
+      case "subscribe":
+      case "discover":
+        // Discover + subscribe-validation require a live VivaClient; they go
+        // through the injected vivaImpl in tests, and through main() in
+        // production once Slice 5 wires the Graph adapter.
+        throw new Error(
+          `viva ${command.action} requires VivaClient — not available in CLI default impl yet`,
+        );
+    }
+  } finally {
+    db.close();
+  }
+}
+
 async function realSteer(
   config: Config,
   command: SteerCommand,
@@ -510,6 +679,19 @@ export async function runCli(
     const result = await impl(config, steerCmd);
     reportSteerResult(result, print);
     return { mode: "steer", result };
+  }
+
+  const vivaCmd = resolveVivaCommand(parsed);
+  if (vivaCmd !== null) {
+    const env = resolveEnv(opts);
+    const config = loadConfig(env);
+    /* c8 ignore next -- default console.log only in production */
+    const print: PrintFn = opts.print ?? ((m) => console.log(m));
+    /* c8 ignore next -- realViva only constructed outside tests */
+    const impl = opts.vivaImpl ?? realViva;
+    const result = await impl(config, vivaCmd);
+    reportVivaResult(result, print);
+    return { mode: "viva", result };
   }
 
   if (parsed.boolean.has("--import-whatsapp")) {

@@ -8,8 +8,11 @@ import {
 import { FakeAuthClient } from "../testing/fake-auth-client.js";
 import { FakeGraphClient } from "../testing/fake-graph-client.js";
 import { FakeTeamsClient } from "../testing/fake-teams-client.js";
+import { FakeVivaClient } from "../testing/fake-viva-client.js";
 import { InMemoryMessageStore } from "../testing/in-memory-message-store.js";
+import { InMemoryVivaSubscriptionStore } from "../testing/in-memory-viva-subscription-store.js";
 import { FakeClock } from "../testing/fake-clock.js";
+import { GraphRateLimitedError, TokenExpiredError } from "../sources/viva.js";
 import type { Account, AccessToken } from "../auth/types.js";
 import type { GraphDeltaResponse } from "../sources/graph.js";
 
@@ -548,6 +551,246 @@ describe("SyncScheduler", () => {
       chatId: "chat-1",
       sinceIso: expectedIso,
     });
+  });
+
+  it("with viva dep but no enabled subs: skips viva entirely (no calls, no row)", async () => {
+    const a1 = acc("alice");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
+    });
+    const viva = new FakeVivaClient({ steps: [] });
+    const vivaSubs = new InMemoryVivaSubscriptionStore();
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      viva,
+      vivaSubs,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+
+    expect(viva.calls).toHaveLength(0);
+    expect(store.syncLog).toHaveLength(2);
+    expect(store.syncLog.every((e) => e.source === "outlook")).toBe(true);
+  });
+
+  it("with viva dep + enabled sub: viva-engage row is appended", async () => {
+    const a1 = acc("alice");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
+    });
+    const viva = new FakeVivaClient({
+      steps: [
+        { kind: "listThreadsOk", response: { value: [] } },
+      ],
+    });
+    const vivaSubs = new InMemoryVivaSubscriptionStore();
+    await vivaSubs.subscribe({
+      account: a1.username,
+      networkId: "net-1",
+      communityId: "com-1",
+    });
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      viva,
+      vivaSubs,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+
+    expect(store.syncLog).toHaveLength(3);
+    const vivaRow = store.syncLog.find((e) => e.source === "viva-engage");
+    expect(vivaRow?.status).toBe("ok");
+    expect(viva.calls.some((c) => c.method === "listThreads")).toBe(true);
+  });
+
+  it("per-community viva error is swallowed: viva-engage row is still ok (isolation)", async () => {
+    const a1 = acc("alice");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
+    });
+    const viva = new FakeVivaClient({
+      steps: [{ kind: "error", error: new Error("viva-boom") }],
+    });
+    const vivaSubs = new InMemoryVivaSubscriptionStore();
+    await vivaSubs.subscribe({
+      account: a1.username,
+      networkId: "net-1",
+      communityId: "com-1",
+    });
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      viva,
+      vivaSubs,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+
+    expect(store.syncLog).toHaveLength(3);
+    const outlookRows = store.syncLog.filter((e) => e.source === "outlook");
+    const vivaRow = store.syncLog.find((e) => e.source === "viva-engage");
+    expect(outlookRows.every((r) => r.status === "ok")).toBe(true);
+    expect(vivaRow?.status).toBe("ok");
+  });
+
+  it("viva hardstop (TokenExpired) is recorded as error row, doesn't crash tick", async () => {
+    const a1 = acc("alice");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
+    });
+    const viva = new FakeVivaClient({
+      steps: [{ kind: "error", error: new TokenExpiredError() }],
+    });
+    const vivaSubs = new InMemoryVivaSubscriptionStore();
+    await vivaSubs.subscribe({
+      account: a1.username,
+      networkId: "net-1",
+      communityId: "com-1",
+    });
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      viva,
+      vivaSubs,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+    const vivaRow = store.syncLog.find((e) => e.source === "viva-engage");
+    expect(vivaRow?.status).toBe("error");
+  });
+
+  it("viva hardstop (GraphRateLimited) is recorded as error row, doesn't crash tick", async () => {
+    const a1 = acc("alice");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
+    });
+    const viva = new FakeVivaClient({
+      steps: [{ kind: "error", error: new GraphRateLimitedError(30) }],
+    });
+    const vivaSubs = new InMemoryVivaSubscriptionStore();
+    await vivaSubs.subscribe({
+      account: a1.username,
+      networkId: "net-1",
+      communityId: "com-1",
+    });
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      viva,
+      vivaSubs,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+    const vivaRow = store.syncLog.find((e) => e.source === "viva-engage");
+    expect(vivaRow?.status).toBe("error");
+  });
+
+  it("without viva dep: no viva rows even if vivaSubs present (both must be set)", async () => {
+    const a1 = acc("alice");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
+    });
+    const vivaSubs = new InMemoryVivaSubscriptionStore();
+    await vivaSubs.subscribe({
+      account: a1.username,
+      networkId: "net-1",
+      communityId: "com-1",
+    });
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      vivaSubs,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+    expect(store.syncLog).toHaveLength(2);
+    expect(store.syncLog.every((e) => e.source === "outlook")).toBe(true);
   });
 
   it("runOnce invokes onTickComplete with the tick summary after sync_log writes", async () => {

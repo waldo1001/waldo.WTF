@@ -8,7 +8,11 @@ import type {
   SteerCommand,
   SteerCliResult,
   SteerImpl,
+  VivaCommand,
+  VivaCliResult,
+  VivaImpl,
 } from "./cli.js";
+import type { VivaSubscription } from "./store/types.js";
 import { ConfigError } from "./config.js";
 import { FakeAuthClient } from "./testing/fake-auth-client.js";
 import { AuthError, type Account } from "./auth/types.js";
@@ -676,6 +680,230 @@ describe("runCli", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("--viva-list --account a passes account to the viva impl and returns mode=viva", async () => {
+    const calls: VivaCommand[] = [];
+    const subs: readonly VivaSubscription[] = [
+      {
+        account: "a@example.test",
+        networkId: "net-1",
+        communityId: "com-1",
+        communityName: "Engineering",
+        enabled: true,
+        subscribedAt: new Date("2026-04-21T10:00:00Z"),
+      },
+    ];
+    const vivaImpl: VivaImpl = async (_cfg, cmd) => {
+      calls.push(cmd);
+      return { action: "list", subs };
+    };
+    const prints: string[] = [];
+    const result = await runCli(
+      ["--viva-list", "--account", "a@example.test"],
+      { env: ENV, loadDotenv: false, print: (m) => prints.push(m), vivaImpl },
+    );
+    expect(calls[0]).toEqual({ action: "list", account: "a@example.test" });
+    expect(result.mode).toBe("viva");
+    const out = prints.join("\n");
+    expect(out).toContain("com-1");
+    expect(out).toContain("net-1");
+    expect(out).toContain("Engineering");
+  });
+
+  it("--viva-list prints empty-state message when no subs", async () => {
+    const vivaImpl: VivaImpl = async () => ({ action: "list", subs: [] });
+    const prints: string[] = [];
+    await runCli(["--viva-list", "--account", "a@example.test"], {
+      env: ENV,
+      loadDotenv: false,
+      print: (m) => prints.push(m),
+      vivaImpl,
+    });
+    expect(prints.some((p) => /no viva subscriptions/i.test(p))).toBe(true);
+  });
+
+  it("--viva-discover lists communities returned by the injected impl", async () => {
+    const vivaImpl: VivaImpl = async () => ({
+      action: "discover",
+      communities: [
+        {
+          id: "com-99",
+          displayName: "Sales",
+          networkId: "net-1",
+          networkName: "Contoso",
+        },
+      ],
+    });
+    const prints: string[] = [];
+    const result = await runCli(
+      ["--viva-discover", "--account", "a@example.test"],
+      { env: ENV, loadDotenv: false, print: (m) => prints.push(m), vivaImpl },
+    );
+    expect(result.mode).toBe("viva");
+    const out = prints.join("\n");
+    expect(out).toContain("com-99");
+    expect(out).toContain("Sales");
+  });
+
+  it("--viva-discover prints empty-state when no communities", async () => {
+    const vivaImpl: VivaImpl = async () => ({
+      action: "discover",
+      communities: [],
+    });
+    const prints: string[] = [];
+    await runCli(["--viva-discover", "--account", "a@example.test"], {
+      env: ENV,
+      loadDotenv: false,
+      print: (m) => prints.push(m),
+      vivaImpl,
+    });
+    expect(prints.some((p) => /no viva communities/i.test(p))).toBe(true);
+  });
+
+  it("--viva-subscribe <id> --account <a> calls subscribe and prints confirmation", async () => {
+    const calls: VivaCommand[] = [];
+    const sub: VivaSubscription = {
+      account: "a@example.test",
+      networkId: "net-1",
+      communityId: "com-7",
+      enabled: true,
+      subscribedAt: new Date("2026-04-21T10:00:00Z"),
+    };
+    const vivaImpl: VivaImpl = async (_cfg, cmd) => {
+      calls.push(cmd);
+      return { action: "subscribe", sub };
+    };
+    const prints: string[] = [];
+    const result = await runCli(
+      [
+        "--viva-subscribe",
+        "com-7",
+        "--account",
+        "a@example.test",
+      ],
+      { env: ENV, loadDotenv: false, print: (m) => prints.push(m), vivaImpl },
+    );
+    expect(calls[0]).toEqual({
+      action: "subscribe",
+      account: "a@example.test",
+      communityId: "com-7",
+    });
+    expect((result as { result: VivaCliResult }).result).toEqual({
+      action: "subscribe",
+      sub,
+    });
+    expect(prints.some((p) => p.includes("com-7"))).toBe(true);
+  });
+
+  it("--viva-subscribe surfaces impl-thrown errors (e.g. unknown community)", async () => {
+    const vivaImpl: VivaImpl = async () => {
+      throw new CliUsageError("unknown community: com-bogus");
+    };
+    await expect(
+      runCli(
+        ["--viva-subscribe", "com-bogus", "--account", "a@example.test"],
+        { env: ENV, loadDotenv: false, print: () => {}, vivaImpl },
+      ),
+    ).rejects.toBeInstanceOf(CliUsageError);
+  });
+
+  it("--viva-unsubscribe <id> --account <a> calls unsubscribe and prints removed=true", async () => {
+    const calls: VivaCommand[] = [];
+    const vivaImpl: VivaImpl = async (_cfg, cmd) => {
+      calls.push(cmd);
+      return { action: "unsubscribe", removed: true };
+    };
+    const prints: string[] = [];
+    await runCli(
+      ["--viva-unsubscribe", "com-7", "--account", "a@example.test"],
+      { env: ENV, loadDotenv: false, print: (m) => prints.push(m), vivaImpl },
+    );
+    expect(calls[0]).toEqual({
+      action: "unsubscribe",
+      account: "a@example.test",
+      communityId: "com-7",
+    });
+    expect(prints.some((p) => /unsubscribed/i.test(p))).toBe(true);
+  });
+
+  it("--viva-unsubscribe prints no-op message when nothing was removed", async () => {
+    const vivaImpl: VivaImpl = async () => ({
+      action: "unsubscribe",
+      removed: false,
+    });
+    const prints: string[] = [];
+    await runCli(
+      ["--viva-unsubscribe", "com-x", "--account", "a@example.test"],
+      { env: ENV, loadDotenv: false, print: (m) => prints.push(m), vivaImpl },
+    );
+    expect(prints.some((p) => /no subscription removed/i.test(p))).toBe(true);
+  });
+
+  it("rejects --viva-* without --account", async () => {
+    await expect(
+      runCli(["--viva-list"], {
+        env: ENV,
+        loadDotenv: false,
+        print: () => {},
+        vivaImpl: async () => {
+          throw new Error("should not run");
+        },
+      }),
+    ).rejects.toBeInstanceOf(CliUsageError);
+  });
+
+  it("rejects combining two --viva-* flags at once", async () => {
+    await expect(
+      runCli(
+        [
+          "--viva-list",
+          "--viva-discover",
+          "--account",
+          "a@example.test",
+        ],
+        {
+          env: ENV,
+          loadDotenv: false,
+          print: () => {},
+          vivaImpl: async () => {
+            throw new Error("should not run");
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(CliUsageError);
+  });
+
+  it("rejects empty --viva-subscribe value", async () => {
+    await expect(
+      runCli(
+        ["--viva-subscribe", "   ", "--account", "a@example.test"],
+        {
+          env: ENV,
+          loadDotenv: false,
+          print: () => {},
+          vivaImpl: async () => {
+            throw new Error("should not run");
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(CliUsageError);
+  });
+
+  it("rejects empty --viva-unsubscribe value", async () => {
+    await expect(
+      runCli(
+        ["--viva-unsubscribe", "   ", "--account", "a@example.test"],
+        {
+          env: ENV,
+          loadDotenv: false,
+          print: () => {},
+          vivaImpl: async () => {
+            throw new Error("should not run");
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(CliUsageError);
   });
 
   it("dispatches default mode to the injected main impl", async () => {

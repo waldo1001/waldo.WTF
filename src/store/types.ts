@@ -1,4 +1,4 @@
-export type MessageSource = "teams" | "outlook" | "whatsapp";
+export type MessageSource = "teams" | "outlook" | "whatsapp" | "viva-engage";
 
 export type ChatType = "oneOnOne" | "group" | "channel";
 
@@ -114,6 +114,25 @@ export interface AddSteeringRuleInput {
   readonly source?: MessageSource;
   readonly account?: string;
   readonly reason?: string;
+}
+
+export interface VivaSubscription {
+  readonly account: string;
+  readonly networkId: string;
+  readonly networkName?: string;
+  readonly communityId: string;
+  readonly communityName?: string;
+  readonly enabled: boolean;
+  readonly subscribedAt: Date;
+  readonly lastCursorAt?: Date;
+}
+
+export interface AddVivaSubscriptionInput {
+  readonly account: string;
+  readonly networkId: string;
+  readonly networkName?: string;
+  readonly communityId: string;
+  readonly communityName?: string;
 }
 
 export type StoreErrorKind = "not-found" | "conflict" | "corrupt";

@@ -13,6 +13,7 @@ const KNOWN_SOURCES: ReadonlySet<MessageSource> = new Set([
   "outlook",
   "teams",
   "whatsapp",
+  "viva-engage",
 ]);
 
 const MAX_HOURS = 720;
@@ -54,7 +55,7 @@ export const GET_RECENT_ACTIVITY_TOOL = {
   description: [
     "Return recent messages from the lake within the last N hours, optionally filtered by source and/or account. Read-only.",
     "",
-    'Use this as the source-of-truth probe when you need to confirm whether a given source (outlook, teams, whatsapp) has any recent data. A single call with sources: ["whatsapp"] and a wide hours window is the correct way to verify presence — more reliable than inferring from get_sync_status.',
+    'Use this as the source-of-truth probe when you need to confirm whether a given source (outlook, teams, whatsapp, viva-engage) has any recent data. A single call with sources: ["whatsapp"] and a wide hours window is the correct way to verify presence — more reliable than inferring from get_sync_status.',
   ].join("\n"),
   inputSchema: {
     type: "object",
@@ -68,7 +69,10 @@ export const GET_RECENT_ACTIVITY_TOOL = {
       },
       sources: {
         type: "array",
-        items: { type: "string", enum: ["outlook", "teams", "whatsapp"] },
+        items: {
+          type: "string",
+          enum: ["outlook", "teams", "whatsapp", "viva-engage"],
+        },
         description: "Optional source filter.",
       },
       accounts: {

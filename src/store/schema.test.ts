@@ -23,7 +23,7 @@ describe("schema / applyMigrations", () => {
     expect(userVersion(db)).toBe(0);
     applyMigrations(db);
     expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
-    expect(CURRENT_SCHEMA_VERSION).toBe(11);
+    expect(CURRENT_SCHEMA_VERSION).toBe(12);
   });
 
   it("creates all four tables and expected indices", () => {
@@ -947,6 +947,92 @@ describe("schema / steering_rules (migration 10)", () => {
   });
 
   it("is idempotent at v10 (current schema)", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    applyMigrations(db);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+});
+
+describe("schema / viva_subscriptions (migration 12)", () => {
+  function hasColumn(
+    db: Database.Database,
+    table: string,
+    column: string,
+  ): boolean {
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all() as {
+      name: string;
+    }[];
+    return rows.some((r) => r.name === column);
+  }
+
+  it("creates viva_subscriptions table on v11→v12", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const tables = objectNames(db, "table");
+    expect(tables).toContain("viva_subscriptions");
+    for (const col of [
+      "account",
+      "network_id",
+      "network_name",
+      "community_id",
+      "community_name",
+      "enabled",
+      "subscribed_at",
+      "last_cursor_at",
+    ]) {
+      expect(hasColumn(db, "viva_subscriptions", col)).toBe(true);
+    }
+  });
+
+  it("creates the idx_viva_subs_account index", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const indices = objectNames(db, "index");
+    expect(indices).toContain("idx_viva_subs_account");
+  });
+
+  it("viva_subscriptions PK is (account, community_id) — duplicate rejects", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const insert = db.prepare(
+      "INSERT INTO viva_subscriptions (account, network_id, community_id, subscribed_at) VALUES (?, ?, ?, ?)",
+    );
+    insert.run("a@example.test", "net-1", "comm-1", 1);
+    expect(() =>
+      insert.run("a@example.test", "net-1", "comm-1", 2),
+    ).toThrow();
+    // Different account → allowed
+    expect(() =>
+      insert.run("b@example.test", "net-1", "comm-1", 3),
+    ).not.toThrow();
+    // Different community → allowed
+    expect(() =>
+      insert.run("a@example.test", "net-1", "comm-2", 4),
+    ).not.toThrow();
+  });
+
+  it("upgrades a pre-existing v11 database to v12 preserving messages data", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    insertMessageRow(db, { id: "before-v12", body: "rows survive" });
+    db.exec("PRAGMA user_version = 11");
+    db.exec("DROP TABLE IF EXISTS viva_subscriptions");
+
+    applyMigrations(db);
+
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+    const tables = objectNames(db, "table");
+    expect(tables).toContain("viva_subscriptions");
+    const n = (
+      db
+        .prepare("SELECT COUNT(*) AS n FROM messages WHERE id = ?")
+        .get("before-v12") as { n: number }
+    ).n;
+    expect(n).toBe(1);
+  });
+
+  it("is idempotent at v12 (current schema)", () => {
     const db = new Database(":memory:");
     applyMigrations(db);
     applyMigrations(db);

@@ -7,6 +7,7 @@ const KNOWN_SOURCES: ReadonlySet<MessageSource> = new Set([
   "outlook",
   "teams",
   "whatsapp",
+  "viva-engage",
 ]);
 
 export interface ListThreadsParams {
@@ -41,7 +42,7 @@ export const LIST_THREADS_TOOL = {
     properties: {
       source: {
         type: "string",
-        enum: ["outlook", "teams", "whatsapp"],
+        enum: ["outlook", "teams", "whatsapp", "viva-engage"],
         description: "Which message source to enumerate threads for.",
       },
     },

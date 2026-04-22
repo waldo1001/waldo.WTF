@@ -13,8 +13,14 @@ import type { GraphClient } from "./sources/graph.js";
 import { HttpGraphClient } from "./sources/http-graph-client.js";
 import type { TeamsClient } from "./sources/teams.js";
 import { HttpTeamsClient } from "./sources/http-teams-client.js";
+import type { VivaClient } from "./sources/viva.js";
+import { HttpVivaClient } from "./sources/http-viva-client.js";
 import { openDatabase } from "./store/open-database.js";
 import { SqliteMessageStore } from "./store/sqlite-message-store.js";
+import {
+  SqliteVivaSubscriptionStore,
+  type VivaSubscriptionStore,
+} from "./store/viva-subscription-store.js";
 import {
   SqliteSteeringStore,
   type SteeringStore,
@@ -43,6 +49,8 @@ export interface MainOverrides {
   readonly auth?: AuthClient;
   readonly graph?: GraphClient;
   readonly teams?: TeamsClient;
+  readonly viva?: VivaClient;
+  readonly vivaSubs?: VivaSubscriptionStore;
   readonly store?: MessageStore;
   readonly steering?: SteeringStore;
   readonly authStore?: AuthStore;
@@ -124,11 +132,23 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
     new HttpTeamsClient({
       fetch: (input, init) => globalThis.fetch(input, init),
     });
+  const viva: VivaClient =
+    overrides.viva ??
+    new HttpVivaClient({
+      fetch: (input, init) => globalThis.fetch(input, init),
+    });
+  const vivaSubs: VivaSubscriptionStore =
+    overrides.vivaSubs ??
+    (db !== null
+      ? new SqliteVivaSubscriptionStore(db, clock)
+      : new SqliteVivaSubscriptionStore(new Database(":memory:"), clock));
 
   const scheduler = new SyncScheduler({
     auth,
     graph,
     teams,
+    viva,
+    vivaSubs,
     store,
     clock,
     setTimer: overrides.setTimer ?? nodeSetTimer,

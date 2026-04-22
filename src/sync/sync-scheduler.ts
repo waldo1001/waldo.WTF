@@ -1,11 +1,14 @@
 import type { AuthClient } from "../auth/auth-client.js";
 import type { Clock } from "../clock.js";
 import type { MessageStore } from "../store/message-store.js";
+import type { VivaSubscriptionStore } from "../store/viva-subscription-store.js";
 import type { GraphClient } from "../sources/graph.js";
 import type { TeamsClient } from "../sources/teams.js";
+import type { VivaClient } from "../sources/viva.js";
 import { syncInbox } from "./sync-inbox.js";
 import { syncSent } from "./sync-sent.js";
 import { syncTeams } from "./sync-teams.js";
+import { syncViva } from "./sync-viva.js";
 
 export const DEFAULT_SYNC_INTERVAL_MS = 300_000;
 
@@ -29,6 +32,8 @@ export interface SyncSchedulerDeps {
   readonly auth: AuthClient;
   readonly graph: GraphClient;
   readonly teams?: TeamsClient;
+  readonly viva?: VivaClient;
+  readonly vivaSubs?: VivaSubscriptionStore;
   readonly store: MessageStore;
   readonly clock: Clock;
   readonly setTimer: SetTimerFn;
@@ -149,6 +154,44 @@ export class SyncScheduler {
               errorMessage: errorToString(err),
             });
             errorCount += 1;
+          }
+        }
+        if (
+          this.deps.viva !== undefined &&
+          this.deps.vivaSubs !== undefined
+        ) {
+          // Skip the Graph call entirely if the account has no enabled
+          // subscriptions — avoids burning rate-limit budget on idle ticks.
+          const enabled =
+            await this.deps.vivaSubs.listEnabledForAccount(account.username);
+          if (enabled.length > 0) {
+            try {
+              const r = await syncViva({
+                account,
+                auth: this.deps.auth,
+                viva: this.deps.viva,
+                store: this.deps.store,
+                subs: this.deps.vivaSubs,
+                clock: this.deps.clock,
+              });
+              await this.deps.store.appendSyncLog({
+                ts: this.deps.clock.now(),
+                account: account.username,
+                source: "viva-engage",
+                status: "ok",
+                messagesAdded: r.added,
+              });
+              okCount += 1;
+            } catch (err) {
+              await this.deps.store.appendSyncLog({
+                ts: this.deps.clock.now(),
+                account: account.username,
+                source: "viva-engage",
+                status: "error",
+                errorMessage: errorToString(err),
+              });
+              errorCount += 1;
+            }
           }
         }
       }

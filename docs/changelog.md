@@ -11,6 +11,10 @@ skill.
 
 ---
 
+## 2026-04-22
+
+- Added Viva Engage as the 4th message source. New `source: "viva-engage"` flows through the existing pipeline: `get_recent_activity`, `search`, `get_thread`, `list_threads` and steering all work uniformly. Subscription model: per-`(account, communityId)` row in new `viva_subscriptions` table (schema migration v11 → v12) — the user picks which `(network, community)` pairs to follow per account; nothing is auto-discovered. Per-community timestamp cursor (`last_cursor_at`) makes re-syncs incremental against Graph beta `/employeeExperience` endpoints (no deltaLink available). Thread id convention: `viva:{networkId}:{communityId}:{conversationId}`. New CLI flags `--viva-list`, `--viva-subscribe <community-id>`, `--viva-unsubscribe <community-id>`, `--viva-discover` (all require `--account <username>`). Per-community errors are isolated — one community failing does not abort the others; only `TokenExpiredError` / `GraphRateLimitedError` propagate as hardstops. Plan: [plans/done/add-viva-engage-source.md](plans/done/add-viva-engage-source.md).
+
 ## 2026-04-21
 
 - Added Outlook Sent Items sync: new [src/sync/sync-sent.ts](../src/sync/sync-sent.ts) mirrors `syncInbox` against `/me/mailFolders/sentitems/messages/delta` and writes each row with `fromMe=true`. Scheduler runs inbox then sent per Outlook account; a failure in one does not swallow the other. Schema migration v10 → v11: `messages.from_me INTEGER NOT NULL DEFAULT 0` and `sync_state` PK widened to `(account, source, folder)` so each folder tracks its own `@odata.deltaLink`. Runs at boot (O(1) metadata-only ADD COLUMN in SQLite ≥ 3.35). Migration runbook: [migrations/sent-items-schema.md](migrations/sent-items-schema.md). `Mail.Read` already covers Sent Items — no MSAL re-login required. First sync tick after upgrade backfills Sent Items within `backfillDays`. Plan: [plans/done/feat-sent-items-sync.md](plans/done/feat-sent-items-sync.md).

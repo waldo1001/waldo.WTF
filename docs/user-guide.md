@@ -28,7 +28,7 @@ Five tools total. Claude chooses which to call.
 
 "What's happened recently". Returns rows across all sources and
 accounts, ordered `sent_at DESC`, within the last `hours`. Filter by
-`sources` (`["outlook", "teams", "whatsapp"]`) or `accounts`
+`sources` (`["outlook", "teams", "whatsapp", "viva-engage"]`) or `accounts`
 (`["eric.wauters@dynex.be"]`) to narrow.
 
 Each message carries an optional `replied: boolean` — true iff the
@@ -107,7 +107,7 @@ start of a session so it knows which tenants exist.
 ### `list_threads(source)`
 
 Diagnostic inventory of every distinct thread stored for a given
-source (`outlook`, `teams`, or `whatsapp`), with `messageCount` and
+source (`outlook`, `teams`, `whatsapp`, or `viva-engage`), with `messageCount` and
 `newestSentAt` / `oldestSentAt`. Ordered newest-first by the latest
 message in each thread.
 
@@ -192,6 +192,32 @@ npm run login -- --account new
 Follow the device-code prompt. MSAL persists the refresh token to the
 on-disk cache and the sync loop picks up the new account on its next
 tick (within 5 minutes). No restart needed.
+
+## 5b. Subscribing to Viva Engage communities
+
+Viva Engage subscriptions are explicit per `(account, community)` —
+nothing is auto-discovered, so the lake only ingests communities you
+opted into. The CLI lives next to the existing `--steer-*` family.
+
+```sh
+# List Viva subscriptions for an account
+npm run dev -- --account eric.wauters@dynex.be --viva-list
+
+# Subscribe to a community (you supply the Graph community id)
+npm run dev -- --account eric.wauters@dynex.be \
+  --viva-subscribe 00000000-0000-0000-0000-000000000001
+
+# Unsubscribe (rows already in the lake stay; only stops new pulls)
+npm run dev -- --account eric.wauters@dynex.be \
+  --viva-unsubscribe 00000000-0000-0000-0000-000000000001
+```
+
+Once subscribed, the next sync tick pulls posts under
+`source: "viva-engage"` and threads them as
+`viva:{networkId}:{communityId}:{conversationId}`. Per-community
+errors are isolated — a single failing community does not stop the
+others on the same tick. Requires the `Community.Read.All` Entra
+delegated permission (see [setup.md §2](setup.md)).
 
 ## 6. Adding WhatsApp exports (Weekend 6+)
 

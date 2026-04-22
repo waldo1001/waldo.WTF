@@ -5,8 +5,9 @@
 
 A single, private, always-on service that pulls messages from all the
 places [waldo](https://waldo.be) actually gets pinged — Microsoft Teams
-and Outlook across multiple tenants, plus WhatsApp exports, plus
-whatever else later — into one unified local SQLite "lake", and exposes
+and Outlook across multiple tenants, Viva Engage communities, plus
+WhatsApp exports, plus whatever else later — into one unified local
+SQLite "lake", and exposes
 it to Claude via an HTTP MCP server. Ask *"wtf is going on in my life?"*
 and get a genuinely useful triage across everything at once.
 

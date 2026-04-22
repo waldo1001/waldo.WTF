@@ -1,6 +1,6 @@
 import type { Database } from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 11;
+export const CURRENT_SCHEMA_VERSION = 12;
 
 const MIGRATION_1 = `
 CREATE TABLE IF NOT EXISTS messages (
@@ -195,6 +195,25 @@ function migrateV11(db: Database): void {
   }
 }
 
+// v12 adds Viva Engage support: per-account subscription list with a per-row
+// timestamp cursor. Per-community cursors live in `viva_subscriptions`, not
+// `sync_state`, so each community advances independently.
+const MIGRATION_12 = `
+CREATE TABLE IF NOT EXISTS viva_subscriptions (
+  account TEXT NOT NULL,
+  network_id TEXT NOT NULL,
+  network_name TEXT,
+  community_id TEXT NOT NULL,
+  community_name TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  subscribed_at INTEGER NOT NULL,
+  last_cursor_at INTEGER,
+  PRIMARY KEY (account, community_id)
+);
+CREATE INDEX IF NOT EXISTS idx_viva_subs_account
+  ON viva_subscriptions(account, enabled);
+`;
+
 export function applyMigrations(db: Database): void {
   const current = (
     db.prepare("PRAGMA user_version").get() as { user_version: number }
@@ -235,6 +254,9 @@ export function applyMigrations(db: Database): void {
     }
     if (current < 11) {
       migrateV11(db);
+    }
+    if (current < 12) {
+      db.exec(MIGRATION_12);
     }
     db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
   });

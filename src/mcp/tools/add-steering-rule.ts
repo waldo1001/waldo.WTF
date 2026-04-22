@@ -13,6 +13,7 @@ const KNOWN_SOURCES: ReadonlySet<MessageSource> = new Set([
   "outlook",
   "teams",
   "whatsapp",
+  "viva-engage",
 ]);
 
 export interface AddSteeringRuleParams {
@@ -59,7 +60,7 @@ export const ADD_STEERING_RULE_TOOL = {
       },
       source: {
         type: "string",
-        enum: ["outlook", "teams", "whatsapp"],
+        enum: ["outlook", "teams", "whatsapp", "viva-engage"],
         description: "Optional source scope.",
       },
       account: {

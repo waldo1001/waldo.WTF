@@ -45,6 +45,9 @@ One-time, per developer. Required for MSAL device code flow.
    - `User.Read` (added automatically)
    - `Mail.Read`
    - Later (Weekend 4): `Chat.Read`, `ChannelMessage.Read.All`
+   - For Viva Engage subscriptions (optional): `Community.Read.All`
+     (delegated). Only required if you intend to subscribe to one or
+     more Viva communities via `--viva-subscribe`.
 7. Copy the **Application (client) ID** — you'll put it in `.env`.
 
 ## 3. Environment variables
