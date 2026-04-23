@@ -142,10 +142,11 @@ export class MsalAuthClient implements AuthClient {
 
   async loginWithDeviceCode(
     onPrompt: (message: string) => void,
+    options?: { scopes?: readonly string[] },
   ): Promise<Account> {
     try {
       const res = await this.pca.acquireTokenByDeviceCode({
-        scopes: SCOPES,
+        scopes: options?.scopes ?? SCOPES,
         deviceCodeCallback: (r) => onPrompt(r.message),
       });
       return toAccount(res.account);

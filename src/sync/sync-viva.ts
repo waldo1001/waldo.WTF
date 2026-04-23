@@ -91,46 +91,62 @@ function postToMessage(
   };
 }
 
+const MAX_PAGES_PER_WALK = 50;
+
 async function listThreadsForCommunity(
   viva: VivaClient,
   token: string,
   communityId: string,
-  sinceIso: string | undefined,
+  sinceDate: Date | undefined,
 ): Promise<readonly VivaThread[]> {
   const out: VivaThread[] = [];
-  let nextLink: string | undefined;
-  for (;;) {
-    const page =
-      nextLink === undefined
-        ? await viva.listThreads(token, communityId, {
-            ...(sinceIso !== undefined && { sinceIso }),
-          })
-        : await viva.listThreads(token, communityId, { nextLink });
-    for (const t of page.value) out.push(t);
-    const next = page["@odata.nextLink"];
-    if (next === undefined) return out;
-    nextLink = next;
+  let olderThan: string | undefined;
+  for (let page = 0; page < MAX_PAGES_PER_WALK; page++) {
+    const result = await viva.listThreads(token, communityId, { olderThan });
+    if (result.value.length === 0) break;
+    for (const t of result.value) out.push(t);
+    if (sinceDate !== undefined) {
+      const oldest = result.value.reduce((min, t) => {
+        const ts = t.lastPostedDateTime ?? "";
+        return ts < (min.lastPostedDateTime ?? "") ? t : min;
+      }, result.value[0]!);
+      if (
+        oldest.lastPostedDateTime !== undefined &&
+        new Date(oldest.lastPostedDateTime).getTime() <= sinceDate.getTime()
+      ) {
+        break;
+      }
+    }
+    if (result.olderThanCursor === undefined) break;
+    olderThan = result.olderThanCursor;
   }
+  return out;
 }
 
 async function listPostsForThread(
   viva: VivaClient,
   token: string,
-  communityId: string,
   threadId: string,
+  sinceDate?: Date | undefined,
 ): Promise<readonly VivaPost[]> {
   const out: VivaPost[] = [];
-  let nextLink: string | undefined;
-  for (;;) {
-    const page =
-      nextLink === undefined
-        ? await viva.listPosts(token, communityId, threadId, {})
-        : await viva.listPosts(token, communityId, threadId, { nextLink });
-    for (const p of page.value) out.push(p);
-    const next = page["@odata.nextLink"];
-    if (next === undefined) return out;
-    nextLink = next;
+  let olderThan: string | undefined;
+  for (let page = 0; page < MAX_PAGES_PER_WALK; page++) {
+    const result = await viva.listPosts(token, threadId, { olderThan });
+    if (result.value.length === 0) break;
+    for (const p of result.value) out.push(p);
+    if (sinceDate !== undefined) {
+      const oldest = result.value.reduce((min, p) =>
+        p.createdDateTime < min.createdDateTime ? p : min,
+      );
+      if (new Date(oldest.createdDateTime).getTime() <= sinceDate.getTime()) {
+        break;
+      }
+    }
+    if (result.olderThanCursor === undefined) break;
+    olderThan = result.olderThanCursor;
   }
+  return out;
 }
 
 async function syncOneCommunity(deps: {
@@ -142,24 +158,18 @@ async function syncOneCommunity(deps: {
   clock: Clock;
 }): Promise<{ added: number; newCursor: Date | undefined }> {
   const { viva, token, sub, store, clock } = deps;
-  const sinceIso = sub.lastCursorAt?.toISOString();
   const threads = await listThreadsForCommunity(
     viva,
     token,
     sub.communityId,
-    sinceIso,
+    sub.lastCursorAt,
   );
 
   let added = 0;
   let highWater: Date | undefined = sub.lastCursorAt;
   const importedAt = clock.now();
   for (const thread of threads) {
-    const posts = await listPostsForThread(
-      viva,
-      token,
-      sub.communityId,
-      thread.id,
-    );
+    const posts = await listPostsForThread(viva, token, thread.id, sub.lastCursorAt);
     if (posts.length === 0) continue;
     const messages = posts.map((p) => postToMessage(p, sub, thread, importedAt));
     const r = await store.upsertMessages(messages);

@@ -1019,7 +1019,7 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
     });
   }
 
-  it("realViva --viva-discover paginates listCommunities across @odata.nextLink pages", async () => {
+  it("realViva --viva-discover discovers communities across multiple networks", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-"));
     try {
       const dbPath = path.join(dir, "lake.db");
@@ -1031,37 +1031,24 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
       const viva = new FakeVivaClient({
         steps: [
           {
-            kind: "listCommunitiesOk",
-            response: {
-              value: [
-                {
-                  id: "com-1",
-                  displayName: "Alpha",
-                  networkId: "net-1",
-                  networkName: "Acme",
-                },
-                {
-                  id: "com-2",
-                  displayName: "Beta",
-                  networkId: "net-1",
-                  networkName: "Acme",
-                },
-              ],
-              "@odata.nextLink": "https://graph.example.invalid/next-page-2",
-            },
+            kind: "listNetworksOk",
+            response: [
+              { id: "net-1", name: "Acme", permalink: "acme" },
+              { id: "net-2", name: "Partner", permalink: "partner" },
+            ],
           },
           {
             kind: "listCommunitiesOk",
-            response: {
-              value: [
-                {
-                  id: "com-3",
-                  displayName: "Gamma",
-                  networkId: "net-1",
-                  networkName: "Acme",
-                },
-              ],
-            },
+            response: [
+              { id: "com-1", displayName: "Alpha", networkId: "net-1" },
+              { id: "com-2", displayName: "Beta", networkId: "net-1" },
+            ],
+          },
+          {
+            kind: "listCommunitiesOk",
+            response: [
+              { id: "com-3", displayName: "Gamma", networkId: "net-2" },
+            ],
           },
         ],
       });
@@ -1079,14 +1066,12 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
         (result as Extract<VivaCliResult, { action: "discover" }>).communities;
       expect(communities.map((c) => c.id)).toEqual(["com-1", "com-2", "com-3"]);
 
-      const calls = viva.calls.filter((c) => c.method === "listCommunities");
-      expect(calls).toHaveLength(2);
-      expect(calls[0]).toMatchObject({ token: "tok-123" });
-      expect(calls[0]!.nextLink).toBeUndefined();
-      expect(calls[1]).toMatchObject({
-        token: "tok-123",
-        nextLink: "https://graph.example.invalid/next-page-2",
-      });
+      const networkCall = viva.calls.find((c) => c.method === "listNetworks");
+      expect(networkCall).toMatchObject({ token: "tok-123" });
+      const commCalls = viva.calls.filter((c) => c.method === "listCommunities");
+      expect(commCalls).toHaveLength(2);
+      expect(commCalls[0]).toMatchObject({ token: "tok-123", networkId: "net-1" });
+      expect(commCalls[1]).toMatchObject({ token: "tok-123", networkId: "net-2" });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1102,7 +1087,9 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
 
       const auth = makeAuth("tok-scope");
       const viva = new FakeVivaClient({
-        steps: [{ kind: "listCommunitiesOk", response: { value: [] } }],
+        steps: [
+          { kind: "listNetworksOk", response: [] },
+        ],
       });
 
       const config = makeConfig(dbPath);
@@ -1135,17 +1122,18 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
       const viva = new FakeVivaClient({
         steps: [
           {
+            kind: "listNetworksOk",
+            response: [{ id: "net-42", name: "Acme Corp", permalink: "acme-corp" }],
+          },
+          {
             kind: "listCommunitiesOk",
-            response: {
-              value: [
-                {
-                  id: "COM-7",
-                  displayName: "Sales",
-                  networkId: "net-42",
-                  networkName: "Acme Corp",
-                },
-              ],
-            },
+            response: [
+              {
+                id: "COM-7",
+                displayName: "Sales",
+                networkId: "net-42",
+              },
+            ],
           },
         ],
       });
@@ -1199,16 +1187,12 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
       const viva = new FakeVivaClient({
         steps: [
           {
+            kind: "listNetworksOk",
+            response: [{ id: "net-1", name: "Acme", permalink: "acme" }],
+          },
+          {
             kind: "listCommunitiesOk",
-            response: {
-              value: [
-                {
-                  id: "com-real",
-                  displayName: "Real",
-                  networkId: "net-1",
-                },
-              ],
-            },
+            response: [{ id: "com-real", displayName: "Real", networkId: "net-1" }],
           },
         ],
       });
@@ -1255,6 +1239,196 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
       expect(err).toBeInstanceOf(CliUsageError);
       expect((err as Error).message).toMatch(/ghost@example\.test/);
       expect((err as Error).message).toMatch(/--add-account/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("realViva --viva-discover triggers loginWithDeviceCode for Yammer scope when silent token fails", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-fallback-"));
+    try {
+      const dbPath = path.join(dir, "lake.db");
+      const db = new Database(dbPath);
+      applyMigrations(db);
+      db.close();
+
+      const tokenResult = {
+        token: "tok-ym",
+        expiresOn: new Date("2099-01-01T00:00:00Z"),
+        account: VIVA_ACCOUNT,
+      };
+      let yammerConsented = false;
+      const deviceCodePrompts: string[] = [];
+      const deviceCodeScopes: Array<readonly string[] | undefined> = [];
+      const auth: import("./auth/auth-client.js").AuthClient = {
+        listAccounts: async () => [VIVA_ACCOUNT],
+        getTokenSilent: async (_account, opts) => {
+          if (!yammerConsented) throw new AuthError("silent-failed", "not yet");
+          return tokenResult;
+        },
+        loginWithDeviceCode: async (onPrompt, opts) => {
+          deviceCodeScopes.push(opts?.scopes);
+          yammerConsented = true;
+          onPrompt("visit https://example.invalid/devicelogin");
+          deviceCodePrompts.push("visited");
+          return VIVA_ACCOUNT;
+        },
+      };
+      const viva = new FakeVivaClient({
+        steps: [{ kind: "listNetworksOk", response: [] }],
+      });
+
+      const prints: string[] = [];
+      const result = await realViva(
+        makeConfig(dbPath),
+        { action: "discover", account: "a@example.test" },
+        { auth, viva, print: (m) => prints.push(m) },
+      );
+
+      expect(result.action).toBe("discover");
+      expect(deviceCodeScopes).toHaveLength(1);
+      expect(deviceCodeScopes[0]).toEqual([YAMMER_SCOPE]);
+      expect(prints.some((p) => /yammer/i.test(p))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("realViva --viva-discover propagates error when Yammer token still fails after device-code consent", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-fallback-err-"));
+    try {
+      const dbPath = path.join(dir, "lake.db");
+      const db = new Database(dbPath);
+      applyMigrations(db);
+      db.close();
+
+      const persistentError = new AuthError("silent-failed", "always fails");
+      const auth: import("./auth/auth-client.js").AuthClient = {
+        listAccounts: async () => [VIVA_ACCOUNT],
+        getTokenSilent: async () => {
+          throw persistentError;
+        },
+        loginWithDeviceCode: async () => VIVA_ACCOUNT,
+      };
+      const viva = new FakeVivaClient({ steps: [] });
+
+      await expect(
+        realViva(
+          makeConfig(dbPath),
+          { action: "discover", account: "a@example.test" },
+          { auth, viva },
+        ),
+      ).rejects.toBe(persistentError);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // ── Slice 3: discover output + subscribe disambiguation ─────────────────
+
+  it("reportVivaResult discover prints network_name as 4th column", async () => {
+    const vivaImpl: VivaImpl = async () => ({
+      action: "discover",
+      communities: [
+        { id: "com-1", displayName: "Engineering", networkId: "net-1", networkName: "Acme Corp" },
+      ],
+    });
+    const prints: string[] = [];
+    await runCli(["--viva-discover", "--account", "a@example.test"], {
+      env: ENV,
+      loadDotenv: false,
+      print: (m) => prints.push(m),
+      vivaImpl,
+    });
+    expect(prints[0]).toContain("network_name");
+    expect(prints[1]).toContain("Acme Corp");
+  });
+
+  it("--viva-subscribe <networkId>:<communityId> resolves unambiguously", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-colon-"));
+    try {
+      const dbPath = path.join(dir, "lake.db");
+      const db = new Database(dbPath);
+      applyMigrations(db);
+      const store = new SqliteVivaSubscriptionStore(db);
+
+      const auth = makeAuth("tok-colon");
+      const viva = new FakeVivaClient({
+        steps: [
+          {
+            kind: "listNetworksOk",
+            response: [
+              { id: "net-1", name: "Acme", permalink: "acme" },
+              { id: "net-2", name: "Partner", permalink: "partner" },
+            ],
+          },
+          {
+            kind: "listCommunitiesOk",
+            response: [{ id: "com-1", displayName: "Eng", networkId: "net-1" }],
+          },
+          {
+            kind: "listCommunitiesOk",
+            response: [{ id: "com-1", displayName: "Sales", networkId: "net-2" }],
+          },
+        ],
+      });
+
+      // Same community id in two networks — colon format picks net-2:com-1
+      const result = await realViva(
+        makeConfig(dbPath),
+        { action: "subscribe", account: "a@example.test", communityId: "net-2:com-1" },
+        { auth, viva, store },
+      );
+      expect(result.action).toBe("subscribe");
+      const sub = (result as Extract<VivaCliResult, { action: "subscribe" }>).sub;
+      expect(sub.networkId).toBe("net-2");
+      expect(sub.communityId).toBe("com-1");
+      expect(sub.communityName).toBe("Sales");
+
+      db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("--viva-subscribe throws CliUsageError when communityId is ambiguous across networks", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-ambig-"));
+    try {
+      const dbPath = path.join(dir, "lake.db");
+      const db = new Database(dbPath);
+      applyMigrations(db);
+      const store = new SqliteVivaSubscriptionStore(db);
+
+      const auth = makeAuth("tok-ambig");
+      const viva = new FakeVivaClient({
+        steps: [
+          {
+            kind: "listNetworksOk",
+            response: [
+              { id: "net-1", name: "Acme", permalink: "acme" },
+              { id: "net-2", name: "Partner", permalink: "partner" },
+            ],
+          },
+          {
+            kind: "listCommunitiesOk",
+            response: [{ id: "com-dup", displayName: "Eng", networkId: "net-1" }],
+          },
+          {
+            kind: "listCommunitiesOk",
+            response: [{ id: "com-dup", displayName: "Sales", networkId: "net-2" }],
+          },
+        ],
+      });
+
+      await expect(
+        realViva(
+          makeConfig(dbPath),
+          { action: "subscribe", account: "a@example.test", communityId: "com-dup" },
+          { auth, viva, store },
+        ),
+      ).rejects.toBeInstanceOf(CliUsageError);
+
+      db.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

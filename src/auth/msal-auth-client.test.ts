@@ -226,6 +226,37 @@ describe("MsalAuthClient", () => {
     expect(pca.deviceCodeCalls[0]?.scopes).toEqual(["Mail.Read", "Chat.Read"]);
   });
 
+  it("loginWithDeviceCode with scopes override forwards those scopes to acquireTokenByDeviceCode", async () => {
+    const info = makeAccountInfo({ username: "ym@x.invalid", homeAccountId: "h-ym" });
+    const pca = new FakePca({
+      deviceCodeMessage: "enter code",
+      deviceCodeResult: { account: info },
+    });
+    const client = new MsalAuthClient({
+      clientId: "cid",
+      cacheStore: makeCacheStore(),
+      pca: pca as unknown as never,
+    });
+    await client.loginWithDeviceCode(() => {}, {
+      scopes: ["https://api.yammer.com/user_impersonation"],
+    });
+    expect(pca.deviceCodeCalls[0]?.scopes).toEqual([
+      "https://api.yammer.com/user_impersonation",
+    ]);
+  });
+
+  it("loginWithDeviceCode without scopes option uses default Graph scopes", async () => {
+    const info = makeAccountInfo();
+    const pca = new FakePca({ deviceCodeMessage: "msg", deviceCodeResult: { account: info } });
+    const client = new MsalAuthClient({
+      clientId: "cid",
+      cacheStore: makeCacheStore(),
+      pca: pca as unknown as never,
+    });
+    await client.loginWithDeviceCode(() => {});
+    expect(pca.deviceCodeCalls[0]?.scopes).toEqual(["Mail.Read", "Chat.Read"]);
+  });
+
   it("loginWithDeviceCode wraps MSAL failure as AuthError('device-code-failed')", async () => {
     const cause = new Error("user canceled");
     const pca = new FakePca({ deviceCodeError: cause });

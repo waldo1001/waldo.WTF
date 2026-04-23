@@ -10,7 +10,6 @@ import { YAMMER_SCOPE } from "../auth/msal-auth-client.js";
 import {
   GraphRateLimitedError,
   TokenExpiredError,
-  type VivaCommunityListPage,
   type VivaPost,
   type VivaPostPage,
   type VivaThread,
@@ -47,12 +46,12 @@ const thread = (
 
 const threadsPage = (
   value: VivaThread[],
-  nextLink?: string,
+  olderThanCursor?: string,
 ): VivaThreadPage =>
-  nextLink !== undefined ? { value, "@odata.nextLink": nextLink } : { value };
+  olderThanCursor !== undefined ? { value, olderThanCursor } : { value };
 
-const postsPage = (value: VivaPost[], nextLink?: string): VivaPostPage =>
-  nextLink !== undefined ? { value, "@odata.nextLink": nextLink } : { value };
+const postsPage = (value: VivaPost[], olderThanCursor?: string): VivaPostPage =>
+  olderThanCursor !== undefined ? { value, olderThanCursor } : { value };
 
 const makePost = (overrides: Partial<VivaPost> = {}): VivaPost => ({
   id: "p-1",
@@ -152,7 +151,9 @@ describe("syncViva", () => {
     );
   });
 
-  it("uses lastCursorAt as sinceIso on subsequent runs", async () => {
+  it("calls listThreads for each subscribed community on every sync run", async () => {
+    // Slice 3 will implement cursor-based walk (olderThan). For now the stub
+    // fetches a single page unconditionally and lastCursorAt is not forwarded.
     const store = new InMemoryMessageStore();
     const subs = new InMemoryVivaSubscriptionStore();
     await seedSub(subs, { communityId: "com-1" });
@@ -163,18 +164,12 @@ describe("syncViva", () => {
     );
     const clock = new FakeClock(new Date("2026-04-21T12:00:00Z"));
     const viva = new FakeVivaClient({
-      steps: [
-        { kind: "listThreadsOk", response: threadsPage([]) },
-      ],
+      steps: [{ kind: "listThreadsOk", response: threadsPage([]) }],
     });
     const auth = authWithToken();
     await syncViva({ account, auth, viva, store, subs, clock });
     const call = viva.calls.find((c) => c.method === "listThreads");
-    expect(call).toMatchObject({
-      method: "listThreads",
-      communityId: "com-1",
-      sinceIso: "2026-04-21T07:00:00.000Z",
-    });
+    expect(call).toMatchObject({ method: "listThreads", communityId: "com-1" });
   });
 
   it("advances lastCursorAt to the newest post sentAt only after success", async () => {
@@ -284,7 +279,8 @@ describe("syncViva", () => {
     ).rejects.toBeInstanceOf(GraphRateLimitedError);
   });
 
-  it("follows @odata.nextLink across both threads and posts pagination", async () => {
+  it("fetches one page of threads and one page of posts per thread per community", async () => {
+    // Slice 2 stub: single-page fetch only. Slice 3 adds olderThan cursor walk.
     const store = new InMemoryMessageStore();
     const subs = new InMemoryVivaSubscriptionStore();
     await seedSub(subs, { communityId: "com-1" });
@@ -293,36 +289,23 @@ describe("syncViva", () => {
       steps: [
         {
           kind: "listThreadsOk",
-          response: threadsPage(
-            [thread("thr-1")],
-            "https://graph/threads?skip=1",
-          ),
-        },
-        { kind: "listThreadsOk", response: threadsPage([thread("thr-2")]) },
-        {
-          kind: "listPostsOk",
-          response: postsPage(
-            [makePost({ id: "p1", conversationId: "thr-1" })],
-            "https://graph/posts?skip=1",
-          ),
+          response: threadsPage([thread("thr-1"), thread("thr-2")]),
         },
         {
           kind: "listPostsOk",
-          response: postsPage([makePost({ id: "p2", conversationId: "thr-1" })]),
+          response: postsPage([makePost({ id: "p1", conversationId: "thr-1" })]),
         },
         {
           kind: "listPostsOk",
-          response: postsPage([makePost({ id: "p3", conversationId: "thr-2" })]),
+          response: postsPage([makePost({ id: "p2", conversationId: "thr-2" })]),
         },
       ],
     });
     const auth = authWithToken();
     const res = await syncViva({ account, auth, viva, store, subs, clock });
-    expect(res.added).toBe(3);
-    expect(viva.calls.filter((c) => c.method === "listThreads")).toHaveLength(
-      2,
-    );
-    expect(viva.calls.filter((c) => c.method === "listPosts")).toHaveLength(3);
+    expect(res.added).toBe(2);
+    expect(viva.calls.filter((c) => c.method === "listThreads")).toHaveLength(1);
+    expect(viva.calls.filter((c) => c.method === "listPosts")).toHaveLength(2);
   });
 
   it("threads from different communities never share thread_id (community in key)", async () => {
@@ -582,5 +565,138 @@ describe("syncViva", () => {
       (tokenCall as Extract<typeof tokenCall, { method: "getTokenSilent" }>)
         ?.scopes,
     ).toEqual([YAMMER_SCOPE]);
+  });
+
+  // ── Slice 3: cursor-walk tests ──────────────────────────────────────────
+
+  it("walks multiple thread pages using olderThan until empty page", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryVivaSubscriptionStore();
+    await seedSub(subs, { communityId: "com-1" });
+    const clock = new FakeClock(new Date("2026-04-21T12:00:00Z"));
+    const viva = new FakeVivaClient({
+      steps: [
+        // Thread pages — all fetched before any listPosts calls
+        {
+          kind: "listThreadsOk",
+          response: threadsPage(
+            [
+              thread("thr-2", { lastPostedDateTime: "2026-04-21T10:00:00Z" }),
+              thread("thr-1", { lastPostedDateTime: "2026-04-20T10:00:00Z" }),
+            ],
+            "msg-100",
+          ),
+        },
+        {
+          kind: "listThreadsOk",
+          response: threadsPage(
+            [thread("thr-0", { lastPostedDateTime: "2026-04-19T10:00:00Z" })],
+            "msg-50",
+          ),
+        },
+        { kind: "listThreadsOk", response: threadsPage([]) },
+        // Post pages — one per thread in order [thr-2, thr-1, thr-0]
+        {
+          kind: "listPostsOk",
+          response: postsPage([makePost({ id: "p2", conversationId: "thr-2" })]),
+        },
+        {
+          kind: "listPostsOk",
+          response: postsPage([makePost({ id: "p1", conversationId: "thr-1" })]),
+        },
+        {
+          kind: "listPostsOk",
+          response: postsPage([makePost({ id: "p0", conversationId: "thr-0" })]),
+        },
+      ],
+    });
+    const auth = authWithToken();
+    const res = await syncViva({ account, auth, viva, store, subs, clock });
+    expect(res.added).toBe(3);
+    const threadCalls = viva.calls.filter((c) => c.method === "listThreads");
+    expect(threadCalls).toHaveLength(3); // page1, page2, empty page
+    expect(
+      (threadCalls[1] as Extract<(typeof threadCalls)[number], { method: "listThreads" }>).olderThan,
+    ).toBe("msg-100");
+    expect(
+      (threadCalls[2] as Extract<(typeof threadCalls)[number], { method: "listThreads" }>).olderThan,
+    ).toBe("msg-50");
+  });
+
+  it("stops walking threads early when oldest thread in page is at or before lastCursorAt", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryVivaSubscriptionStore();
+    await seedSub(subs, { communityId: "com-1" });
+    // cursor set to 2026-04-20T00:00:00Z
+    await subs.setCursor(account.username, "com-1", new Date("2026-04-20T00:00:00Z"));
+    const clock = new FakeClock(new Date("2026-04-21T12:00:00Z"));
+    const viva = new FakeVivaClient({
+      steps: [
+        {
+          // oldest thread (thr-1 at 2026-04-19) is before cursor → stop after this page
+          kind: "listThreadsOk",
+          response: threadsPage(
+            [
+              thread("thr-2", { lastPostedDateTime: "2026-04-21T08:00:00Z" }),
+              thread("thr-1", { lastPostedDateTime: "2026-04-19T08:00:00Z" }),
+            ],
+            "msg-200",
+          ),
+        },
+        {
+          kind: "listPostsOk",
+          response: postsPage([makePost({ id: "p2", conversationId: "thr-2" })]),
+        },
+        {
+          kind: "listPostsOk",
+          response: postsPage([makePost({ id: "p1", conversationId: "thr-1" })]),
+        },
+        // no third listThreadsOk step needed — should stop after page 1
+      ],
+    });
+    const auth = authWithToken();
+    const res = await syncViva({ account, auth, viva, store, subs, clock });
+    const threadCalls = viva.calls.filter((c) => c.method === "listThreads");
+    expect(threadCalls).toHaveLength(1);
+    // Both threads from the boundary page are still upserted (idempotent upsert is fine)
+    expect(res.added).toBe(2);
+  });
+
+  it("walks multiple post pages for a thread using olderThan", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryVivaSubscriptionStore();
+    await seedSub(subs, { communityId: "com-1" });
+    const clock = new FakeClock(new Date("2026-04-21T12:00:00Z"));
+    const viva = new FakeVivaClient({
+      steps: [
+        { kind: "listThreadsOk", response: threadsPage([thread("thr-1")]) },
+        {
+          kind: "listPostsOk",
+          response: postsPage(
+            [
+              makePost({ id: "p-2", conversationId: "thr-1", createdDateTime: "2026-04-21T09:00:00Z" }),
+              makePost({ id: "p-1", conversationId: "thr-1", createdDateTime: "2026-04-21T08:00:00Z" }),
+            ],
+            "p-50",
+          ),
+        },
+        {
+          kind: "listPostsOk",
+          response: postsPage(
+            [makePost({ id: "p-0", conversationId: "thr-1", createdDateTime: "2026-04-21T07:00:00Z" })],
+            "p-20",
+          ),
+        },
+        { kind: "listPostsOk", response: postsPage([]) },
+      ],
+    });
+    const auth = authWithToken();
+    const res = await syncViva({ account, auth, viva, store, subs, clock });
+    expect(res.added).toBe(3);
+    const postCalls = viva.calls.filter((c) => c.method === "listPosts");
+    expect(postCalls).toHaveLength(3); // page1, page2, empty page
+    expect(
+      (postCalls[1] as Extract<(typeof postCalls)[number], { method: "listPosts" }>).olderThan,
+    ).toBe("p-50");
   });
 });

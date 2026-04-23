@@ -29,7 +29,7 @@ Five tools total. Claude chooses which to call.
 "What's happened recently". Returns rows across all sources and
 accounts, ordered `sent_at DESC`, within the last `hours`. Filter by
 `sources` (`["outlook", "teams", "whatsapp", "viva-engage"]`) or `accounts`
-(`["eric.wauters@dynex.be"]`) to narrow.
+(`["your@email.com"]`) to narrow.
 
 Each message carries an optional `replied: boolean` — true iff the
 latest in-window message in that thread has `fromMe: true` (your own
@@ -200,9 +200,13 @@ Graph and Yammer scopes in a single token request, causing
 `--add-account` to fail with `invalid_grant`. Delete the MSAL cache
 file (`sudo rm /volume1/docker/waldo-wtf/auth/token-cache.json` on
 the NAS) then re-run `--add-account <username>` once per account.
-The Graph scopes (`Mail.Read`, `Chat.Read`) are consented at login;
-the Yammer scope (`api.yammer.com/user_impersonation`) is acquired
-separately on first Viva sync via the multi-resource token chain.
+
+**First `--viva-discover` on any account will show a second device-code
+prompt.** `--add-account` consents the Graph scopes (`Mail.Read`,
+`Chat.Read`). The Yammer scope (`api.yammer.com/user_impersonation`) is
+a different resource and is consented automatically the first time you
+run `--viva-discover` — follow the second device-code URL, sign in with
+the same account, and the token is cached for all subsequent calls.
 
 Viva Engage subscriptions are explicit per `(account, community)` —
 nothing is auto-discovered, so the lake only ingests communities you
@@ -210,21 +214,27 @@ opted into. The CLI lives next to the existing `--steer-*` family.
 
 ```sh
 # List Viva subscriptions for an account
-npm run dev -- --account eric.wauters@dynex.be --viva-list
+npm run dev -- --account your@email.com --viva-list
 
-# Discover: enumerate every community the account can see.
-# Hits Graph directly and paginates across @odata.nextLink.
-npm run dev -- --account eric.wauters@dynex.be --viva-discover
+# Discover: enumerate every Yammer network + community the account can see,
+# including external/guest networks (which the Graph API cannot return).
+# On first run triggers a Yammer consent device-code prompt.
+npm run dev -- --account your@email.com --viva-discover
 
-# Subscribe: pick an id from --viva-discover. The CLI re-queries Graph
-# to capture the (networkId, networkName, displayName) so re-syncs don't
-# have to rediscover the network. Unknown ids fail fast with a pointer
-# back to --viva-discover.
-npm run dev -- --account eric.wauters@dynex.be \
+# Subscribe: pick a community_id from --viva-discover. The CLI re-queries
+# Yammer to capture (networkId, networkName, displayName) so re-syncs
+# don't need to rediscover. Unknown ids fail fast with a pointer back to
+# --viva-discover.
+npm run dev -- --account your@email.com \
   --viva-subscribe 00000000-0000-0000-0000-000000000001
 
+# If the same community_id appears in two networks, use the colon format
+# to disambiguate: <networkId>:<communityId>
+npm run dev -- --account your@email.com \
+  --viva-subscribe net-123:00000000-0000-0000-0000-000000000001
+
 # Unsubscribe (rows already in the lake stay; only stops new pulls)
-npm run dev -- --account eric.wauters@dynex.be \
+npm run dev -- --account your@email.com \
   --viva-unsubscribe 00000000-0000-0000-0000-000000000001
 ```
 

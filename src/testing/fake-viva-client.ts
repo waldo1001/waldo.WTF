@@ -1,12 +1,14 @@
 import type {
   VivaClient,
-  VivaCommunityListPage,
+  VivaCommunity,
+  VivaNetwork,
   VivaPostPage,
   VivaThreadPage,
 } from "../sources/viva.js";
 
 export type FakeVivaStep =
-  | { kind: "listCommunitiesOk"; response: VivaCommunityListPage }
+  | { kind: "listNetworksOk"; response: readonly VivaNetwork[] }
+  | { kind: "listCommunitiesOk"; response: readonly VivaCommunity[] }
   | { kind: "listThreadsOk"; response: VivaThreadPage }
   | { kind: "listPostsOk"; response: VivaPostPage }
   | { kind: "error"; error: Error };
@@ -16,20 +18,19 @@ export interface FakeVivaScript {
 }
 
 export type FakeVivaCall =
-  | { method: "listCommunities"; token: string; nextLink?: string }
+  | { method: "listNetworks"; token: string }
+  | { method: "listCommunities"; token: string; networkId: string }
   | {
       method: "listThreads";
       token: string;
       communityId: string;
-      sinceIso?: string;
-      nextLink?: string;
+      olderThan?: string;
     }
   | {
       method: "listPosts";
       token: string;
-      communityId: string;
       threadId: string;
-      nextLink?: string;
+      olderThan?: string;
     };
 
 export class FakeVivaClient implements VivaClient {
@@ -38,13 +39,23 @@ export class FakeVivaClient implements VivaClient {
 
   constructor(private readonly script: FakeVivaScript) {}
 
+  async listNetworks(token: string): Promise<readonly VivaNetwork[]> {
+    this.calls.push({ method: "listNetworks", token });
+    const step = this.nextStep("listNetworks");
+    if (step.kind === "error") throw step.error;
+    if (step.kind !== "listNetworksOk") {
+      throw new Error(
+        `FakeVivaClient: expected listNetworksOk step, got ${step.kind}`,
+      );
+    }
+    return step.response;
+  }
+
   async listCommunities(
     token: string,
-    nextLink?: string,
-  ): Promise<VivaCommunityListPage> {
-    const call: FakeVivaCall = { method: "listCommunities", token };
-    if (nextLink !== undefined) call.nextLink = nextLink;
-    this.calls.push(call);
+    networkId: string,
+  ): Promise<readonly VivaCommunity[]> {
+    this.calls.push({ method: "listCommunities", token, networkId });
     const step = this.nextStep("listCommunities");
     if (step.kind === "error") throw step.error;
     if (step.kind !== "listCommunitiesOk") {
@@ -58,11 +69,11 @@ export class FakeVivaClient implements VivaClient {
   async listThreads(
     token: string,
     communityId: string,
-    opts: { sinceIso?: string; nextLink?: string },
+    opts: { olderThan?: string },
   ): Promise<VivaThreadPage> {
     const call: FakeVivaCall = { method: "listThreads", token, communityId };
-    if (opts.sinceIso !== undefined) call.sinceIso = opts.sinceIso;
-    if (opts.nextLink !== undefined) call.nextLink = opts.nextLink;
+    if (opts.olderThan !== undefined)
+      (call as { olderThan?: string }).olderThan = opts.olderThan;
     this.calls.push(call);
     const step = this.nextStep("listThreads");
     if (step.kind === "error") throw step.error;
@@ -76,17 +87,12 @@ export class FakeVivaClient implements VivaClient {
 
   async listPosts(
     token: string,
-    communityId: string,
     threadId: string,
-    opts: { nextLink?: string },
+    opts: { olderThan?: string },
   ): Promise<VivaPostPage> {
-    const call: FakeVivaCall = {
-      method: "listPosts",
-      token,
-      communityId,
-      threadId,
-    };
-    if (opts.nextLink !== undefined) call.nextLink = opts.nextLink;
+    const call: FakeVivaCall = { method: "listPosts", token, threadId };
+    if (opts.olderThan !== undefined)
+      (call as { olderThan?: string }).olderThan = opts.olderThan;
     this.calls.push(call);
     const step = this.nextStep("listPosts");
     if (step.kind === "error") throw step.error;

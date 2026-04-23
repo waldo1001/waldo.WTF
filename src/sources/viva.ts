@@ -1,3 +1,9 @@
+export interface VivaNetwork {
+  readonly id: string;
+  readonly name: string;
+  readonly permalink: string;
+}
+
 export interface VivaCommunity {
   readonly id: string;
   readonly displayName: string;
@@ -30,45 +36,46 @@ export interface VivaThread {
   readonly lastPostedDateTime?: string;
 }
 
-export interface VivaCommunityListPage {
-  readonly value: readonly VivaCommunity[];
-  readonly "@odata.nextLink"?: string;
-}
-
 export interface VivaThreadPage {
   readonly value: readonly VivaThread[];
-  readonly "@odata.nextLink"?: string;
+  /** Oldest message id from this page — pass as `olderThan` to get the next page. Undefined = last page. */
+  readonly olderThanCursor?: string;
 }
 
 export interface VivaPostPage {
   readonly value: readonly VivaPost[];
-  readonly "@odata.nextLink"?: string;
+  /** Oldest message id from this page — pass as `olderThan` to get the next page. Undefined = last page. */
+  readonly olderThanCursor?: string;
 }
 
 /**
- * Polling Viva Engage client. Microsoft Graph beta `/employeeExperience`
- * endpoints. No deltaLink — pagination via `@odata.nextLink`, incremental
- * sync via per-community timestamp cursor stored in `viva_subscriptions`.
+ * Yammer REST-backed Viva Engage client.
+ * Token audience: https://api.yammer.com/
+ * Request host: www.yammer.com/api/v1
  *
  * Error mapping (real HTTP impl translates; fakes throw directly):
  * - HTTP 401 → `TokenExpiredError`
- * - HTTP 429 → `GraphRateLimitedError`
+ * - HTTP 429 → `GraphRateLimitedError` (retryAfterSeconds, default 6s for Yammer)
  */
 export interface VivaClient {
+  /** Returns all Yammer networks visible to this token. */
+  listNetworks(token: string): Promise<readonly VivaNetwork[]>;
+  /** Returns all communities (groups) in a network; paginates internally. */
   listCommunities(
     token: string,
-    nextLink?: string,
-  ): Promise<VivaCommunityListPage>;
+    networkId: string,
+  ): Promise<readonly VivaCommunity[]>;
+  /** Returns a page of top-level threads in a community, newest-first. */
   listThreads(
     token: string,
     communityId: string,
-    opts: { sinceIso?: string; nextLink?: string },
+    opts: { olderThan?: string },
   ): Promise<VivaThreadPage>;
+  /** Returns a page of posts (replies) in a thread, newest-first. */
   listPosts(
     token: string,
-    communityId: string,
     threadId: string,
-    opts: { nextLink?: string },
+    opts: { olderThan?: string },
   ): Promise<VivaPostPage>;
 }
 

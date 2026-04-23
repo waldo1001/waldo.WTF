@@ -8,7 +8,7 @@ export type FakeAuthClientCall =
       account: Account;
       scopes?: readonly string[];
     }
-  | { method: "loginWithDeviceCode" };
+  | { method: "loginWithDeviceCode"; scopes?: readonly string[] };
 
 export interface FakeAuthClientOptions {
   accounts: readonly Account[];
@@ -49,8 +49,13 @@ export class FakeAuthClient implements AuthClient {
 
   async loginWithDeviceCode(
     onPrompt: (message: string) => void,
+    options?: { scopes?: readonly string[] },
   ): Promise<Account> {
-    this.calls.push({ method: "loginWithDeviceCode" });
+    const call: FakeAuthClientCall =
+      options?.scopes !== undefined
+        ? { method: "loginWithDeviceCode", scopes: options.scopes }
+        : { method: "loginWithDeviceCode" };
+    this.calls.push(call);
     onPrompt(
       this.opts.deviceCodeMessage ??
         "FakeAuthClient: visit https://example.invalid/devicelogin",

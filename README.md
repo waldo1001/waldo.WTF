@@ -42,26 +42,26 @@ built.
 
 One Node + TypeScript process, one SQLite file (WAL mode, via
 `better-sqlite3`), two logical components sharing the db: a sync worker
-(MSAL-authed Microsoft Graph delta queries, 5-minute polling, multi-account)
-and an HTTP MCP server (bearer-token auth, read-only tools:
-`get_recent_activity`, `search`, `get_thread`, `list_accounts`,
-`list_threads`, `get_sync_status`, plus four steering tools that write
-only to the local `steering_rules` table). Runs locally during development, eventually on a
-Synology NAS behind Tailscale. Claude does all the summarizing — tools
-return raw rows, Claude reasons over them.
+(MSAL-authed Graph delta queries for mail/Teams + Yammer REST for Viva
+Engage, 5-minute polling, multi-account) and an HTTP MCP server
+(bearer-token auth, read-only tools: `get_recent_activity`, `search`,
+`get_thread`, `list_accounts`, `list_threads`, `get_sync_status`, plus
+four steering tools that write only to the local `steering_rules`
+table). Runs locally during development, on a Synology NAS behind
+Tailscale in production. Claude does all the summarizing — tools return
+raw rows, Claude reasons over them.
 
 Full architecture and decision rationale: [project brief §3–4](waldo.WTF-project-brief.md).
 
 ## Status
 
-Weekend 3 underway. Weekend 2 closed with all core seams in place and
-`main()` wiring real MSAL + SQLite + `HttpGraphClient` behind the
-`node:http` transport shell. Weekend 3 has lit up the first two MCP
-tools — `get_recent_activity(hours, sources?, accounts?)` and
-`get_sync_status()` (per-`(account, source)` health with a 15-min
-`stale` flag) — via a hand-rolled JSON-RPC 2.0 dispatch on `POST /`
-(adopting `@modelcontextprotocol/sdk` is deferred until 2–3 tools
-exist). Next: `search` (FTS5) and Claude Desktop wiring.
+Weekends 3–8 complete. All four message sources are live and syncing on
+the NAS: Outlook (mail + sent), Teams (1:1 + group), Viva Engage (Yammer
+REST, including external/guest networks), and WhatsApp (manual export
+watcher). Full MCP surface operational — six read tools plus four
+steering tools — behind both static-bearer (Claude Desktop) and OAuth
+2.1 (claude.ai custom connector) auth paths. Next: daily use and
+iteration; blog post.
 
 Live progress: [PROGRESS.md](PROGRESS.md). Recent changes:
 [docs/changelog.md](docs/changelog.md).

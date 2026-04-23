@@ -14,7 +14,7 @@ import { HttpGraphClient } from "./sources/http-graph-client.js";
 import type { TeamsClient } from "./sources/teams.js";
 import { HttpTeamsClient } from "./sources/http-teams-client.js";
 import type { VivaClient } from "./sources/viva.js";
-import { HttpVivaClient } from "./sources/http-viva-client.js";
+import { HttpYammerClient } from "./sources/http-yammer-client.js";
 import { openDatabase } from "./store/open-database.js";
 import { SqliteMessageStore } from "./store/sqlite-message-store.js";
 import {
@@ -134,7 +134,7 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
     });
   const viva: VivaClient =
     overrides.viva ??
-    new HttpVivaClient({
+    new HttpYammerClient({
       fetch: (input, init) => globalThis.fetch(input, init),
     });
   const vivaSubs: VivaSubscriptionStore =

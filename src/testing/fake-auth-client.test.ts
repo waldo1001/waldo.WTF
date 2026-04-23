@@ -101,6 +101,28 @@ describe("FakeAuthClient", () => {
     });
   });
 
+  it("loginWithDeviceCode call records scopes when provided", async () => {
+    const client = new FakeAuthClient({
+      accounts: [],
+      deviceCodeResult: bob,
+    });
+    await client.loginWithDeviceCode(() => {}, {
+      scopes: ["https://api.yammer.com/user_impersonation"],
+    });
+    expect(client.calls).toEqual([
+      {
+        method: "loginWithDeviceCode",
+        scopes: ["https://api.yammer.com/user_impersonation"],
+      },
+    ]);
+  });
+
+  it("loginWithDeviceCode call omits scopes field when no options provided", async () => {
+    const client = new FakeAuthClient({ accounts: [], deviceCodeResult: bob });
+    await client.loginWithDeviceCode(() => {});
+    expect(client.calls).toEqual([{ method: "loginWithDeviceCode" }]);
+  });
+
   it("loginWithDeviceCode throws AuthError(device-code-failed) when not scripted at all", async () => {
     const client = new FakeAuthClient({ accounts: [] });
     await expect(client.loginWithDeviceCode(() => {})).rejects.toBeInstanceOf(

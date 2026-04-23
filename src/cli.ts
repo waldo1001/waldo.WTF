@@ -4,7 +4,7 @@ import { loadConfig, type Config } from "./config.js";
 import { MsalAuthClient, YAMMER_SCOPE } from "./auth/msal-auth-client.js";
 import { TokenCacheStore } from "./auth/token-cache-store.js";
 import type { AuthClient } from "./auth/auth-client.js";
-import type { Account } from "./auth/types.js";
+import { AuthError, type AccessToken, type Account } from "./auth/types.js";
 import { main, type MainOptions, type MainResult } from "./index.js";
 import { nodeFileSystem } from "./fs-node.js";
 import type {
@@ -117,6 +117,7 @@ export interface VivaDeps {
   readonly auth?: AuthClient;
   readonly viva?: VivaClient;
   readonly store?: VivaSubscriptionStore;
+  readonly print?: PrintFn;
 }
 
 export type VivaImpl = (
@@ -453,9 +454,9 @@ function reportVivaResult(result: VivaCliResult, print: PrintFn): void {
         print("no viva communities visible to this account");
         return;
       }
-      print(["community_id", "network_id", "display_name"].join("\t"));
+      print(["community_id", "network_id", "network_name", "display_name"].join("\t"));
       for (const c of result.communities) {
-        print([c.id, c.networkId, c.displayName].join("\t"));
+        print([c.id, c.networkId, c.networkName ?? "-", c.displayName].join("\t"));
       }
       return;
     case "subscribe":
@@ -584,8 +585,8 @@ async function buildDefaultVivaAuth(config: Config): Promise<AuthClient> {
 }
 
 async function buildDefaultVivaClient(): Promise<VivaClient> {
-  const { HttpVivaClient } = await import("./sources/http-viva-client.js");
-  return new HttpVivaClient({ fetch: globalThis.fetch.bind(globalThis) });
+  const { HttpYammerClient } = await import("./sources/http-yammer-client.js");
+  return new HttpYammerClient({ fetch: globalThis.fetch.bind(globalThis) });
 }
 
 async function resolveVivaAccount(
@@ -607,13 +608,14 @@ async function discoverAllCommunities(
   viva: VivaClient,
   token: string,
 ): Promise<readonly VivaCommunity[]> {
+  const networks = await viva.listNetworks(token);
   const all: VivaCommunity[] = [];
-  let nextLink: string | undefined;
-  do {
-    const page = await viva.listCommunities(token, nextLink);
-    all.push(...page.value);
-    nextLink = page["@odata.nextLink"];
-  } while (nextLink !== undefined);
+  for (const network of networks) {
+    const communities = await viva.listCommunities(token, network.id);
+    for (const c of communities) {
+      all.push({ ...c, networkName: c.networkName ?? network.name });
+    }
+  }
   return all;
 }
 
@@ -622,9 +624,23 @@ async function discoverForAccount(
   deps: VivaDeps,
   accountUsername: string,
 ): Promise<{ readonly communities: readonly VivaCommunity[] }> {
+  /* c8 ignore next -- default console.log only in production */
+  const print: PrintFn = deps.print ?? ((m) => console.log(m));
   const auth = deps.auth ?? (await buildDefaultVivaAuth(config));
   const account = await resolveVivaAccount(auth, accountUsername);
-  const accessToken = await auth.getTokenSilent(account, { scopes: [YAMMER_SCOPE] });
+
+  let accessToken: AccessToken;
+  try {
+    accessToken = await auth.getTokenSilent(account, { scopes: [YAMMER_SCOPE] });
+  } catch (err) {
+    if (!(err instanceof AuthError) || err.kind !== "silent-failed") throw err;
+    print(
+      "Yammer scope not yet consented — starting device-code login for Yammer...",
+    );
+    await auth.loginWithDeviceCode(print, { scopes: [YAMMER_SCOPE] });
+    accessToken = await auth.getTokenSilent(account, { scopes: [YAMMER_SCOPE] });
+  }
+
   const viva = deps.viva ?? (await buildDefaultVivaClient());
   const communities = await discoverAllCommunities(viva, accessToken.token);
   return { communities };
@@ -680,13 +696,37 @@ export async function realViva(
           deps,
           command.account,
         );
-        const match = communities.find(
-          (c) => c.id.toLowerCase() === command.communityId.toLowerCase(),
-        );
-        if (!match) {
-          throw new CliUsageError(
-            `unknown community: ${command.communityId} — run --viva-discover --account ${command.account} to list available communities`,
+        const colonIdx = command.communityId.indexOf(":");
+        let match: VivaCommunity | undefined;
+        if (colonIdx !== -1) {
+          const networkId = command.communityId.slice(0, colonIdx);
+          const communityId = command.communityId.slice(colonIdx + 1);
+          match = communities.find(
+            (c) =>
+              c.networkId.toLowerCase() === networkId.toLowerCase() &&
+              c.id.toLowerCase() === communityId.toLowerCase(),
           );
+          if (!match) {
+            throw new CliUsageError(
+              `unknown community: ${command.communityId} — run --viva-discover --account ${command.account} to list available communities`,
+            );
+          }
+        } else {
+          const matches = communities.filter(
+            (c) => c.id.toLowerCase() === command.communityId.toLowerCase(),
+          );
+          if (matches.length === 0) {
+            throw new CliUsageError(
+              `unknown community: ${command.communityId} — run --viva-discover --account ${command.account} to list available communities`,
+            );
+          }
+          if (matches.length > 1) {
+            const networkIds = matches.map((c) => c.networkId).join(", ");
+            throw new CliUsageError(
+              `ambiguous community id: ${command.communityId} appears in networks [${networkIds}] — use --viva-subscribe <networkId>:<communityId>`,
+            );
+          }
+          match = matches[0]!;
         }
         const sub = await store!.subscribe({
           account: command.account,
