@@ -4,6 +4,7 @@ import {
   DEFAULT_AUTHORITY,
   SCOPES,
   YAMMER_SCOPE,
+  YAMMER_PUBLIC_CLIENT_ID,
 } from "./msal-auth-client.js";
 import { AuthError, type Account } from "./types.js";
 import { TokenCacheStore } from "./token-cache-store.js";
@@ -87,6 +88,89 @@ describe("MsalAuthClient", () => {
     expect(SCOPES).toContain("Chat.Read");
     expect(SCOPES).not.toContain(YAMMER_SCOPE);
     expect(SCOPES).not.toContain("Community.Read.All");
+  });
+
+  it("YAMMER_PUBLIC_CLIENT_ID is the Azure CLI public client id", () => {
+    // 04b07795-8ddb-461a-bbee-02f9e1bf7b46 is the well-known first-party
+    // Azure CLI public client. It is pre-consented globally and bypasses
+    // admin-consent walls in external tenants where our own app registration
+    // would be blocked. Source: Microsoft Azure CLI repo (public knowledge).
+    expect(YAMMER_PUBLIC_CLIENT_ID).toBe("04b07795-8ddb-461a-bbee-02f9e1bf7b46");
+  });
+
+  it("authority option is stored and readable on the client", () => {
+    const custom = "https://login.microsoftonline.com/cccccccc-cccc-cccc-cccc-cccccccccccc/";
+    const pca = new FakePca({});
+    const client = new MsalAuthClient({
+      clientId: "cid",
+      authority: custom,
+      cacheStore: makeCacheStore(),
+      pca: pca as unknown as never,
+    });
+    expect(client.authority).toBe(custom);
+  });
+
+  it("authority defaults to DEFAULT_AUTHORITY when not provided", () => {
+    const pca = new FakePca({});
+    const client = new MsalAuthClient({
+      clientId: "cid",
+      cacheStore: makeCacheStore(),
+      pca: pca as unknown as never,
+    });
+    expect(client.authority).toBe(DEFAULT_AUTHORITY);
+  });
+
+  it("getTokenSilent passes account.tenantId through to acquireTokenSilent", async () => {
+    const tenantA = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const tenantB = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    const infoA = makeAccountInfo({ tenantId: tenantA, homeAccountId: `oid.${tenantA}` });
+    const infoB = makeAccountInfo({ tenantId: tenantB, homeAccountId: `oid.${tenantB}` });
+    const expires = new Date("2026-05-01T10:00:00Z");
+    const pca = new FakePca({
+      silentResult: { accessToken: "tok-A", expiresOn: expires, account: infoA },
+    });
+    const client = new MsalAuthClient({
+      clientId: "cid",
+      cacheStore: makeCacheStore(),
+      pca: pca as unknown as never,
+    });
+    await client.getTokenSilent({
+      username: infoA.username,
+      homeAccountId: infoA.homeAccountId,
+      tenantId: tenantA,
+    });
+    await client.getTokenSilent({
+      username: infoB.username,
+      homeAccountId: infoB.homeAccountId,
+      tenantId: tenantB,
+    });
+    expect(pca.silentCalls).toHaveLength(2);
+    expect(pca.silentCalls[0]?.account.tenantId).toBe(tenantA);
+    expect(pca.silentCalls[1]?.account.tenantId).toBe(tenantB);
+    // Same username, different tenant — isolation via tenantId is required
+    // so MSAL's cache picks the right entry.
+    expect(pca.silentCalls[0]?.account.username).toBe(pca.silentCalls[1]?.account.username);
+  });
+
+  it("loginWithDeviceCode returns Account with tenantId from the MSAL result", async () => {
+    const tenantGuid = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+    const info = makeAccountInfo({
+      username: "guest@example.invalid",
+      homeAccountId: `oid.${tenantGuid}`,
+      tenantId: tenantGuid,
+    });
+    const pca = new FakePca({
+      deviceCodeMessage: "visit https://example.invalid",
+      deviceCodeResult: { account: info },
+    });
+    const client = new MsalAuthClient({
+      clientId: "cid",
+      cacheStore: makeCacheStore(),
+      pca: pca as unknown as never,
+    });
+    const account = await client.loginWithDeviceCode(() => {});
+    expect(account.tenantId).toBe(tenantGuid);
+    expect(account.homeAccountId).toBe(`oid.${tenantGuid}`);
   });
 
   it("listAccounts maps MSAL AccountInfo[] to Account[] preserving order", async () => {

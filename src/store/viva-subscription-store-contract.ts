@@ -210,6 +210,31 @@ export function runVivaSubscriptionStoreContract(
       ).toBeNull();
     });
 
+    it("subscribe persists tenantId when provided", async () => {
+      const store = await factory();
+      const sub = await store.subscribe({
+        account: "a@example.test",
+        tenantId: "tenant-aaa",
+        networkId: "net-1",
+        communityId: "com-1",
+      });
+      expect(sub.tenantId).toBe("tenant-aaa");
+      const [row] = await store.listForAccount("a@example.test");
+      expect(row?.tenantId).toBe("tenant-aaa");
+    });
+
+    it("subscribe without tenantId leaves tenantId undefined on the row", async () => {
+      const store = await factory();
+      const sub = await store.subscribe({
+        account: "a@example.test",
+        networkId: "net-1",
+        communityId: "com-1",
+      });
+      expect(sub.tenantId).toBeUndefined();
+      const [row] = await store.listForAccount("a@example.test");
+      expect(row?.tenantId).toBeUndefined();
+    });
+
     it("listEnabledForAccount returns only enabled rows", async () => {
       const store = await factory();
       await store.subscribe({

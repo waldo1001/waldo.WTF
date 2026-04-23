@@ -11,6 +11,14 @@ export const DEFAULT_AUTHORITY = "https://login.microsoftonline.com/common";
 export const YAMMER_SCOPE = "https://api.yammer.com/user_impersonation";
 export const SCOPES = ["Mail.Read", "Chat.Read"] as const;
 
+// Azure CLI's public first-party client ID. It is pre-consented globally by
+// Microsoft, which means device-code login against external tenants where our
+// own app registration would be blocked by "Admin consent required" works
+// without any admin intervention. Used exclusively for the Yammer/Viva Engage
+// per-tenant auth path — Outlook/Teams still use the project's own clientId.
+// Source: public Azure CLI repository; this identifier is not a secret.
+export const YAMMER_PUBLIC_CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46";
+
 interface MsalAccountInfo {
   readonly username: string;
   readonly homeAccountId: string;
@@ -67,8 +75,10 @@ const toAccount = (info: MsalAccountInfo): Account => ({
 
 export class MsalAuthClient implements AuthClient {
   private readonly pca: MsalLikePca;
+  readonly authority: string;
 
   constructor(opts: MsalAuthClientOptions) {
+    this.authority = opts.authority ?? DEFAULT_AUTHORITY;
     if (opts.pca) {
       this.pca = opts.pca;
       return;
@@ -76,7 +86,7 @@ export class MsalAuthClient implements AuthClient {
     const real = new PublicClientApplication({
       auth: {
         clientId: opts.clientId,
-        authority: opts.authority ?? DEFAULT_AUTHORITY,
+        authority: this.authority,
       },
       cache: {
         cachePlugin: MsalAuthClient.buildCachePlugin(opts.cacheStore),

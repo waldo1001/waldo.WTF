@@ -1,6 +1,6 @@
 import type { Database } from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 12;
+export const CURRENT_SCHEMA_VERSION = 13;
 
 const MIGRATION_1 = `
 CREATE TABLE IF NOT EXISTS messages (
@@ -214,6 +214,18 @@ CREATE INDEX IF NOT EXISTS idx_viva_subs_account
   ON viva_subscriptions(account, enabled);
 `;
 
+// v13 threads the Entra tenant id through Viva subscriptions so the sync loop
+// can acquire a per-tenant Yammer token when syncing externally-joined
+// communities. NULL = legacy home-tenant row (treat as default authority).
+function migrateV13(db: Database): void {
+  const cols = db.prepare("PRAGMA table_info(viva_subscriptions)").all() as {
+    name: string;
+  }[];
+  if (!cols.some((c) => c.name === "tenant_id")) {
+    db.exec("ALTER TABLE viva_subscriptions ADD COLUMN tenant_id TEXT");
+  }
+}
+
 export function applyMigrations(db: Database): void {
   const current = (
     db.prepare("PRAGMA user_version").get() as { user_version: number }
@@ -257,6 +269,9 @@ export function applyMigrations(db: Database): void {
     }
     if (current < 12) {
       db.exec(MIGRATION_12);
+    }
+    if (current < 13) {
+      migrateV13(db);
     }
     db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
   });

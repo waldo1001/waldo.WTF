@@ -102,32 +102,30 @@ export class HttpYammerClient implements VivaClient {
   }
 
   async listCommunities(token: string): Promise<readonly VivaCommunity[]> {
-    const all: VivaCommunity[] = [];
-    let page = 1;
-    for (;;) {
-      const text = await fetchAndCheck(
-        this.fetch,
-        `${BASE}/groups.json?mine=1&page=${page}`,
-        token,
-      );
-      const raw = parseYammer(text) as Array<{
-        id: number;
+    // Uses /users/current.json?include_group_memberships=true instead of
+    // /groups.json?mine=1 — the latter returns 403 NOT_ALLOWED_FOR_AAD_GUEST
+    // for B2B guest identities. The user-scoped endpoint works for guests
+    // and home-tenant users alike, in one call with no pagination.
+    const text = await fetchAndCheck(
+      this.fetch,
+      `${BASE}/users/current.json?include_group_memberships=true`,
+      token,
+    );
+    const raw = parseYammer(text) as {
+      group_memberships?: ReadonlyArray<{
+        id: number | string;
         full_name: string;
-        network_id: number;
+        network_id: number | string;
         description?: string;
       }>;
-      if (raw.length === 0) break;
-      for (const g of raw) {
-        all.push({
-          id: sid(g.id),
-          displayName: g.full_name,
-          networkId: sid(g.network_id),
-          ...(g.description !== undefined && { description: g.description }),
-        });
-      }
-      page += 1;
-    }
-    return all;
+    };
+    const memberships = raw.group_memberships ?? [];
+    return memberships.map((g) => ({
+      id: sid(g.id),
+      displayName: g.full_name,
+      networkId: sid(g.network_id),
+      ...(g.description !== undefined && { description: g.description }),
+    }));
   }
 
   async listThreads(

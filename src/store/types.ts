@@ -118,6 +118,7 @@ export interface AddSteeringRuleInput {
 
 export interface VivaSubscription {
   readonly account: string;
+  readonly tenantId?: string;
   readonly networkId: string;
   readonly networkName?: string;
   readonly communityId: string;
@@ -129,6 +130,7 @@ export interface VivaSubscription {
 
 export interface AddVivaSubscriptionInput {
   readonly account: string;
+  readonly tenantId?: string;
   readonly networkId: string;
   readonly networkName?: string;
   readonly communityId: string;

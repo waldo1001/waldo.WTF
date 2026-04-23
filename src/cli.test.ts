@@ -3,7 +3,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import Database from "better-sqlite3";
-import { runCli, addAccount, CliUsageError, realViva } from "./cli.js";
+import {
+  runCli,
+  addAccount,
+  CliUsageError,
+  realViva,
+  vivaAuthorityFor,
+} from "./cli.js";
 import type {
   SteerCommand,
   SteerCliResult,
@@ -25,6 +31,8 @@ import { SqliteSteeringStore } from "./store/steering-store.js";
 import type { AddSteeringRuleInput, SteeringRule } from "./store/types.js";
 import { FakeClock } from "./testing/fake-clock.js";
 import { YAMMER_SCOPE } from "./auth/msal-auth-client.js";
+
+const VALID_TENANT = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 
 const ACCT: Account = {
   username: "new.user@example.invalid",
@@ -82,6 +90,85 @@ describe("runCli", () => {
         print: () => {},
       }),
     ).rejects.toBeInstanceOf(ConfigError);
+  });
+
+  it("--add-account --tenant <guid> logs in with the Yammer scope", async () => {
+    const auth = new FakeAuthClient({
+      accounts: [],
+      deviceCodeResult: ACCT,
+      deviceCodeMessage: "device code prompt",
+    });
+    await runCli(
+      ["--add-account", "--tenant", VALID_TENANT],
+      { env: ENV, loadDotenv: false, auth, print: () => {} },
+    );
+    const loginCall = auth.calls.find(
+      (c) => c.method === "loginWithDeviceCode",
+    );
+    expect(loginCall).toBeDefined();
+    expect(
+      (
+        loginCall as Extract<
+          typeof loginCall,
+          { method: "loginWithDeviceCode" }
+        >
+      )?.scopes,
+    ).toEqual([YAMMER_SCOPE]);
+  });
+
+  it("--add-account without --tenant does not request the Yammer scope", async () => {
+    const auth = new FakeAuthClient({
+      accounts: [],
+      deviceCodeResult: ACCT,
+    });
+    await runCli(["--add-account"], {
+      env: ENV,
+      loadDotenv: false,
+      auth,
+      print: () => {},
+    });
+    const loginCall = auth.calls.find(
+      (c) => c.method === "loginWithDeviceCode",
+    );
+    expect(
+      (
+        loginCall as Extract<
+          typeof loginCall,
+          { method: "loginWithDeviceCode" }
+        >
+      )?.scopes,
+    ).toBeUndefined();
+  });
+
+  it("--add-account --tenant <bad-guid> rejects with CliUsageError", async () => {
+    const auth = new FakeAuthClient({
+      accounts: [],
+      deviceCodeResult: ACCT,
+    });
+    await expect(
+      runCli(["--add-account", "--tenant", "not-a-guid"], {
+        env: ENV,
+        loadDotenv: false,
+        auth,
+        print: () => {},
+      }),
+    ).rejects.toBeInstanceOf(CliUsageError);
+  });
+
+  it("vivaAuthorityFor builds per-tenant MSAL authority URL", () => {
+    expect(vivaAuthorityFor(VALID_TENANT)).toBe(
+      `https://login.microsoftonline.com/${VALID_TENANT}/`,
+    );
+  });
+
+  it("--tenant without --add-account is a usage error", async () => {
+    await expect(
+      runCli(["--tenant", VALID_TENANT], {
+        env: ENV,
+        loadDotenv: false,
+        print: () => {},
+      }),
+    ).rejects.toBeInstanceOf(CliUsageError);
   });
 
   it("throws CliUsageError on an unknown flag", async () => {
@@ -1430,6 +1517,217 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
     }
   });
 
+  // ── Slice 4b-2: cross-tenant subscribe disambiguation ─────────────
+
+  it("--viva-subscribe tenantId:networkId:communityId resolves across tenants", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-3part-"));
+    try {
+      const dbPath = path.join(dir, "lake.db");
+      const db = new Database(dbPath);
+      applyMigrations(db);
+      const store = new SqliteVivaSubscriptionStore(db);
+
+      const HOME_ACCT: Account = {
+        username: "a@example.test",
+        homeAccountId: "oid-1.tenant-home",
+        tenantId: "tenant-home",
+      };
+      const GUEST_ACCT: Account = {
+        username: "a@example.test",
+        homeAccountId: "oid-2.tenant-guest",
+        tenantId: "tenant-guest",
+      };
+      const auth = new FakeAuthClient({
+        accounts: [HOME_ACCT, GUEST_ACCT],
+        tokens: new Map([
+          [
+            HOME_ACCT.homeAccountId,
+            {
+              token: "tok-home",
+              expiresOn: new Date("2099-01-01T00:00:00Z"),
+              account: HOME_ACCT,
+            },
+          ],
+          [
+            GUEST_ACCT.homeAccountId,
+            {
+              token: "tok-guest",
+              expiresOn: new Date("2099-01-01T00:00:00Z"),
+              account: GUEST_ACCT,
+            },
+          ],
+        ]),
+      });
+      const viva = new FakeVivaClient({
+        steps: [
+          {
+            kind: "listNetworksOk",
+            response: [{ id: "net-home", name: "Dynex", permalink: "dynex" }],
+          },
+          {
+            kind: "listCommunitiesOk",
+            response: [
+              { id: "com-dup", displayName: "HomeDup", networkId: "net-home" },
+            ],
+          },
+          {
+            kind: "listNetworksOk",
+            response: [{ id: "net-107", name: "Microsoft", permalink: "ms" }],
+          },
+          {
+            kind: "listCommunitiesOk",
+            response: [
+              { id: "com-dup", displayName: "GuestDup", networkId: "net-107" },
+            ],
+          },
+        ],
+      });
+
+      const result = await realViva(
+        makeConfig(dbPath),
+        {
+          action: "subscribe",
+          account: "a@example.test",
+          communityId: "tenant-guest:net-107:com-dup",
+        },
+        { auth, viva, store },
+      );
+      expect(result.action).toBe("subscribe");
+      const sub = (result as Extract<VivaCliResult, { action: "subscribe" }>).sub;
+      expect(sub.tenantId).toBe("tenant-guest");
+      expect(sub.networkId).toBe("net-107");
+      expect(sub.communityId).toBe("com-dup");
+      expect(sub.communityName).toBe("GuestDup");
+
+      const rows = await store.listForAccount("a@example.test");
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.tenantId).toBe("tenant-guest");
+      db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("--viva-subscribe ambiguous community across tenants throws CliUsageError", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-tambig-"));
+    try {
+      const dbPath = path.join(dir, "lake.db");
+      const db = new Database(dbPath);
+      applyMigrations(db);
+      const store = new SqliteVivaSubscriptionStore(db);
+
+      const HOME_ACCT: Account = {
+        username: "a@example.test",
+        homeAccountId: "oid-1.tenant-home",
+        tenantId: "tenant-home",
+      };
+      const GUEST_ACCT: Account = {
+        username: "a@example.test",
+        homeAccountId: "oid-2.tenant-guest",
+        tenantId: "tenant-guest",
+      };
+      const auth = new FakeAuthClient({
+        accounts: [HOME_ACCT, GUEST_ACCT],
+        tokens: new Map([
+          [
+            HOME_ACCT.homeAccountId,
+            {
+              token: "tok-home",
+              expiresOn: new Date("2099-01-01T00:00:00Z"),
+              account: HOME_ACCT,
+            },
+          ],
+          [
+            GUEST_ACCT.homeAccountId,
+            {
+              token: "tok-guest",
+              expiresOn: new Date("2099-01-01T00:00:00Z"),
+              account: GUEST_ACCT,
+            },
+          ],
+        ]),
+      });
+      const viva = new FakeVivaClient({
+        steps: [
+          {
+            kind: "listNetworksOk",
+            response: [{ id: "net-home", name: "Dynex", permalink: "dynex" }],
+          },
+          {
+            kind: "listCommunitiesOk",
+            response: [
+              { id: "com-dup", displayName: "HomeDup", networkId: "net-home" },
+            ],
+          },
+          {
+            kind: "listNetworksOk",
+            response: [{ id: "net-107", name: "Microsoft", permalink: "ms" }],
+          },
+          {
+            kind: "listCommunitiesOk",
+            response: [
+              { id: "com-dup", displayName: "GuestDup", networkId: "net-107" },
+            ],
+          },
+        ],
+      });
+
+      const err = await realViva(
+        makeConfig(dbPath),
+        {
+          action: "subscribe",
+          account: "a@example.test",
+          communityId: "com-dup",
+        },
+        { auth, viva, store },
+      ).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(CliUsageError);
+      const msg = (err as Error).message;
+      expect(msg).toMatch(/tenant-home/);
+      expect(msg).toMatch(/tenant-guest/);
+      expect(msg).toContain("<tenantId>:<networkId>:<communityId>");
+      db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("--viva-subscribe persists tenantId on single-tenant auto-resolve", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-1tenant-"));
+    try {
+      const dbPath = path.join(dir, "lake.db");
+      const db = new Database(dbPath);
+      applyMigrations(db);
+      const store = new SqliteVivaSubscriptionStore(db);
+
+      const auth = makeAuth("tok-1tenant");
+      const viva = new FakeVivaClient({
+        steps: [
+          {
+            kind: "listNetworksOk",
+            response: [{ id: "net-1", name: "Acme", permalink: "acme" }],
+          },
+          {
+            kind: "listCommunitiesOk",
+            response: [{ id: "com-7", displayName: "Eng", networkId: "net-1" }],
+          },
+        ],
+      });
+
+      const result = await realViva(
+        makeConfig(dbPath),
+        { action: "subscribe", account: "a@example.test", communityId: "com-7" },
+        { auth, viva, store },
+      );
+      const sub = (result as Extract<VivaCliResult, { action: "subscribe" }>).sub;
+      expect(sub.tenantId).toBe(VIVA_ACCOUNT.tenantId);
+      db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("--viva-discover prints network count and names", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-netlog-"));
     try {
@@ -1464,5 +1762,207 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // ── Slice 4b-2: cross-tenant discover aggregation ─────────────────
+
+  it("--viva-discover lists accounts across multiple clientId-partitioned auth clients", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-multi-"));
+    try {
+      const dbPath = path.join(dir, "lake.db");
+      const db = new Database(dbPath);
+      applyMigrations(db);
+      db.close();
+
+      const HOME_ACCT: Account = {
+        username: "a@example.test",
+        homeAccountId: "oid-1.tenant-home",
+        tenantId: "tenant-home",
+      };
+      const GUEST_ACCT: Account = {
+        username: "a@example.test",
+        homeAccountId: "oid-2.tenant-guest",
+        tenantId: "tenant-guest",
+      };
+      // authHome = project's msClientId partition: only sees HOME_ACCT.
+      const authHome = new FakeAuthClient({
+        accounts: [HOME_ACCT],
+        tokens: new Map([
+          [
+            HOME_ACCT.homeAccountId,
+            {
+              token: "tok-home",
+              expiresOn: new Date("2099-01-01T00:00:00Z"),
+              account: HOME_ACCT,
+            },
+          ],
+        ]),
+      });
+      // authYammer = YAMMER_PUBLIC_CLIENT_ID partition: only sees GUEST_ACCT.
+      const authYammer = new FakeAuthClient({
+        accounts: [GUEST_ACCT],
+        tokens: new Map([
+          [
+            GUEST_ACCT.homeAccountId,
+            {
+              token: "tok-guest",
+              expiresOn: new Date("2099-01-01T00:00:00Z"),
+              account: GUEST_ACCT,
+            },
+          ],
+        ]),
+      });
+      const viva = new FakeVivaClient({
+        steps: [
+          {
+            kind: "listNetworksOk",
+            response: [{ id: "net-home", name: "Dynex", permalink: "dynex" }],
+          },
+          {
+            kind: "listCommunitiesOk",
+            response: [
+              { id: "com-home-1", displayName: "Home-1", networkId: "net-home" },
+            ],
+          },
+          {
+            kind: "listNetworksOk",
+            response: [{ id: "net-107", name: "Microsoft", permalink: "ms" }],
+          },
+          {
+            kind: "listCommunitiesOk",
+            response: [
+              { id: "com-bcp-1", displayName: "BC Partners | MVPs", networkId: "net-107" },
+              { id: "com-bcp-2", displayName: "BC Partners | Dev", networkId: "net-107" },
+            ],
+          },
+        ],
+      });
+
+      const result = await realViva(
+        makeConfig(dbPath),
+        { action: "discover", account: "a@example.test" },
+        { auths: [authHome, authYammer], viva },
+      );
+      expect(result.action).toBe("discover");
+      const communities =
+        (result as Extract<VivaCliResult, { action: "discover" }>).communities;
+      expect(communities.map((c) => c.id).sort()).toEqual(
+        ["com-bcp-1", "com-bcp-2", "com-home-1"].sort(),
+      );
+      const byId = new Map(communities.map((c) => [c.id, c] as const));
+      expect(byId.get("com-home-1")?.tenantId).toBe("tenant-home");
+      expect(byId.get("com-bcp-1")?.tenantId).toBe("tenant-guest");
+      expect(byId.get("com-bcp-2")?.tenantId).toBe("tenant-guest");
+
+      // Routing: authHome was only asked for HOME_ACCT token.
+      const homeTokenCalls = authHome.calls.filter(
+        (c) => c.method === "getTokenSilent",
+      );
+      expect(homeTokenCalls).toHaveLength(1);
+      expect(
+        (homeTokenCalls[0] as Extract<typeof homeTokenCalls[number], { method: "getTokenSilent" }>)
+          .account.homeAccountId,
+      ).toBe(HOME_ACCT.homeAccountId);
+      // authYammer was only asked for GUEST_ACCT token — no cross-talk.
+      const yammerTokenCalls = authYammer.calls.filter(
+        (c) => c.method === "getTokenSilent",
+      );
+      expect(yammerTokenCalls).toHaveLength(1);
+      expect(
+        (yammerTokenCalls[0] as Extract<typeof yammerTokenCalls[number], { method: "getTokenSilent" }>)
+          .account.homeAccountId,
+      ).toBe(GUEST_ACCT.homeAccountId);
+
+      const commCalls = viva.calls.filter((c) => c.method === "listCommunities");
+      expect(commCalls).toHaveLength(2);
+      const tokens = commCalls.map((c) => c.token).sort();
+      expect(tokens).toEqual(["tok-guest", "tok-home"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("--viva-discover dedupes an account that appears in both auth caches", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-dedupe-"));
+    try {
+      const dbPath = path.join(dir, "lake.db");
+      const db = new Database(dbPath);
+      applyMigrations(db);
+      db.close();
+
+      const SHARED: Account = {
+        username: "a@example.test",
+        homeAccountId: "oid-1.tenant-home",
+        tenantId: "tenant-home",
+      };
+      const authA = new FakeAuthClient({
+        accounts: [SHARED],
+        tokens: new Map([
+          [
+            SHARED.homeAccountId,
+            {
+              token: "tok-a",
+              expiresOn: new Date("2099-01-01T00:00:00Z"),
+              account: SHARED,
+            },
+          ],
+        ]),
+      });
+      // authB returns the same homeAccountId; dedupe must keep the first
+      // (authA) and not call authB for this account.
+      const authB = new FakeAuthClient({
+        accounts: [SHARED],
+        tokens: new Map(),
+      });
+      const viva = new FakeVivaClient({
+        steps: [
+          { kind: "listNetworksOk", response: [] },
+          { kind: "listCommunitiesOk", response: [] },
+        ],
+      });
+
+      const result = await realViva(
+        makeConfig(dbPath),
+        { action: "discover", account: "a@example.test" },
+        { auths: [authA, authB], viva },
+      );
+      expect(result.action).toBe("discover");
+
+      // Dedupe: authA iterates once; authB is listed but never asked for a token.
+      expect(
+        authA.calls.filter((c) => c.method === "getTokenSilent"),
+      ).toHaveLength(1);
+      expect(
+        authB.calls.filter((c) => c.method === "getTokenSilent"),
+      ).toHaveLength(0);
+      const commCalls = viva.calls.filter((c) => c.method === "listCommunities");
+      expect(commCalls).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reportVivaResult discover output prints tenant_id column", async () => {
+    const vivaImpl: VivaImpl = async () => ({
+      action: "discover",
+      communities: [
+        {
+          id: "com-1",
+          displayName: "Engineering",
+          networkId: "net-1",
+          networkName: "Acme Corp",
+          tenantId: "tenant-abc",
+        },
+      ],
+    });
+    const prints: string[] = [];
+    await runCli(["--viva-discover", "--account", "a@example.test"], {
+      env: ENV,
+      loadDotenv: false,
+      print: (m) => prints.push(m),
+      vivaImpl,
+    });
+    expect(prints[0]).toContain("tenant_id");
+    expect(prints[1]).toContain("tenant-abc");
   });
 });

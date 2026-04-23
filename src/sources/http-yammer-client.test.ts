@@ -114,66 +114,166 @@ describe("HttpYammerClient.listNetworks", () => {
 });
 
 describe("HttpYammerClient.listCommunities", () => {
-  it("hits /groups.json?mine=1 with bearer, maps to VivaCommunity[], paginates via page=2 until empty", async () => {
-    const page1 = [
-      { id: 111, full_name: "Engineering", network_id: 999 },
-      { id: 222, full_name: "Sales", network_id: 999 },
-    ];
-    const page2 = [{ id: 333, full_name: "Marketing", network_id: 999 }];
+  // Response shape for /users/current.json?include_group_memberships=true — only
+  // the fields the client cares about. Real response also carries mugshot URLs,
+  // activity flags, etc. — irrelevant here.
+  function userResponse(memberships: Array<{
+    id: number | string;
+    full_name: string;
+    network_id: number | string;
+    description?: string;
+  }>, extras: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      type: "user",
+      id: 55,
+      network_id: 999,
+      full_name: "Alice Tester",
+      group_memberships: memberships,
+      pending_group_memberships: [],
+      invited_group_memberships: [],
+      ...extras,
+    });
+  }
+
+  it("listCommunities hits /users/current.json?include_group_memberships=true with bearer", async () => {
     const { fetch, calls } = scriptFetch([
-      response({ status: 200, body: JSON.stringify(page1) }),
-      response({ status: 200, body: JSON.stringify(page2) }),
-      response({ status: 200, body: JSON.stringify([]) }),
+      response({
+        status: 200,
+        body: userResponse([
+          { id: 111, full_name: "Engineering", network_id: 999 },
+        ]),
+      }),
     ]);
     const client = new HttpYammerClient({ fetch });
     const got = await client.listCommunities("tok-2");
     expect(got).toEqual([
       { id: "111", displayName: "Engineering", networkId: "999" },
-      { id: "222", displayName: "Sales", networkId: "999" },
-      { id: "333", displayName: "Marketing", networkId: "999" },
     ]);
-    expect(calls).toHaveLength(3);
-    expect(calls[0]!.url).toContain("/groups.json?mine=1&page=1");
-    expect(calls[1]!.url).toContain("/groups.json?mine=1&page=2");
-    expect(calls[2]!.url).toContain("/groups.json?mine=1&page=3");
-    expect(calls[0]!.url).not.toContain("network_id");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(
+      "https://www.yammer.com/api/v1/users/current.json?include_group_memberships=true",
+    );
     expect(calls[0]!.headers["Authorization"]).toBe("Bearer tok-2");
   });
 
-  it("stops after first empty page without making extra requests", async () => {
-    const { fetch, calls } = scriptFetch([
-      response({ status: 200, body: JSON.stringify([]) }),
+  it("maps group_memberships entries to VivaCommunity with string ids", async () => {
+    const { fetch } = scriptFetch([
+      response({
+        status: 200,
+        body: userResponse([
+          { id: 111, full_name: "Engineering", network_id: 999 },
+          { id: 222, full_name: "Sales", network_id: 888, description: "Revenue team" },
+          { id: 333, full_name: "Marketing", network_id: 777 },
+        ]),
+      }),
+    ]);
+    const got = await new HttpYammerClient({ fetch }).listCommunities("t");
+    expect(got).toEqual([
+      { id: "111", displayName: "Engineering", networkId: "999" },
+      { id: "222", displayName: "Sales", networkId: "888", description: "Revenue team" },
+      { id: "333", displayName: "Marketing", networkId: "777" },
+    ]);
+  });
+
+  it("returns empty array when group_memberships is empty", async () => {
+    const { fetch } = scriptFetch([
+      response({ status: 200, body: userResponse([]) }),
     ]);
     const got = await new HttpYammerClient({ fetch }).listCommunities("t");
     expect(got).toEqual([]);
-    expect(calls).toHaveLength(1);
   });
 
-  it("uses mine=1 and omits network_id to return joined groups across all networks", async () => {
-    // Regression test: ?network_id= was removed because it only filters within the
-    // home network context. External network communities (e.g. Microsoft Viva Engage)
-    // are invisible when network_id is passed. ?mine=1 without network_id returns
-    // all groups the authenticated user has joined, regardless of network.
-    const { fetch, calls } = scriptFetch([
-      response({ status: 200, body: JSON.stringify([{ id: 42, full_name: "Insiders", network_id: 5 }]) }),
-      response({ status: 200, body: JSON.stringify([]) }),
+  it("returns empty array when group_memberships key is absent", async () => {
+    const { fetch } = scriptFetch([
+      response({
+        status: 200,
+        body: JSON.stringify({ type: "user", id: 55, network_id: 999 }),
+      }),
     ]);
-    await new HttpYammerClient({ fetch }).listCommunities("tok-mine");
-    expect(calls[0]!.url).toContain("mine=1");
-    expect(calls[0]!.url).not.toContain("network_id");
-    expect(calls[0]!.url).toContain("page=1");
+    const got = await new HttpYammerClient({ fetch }).listCommunities("t");
+    expect(got).toEqual([]);
   });
 
-  it("maps 401/429 to typed errors", async () => {
-    const { fetch: f1 } = scriptFetch([response({ status: 401 })]);
-    await expect(
-      new HttpYammerClient({ fetch: f1 }).listCommunities("t"),
-    ).rejects.toBeInstanceOf(TokenExpiredError);
+  it("ignores pending_group_memberships and invited_group_memberships", async () => {
+    const { fetch } = scriptFetch([
+      response({
+        status: 200,
+        body: JSON.stringify({
+          type: "user",
+          id: 55,
+          network_id: 999,
+          group_memberships: [
+            { id: 111, full_name: "Joined", network_id: 999 },
+          ],
+          pending_group_memberships: [
+            { id: 222, full_name: "Pending", network_id: 999 },
+          ],
+          invited_group_memberships: [
+            { id: 333, full_name: "Invited", network_id: 999 },
+          ],
+        }),
+      }),
+    ]);
+    const got = await new HttpYammerClient({ fetch }).listCommunities("t");
+    expect(got).toEqual([
+      { id: "111", displayName: "Joined", networkId: "999" },
+    ]);
+  });
 
-    const { fetch: f2 } = scriptFetch([response({ status: 429 })]);
+  it("maps 401 to TokenExpiredError", async () => {
+    const { fetch } = scriptFetch([response({ status: 401 })]);
     await expect(
-      new HttpYammerClient({ fetch: f2 }).listCommunities("t"),
-    ).rejects.toBeInstanceOf(GraphRateLimitedError);
+      new HttpYammerClient({ fetch }).listCommunities("t"),
+    ).rejects.toBeInstanceOf(TokenExpiredError);
+  });
+
+  it("maps 429 to GraphRateLimitedError with 6s default", async () => {
+    const { fetch } = scriptFetch([response({ status: 429 })]);
+    try {
+      await new HttpYammerClient({ fetch }).listCommunities("t");
+      expect.fail("expected throw");
+    } catch (caught) {
+      expect(caught).toBeInstanceOf(GraphRateLimitedError);
+      expect((caught as GraphRateLimitedError).retryAfterSeconds).toBe(6);
+    }
+  });
+
+  it("maps 429 with Retry-After header to GraphRateLimitedError with that value", async () => {
+    const { fetch } = scriptFetch([
+      response({ status: 429, headers: { "Retry-After": "12" } }),
+    ]);
+    try {
+      await new HttpYammerClient({ fetch }).listCommunities("t");
+      expect.fail("expected throw");
+    } catch (caught) {
+      expect((caught as GraphRateLimitedError).retryAfterSeconds).toBe(12);
+    }
+  });
+
+  it("does not leak the bearer token in error messages", async () => {
+    const secret = "tok-YAMMER-DISCOVER-SECRET";
+    for (const status of [401, 429, 500]) {
+      const { fetch } = scriptFetch([
+        response({ status, body: `boom ${secret}` }),
+      ]);
+      try {
+        await new HttpYammerClient({ fetch }).listCommunities(secret);
+        expect.fail("expected throw");
+      } catch (caught) {
+        expect((caught as Error).message).not.toContain(secret);
+      }
+    }
+  });
+
+  it("community and network ids above 2^53 round-trip losslessly as strings", async () => {
+    const bigCommunityId = "9007199254740993"; // 2^53 + 1
+    const bigNetworkId = "18014398509481984"; // 2^54
+    // Build the JSON body literally so the large integers are not rounded.
+    const body = `{"type":"user","id":55,"network_id":999,"group_memberships":[{"id":${bigCommunityId},"full_name":"Huge","network_id":${bigNetworkId}}]}`;
+    const { fetch } = scriptFetch([response({ status: 200, body })]);
+    const got = await new HttpYammerClient({ fetch }).listCommunities("t");
+    expect(got[0]?.id).toBe(bigCommunityId);
+    expect(got[0]?.networkId).toBe(bigNetworkId);
   });
 });
 

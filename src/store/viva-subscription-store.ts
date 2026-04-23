@@ -40,6 +40,7 @@ export function validateSubscribeInput(input: AddVivaSubscriptionInput): void {
 
 interface VivaSubscriptionRow {
   account: string;
+  tenant_id: string | null;
   network_id: string;
   network_name: string | null;
   community_id: string;
@@ -52,6 +53,7 @@ interface VivaSubscriptionRow {
 function rowToSub(r: VivaSubscriptionRow): VivaSubscription {
   return {
     account: r.account,
+    ...(r.tenant_id !== null && { tenantId: r.tenant_id }),
     networkId: r.network_id,
     ...(r.network_name !== null && { networkName: r.network_name }),
     communityId: r.community_id,
@@ -66,7 +68,15 @@ function rowToSub(r: VivaSubscriptionRow): VivaSubscription {
 
 export class SqliteVivaSubscriptionStore implements VivaSubscriptionStore {
   private readonly insertStmt: Statement<
-    [string, string, string | null, string, string | null, number]
+    [
+      string,
+      string | null,
+      string,
+      string | null,
+      string,
+      string | null,
+      number,
+    ]
   >;
   private readonly getStmt: Statement<[string, string]>;
   private readonly listAccountStmt: Statement<[string]>;
@@ -82,24 +92,24 @@ export class SqliteVivaSubscriptionStore implements VivaSubscriptionStore {
     applyMigrations(db);
     this.insertStmt = db.prepare(`
       INSERT INTO viva_subscriptions
-        (account, network_id, network_name, community_id, community_name, enabled, subscribed_at)
-      VALUES (?, ?, ?, ?, ?, 1, ?)
+        (account, tenant_id, network_id, network_name, community_id, community_name, enabled, subscribed_at)
+      VALUES (?, ?, ?, ?, ?, ?, 1, ?)
     `);
     this.getStmt = db.prepare(`
-      SELECT account, network_id, network_name, community_id, community_name,
+      SELECT account, tenant_id, network_id, network_name, community_id, community_name,
              enabled, subscribed_at, last_cursor_at
       FROM viva_subscriptions
       WHERE account = ? AND community_id = ?
     `);
     this.listAccountStmt = db.prepare(`
-      SELECT account, network_id, network_name, community_id, community_name,
+      SELECT account, tenant_id, network_id, network_name, community_id, community_name,
              enabled, subscribed_at, last_cursor_at
       FROM viva_subscriptions
       WHERE account = ?
       ORDER BY subscribed_at ASC, community_id ASC
     `);
     this.listEnabledStmt = db.prepare(`
-      SELECT account, network_id, network_name, community_id, community_name,
+      SELECT account, tenant_id, network_id, network_name, community_id, community_name,
              enabled, subscribed_at, last_cursor_at
       FROM viva_subscriptions
       WHERE account = ? AND enabled = 1
@@ -124,6 +134,7 @@ export class SqliteVivaSubscriptionStore implements VivaSubscriptionStore {
     try {
       this.insertStmt.run(
         input.account,
+        input.tenantId ?? null,
         input.networkId,
         input.networkName ?? null,
         input.communityId,

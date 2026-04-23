@@ -1,7 +1,11 @@
 import * as path from "node:path";
 import { config as loadDotenv } from "dotenv";
 import { loadConfig, type Config } from "./config.js";
-import { MsalAuthClient, YAMMER_SCOPE } from "./auth/msal-auth-client.js";
+import {
+  MsalAuthClient,
+  YAMMER_PUBLIC_CLIENT_ID,
+  YAMMER_SCOPE,
+} from "./auth/msal-auth-client.js";
 import { TokenCacheStore } from "./auth/token-cache-store.js";
 import type { AuthClient } from "./auth/auth-client.js";
 import { AuthError, type AccessToken, type Account } from "./auth/types.js";
@@ -32,6 +36,7 @@ export interface AddAccountOptions {
   readonly loadDotenv?: boolean;
   readonly auth?: AuthClient;
   readonly print?: PrintFn;
+  readonly tenantId?: string;
 }
 
 export interface BackfillCliResult {
@@ -115,6 +120,7 @@ export type VivaCliResult =
 
 export interface VivaDeps {
   readonly auth?: AuthClient;
+  readonly auths?: readonly AuthClient[];
   readonly viva?: VivaClient;
   readonly store?: VivaSubscriptionStore;
   readonly print?: PrintFn;
@@ -170,6 +176,14 @@ const VIVA_VALUE_FLAGS = new Set([
   "--viva-unsubscribe",
 ]);
 
+const ADD_ACCOUNT_VALUE_FLAGS = new Set(["--tenant"]);
+
+const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function vivaAuthorityFor(tenantId: string): string {
+  return `https://login.microsoftonline.com/${tenantId}/`;
+}
+
 const STEER_TOGGLE_ACTIONS: Readonly<
   Record<string, { readonly action: "setEnabled" | "remove"; readonly enabled?: boolean }>
 > = {
@@ -223,7 +237,8 @@ function parseArgv(argv: readonly string[]): {
       Object.prototype.hasOwnProperty.call(STEER_ADD_FLAGS, a) ||
       STEER_TOGGLE_FLAGS.has(a) ||
       STEER_MODIFIER_FLAGS.has(a) ||
-      VIVA_VALUE_FLAGS.has(a)
+      VIVA_VALUE_FLAGS.has(a) ||
+      ADD_ACCOUNT_VALUE_FLAGS.has(a)
     ) {
       const v = argv[i + 1];
       if (v === undefined) {
@@ -454,9 +469,25 @@ function reportVivaResult(result: VivaCliResult, print: PrintFn): void {
         print("no viva communities visible to this account");
         return;
       }
-      print(["community_id", "network_id", "network_name", "display_name"].join("\t"));
+      print(
+        [
+          "community_id",
+          "network_id",
+          "network_name",
+          "tenant_id",
+          "display_name",
+        ].join("\t"),
+      );
       for (const c of result.communities) {
-        print([c.id, c.networkId, c.networkName ?? "-", c.displayName].join("\t"));
+        print(
+          [
+            c.id,
+            c.networkId,
+            c.networkName ?? "-",
+            c.tenantId ?? "-",
+            c.displayName,
+          ].join("\t"),
+        );
       }
       return;
     case "subscribe":
@@ -584,6 +615,27 @@ async function buildDefaultVivaAuth(config: Config): Promise<AuthClient> {
   });
 }
 
+// MSAL's token cache is partitioned by clientId. Home-tenant accounts are
+// logged in under `config.msClientId`; external-tenant accounts added via
+// `--add-account --tenant` are logged in under `YAMMER_PUBLIC_CLIENT_ID`.
+// Both partitions coexist in token-cache.json, so discover must query
+// both via separate MsalAuthClient instances and union the results.
+async function buildDefaultVivaAuths(
+  config: Config,
+): Promise<readonly AuthClient[]> {
+  const cacheStore = new TokenCacheStore({
+    fs: nodeFileSystem,
+    path: path.join(config.authDir, "token-cache.json"),
+  });
+  return [
+    new MsalAuthClient({ clientId: config.msClientId, cacheStore }),
+    new MsalAuthClient({
+      clientId: YAMMER_PUBLIC_CLIENT_ID,
+      cacheStore,
+    }),
+  ];
+}
+
 async function buildDefaultVivaClient(): Promise<VivaClient> {
   const { HttpYammerClient } = await import("./sources/http-yammer-client.js");
   return new HttpYammerClient({ fetch: globalThis.fetch.bind(globalThis) });
@@ -593,15 +645,37 @@ async function resolveVivaAccount(
   auth: AuthClient,
   username: string,
 ): Promise<Account> {
-  const accounts = await auth.listAccounts();
+  const pairs = await resolveVivaAccountPairs([auth], username);
+  return pairs[0]!.account;
+}
+
+interface AccountAuthPair {
+  readonly auth: AuthClient;
+  readonly account: Account;
+}
+
+async function resolveVivaAccountPairs(
+  auths: readonly AuthClient[],
+  username: string,
+): Promise<readonly AccountAuthPair[]> {
   const target = username.toLowerCase();
-  const found = accounts.find((a) => a.username.toLowerCase() === target);
-  if (!found) {
+  const pairs: AccountAuthPair[] = [];
+  const seen = new Set<string>();
+  for (const auth of auths) {
+    const accounts = await auth.listAccounts();
+    for (const account of accounts) {
+      if (account.username.toLowerCase() !== target) continue;
+      if (seen.has(account.homeAccountId)) continue;
+      seen.add(account.homeAccountId);
+      pairs.push({ auth, account });
+    }
+  }
+  if (pairs.length === 0) {
     throw new CliUsageError(
       `unknown account: ${username} — run --add-account first, or check --account spelling`,
     );
   }
-  return found;
+  return pairs;
 }
 
 async function discoverAllCommunities(
@@ -626,24 +700,40 @@ async function discoverForAccount(
 ): Promise<{ readonly communities: readonly VivaCommunity[] }> {
   /* c8 ignore next -- default console.log only in production */
   const print: PrintFn = deps.print ?? ((m) => console.log(m));
-  const auth = deps.auth ?? (await buildDefaultVivaAuth(config));
-  const account = await resolveVivaAccount(auth, accountUsername);
-
-  let accessToken: AccessToken;
-  try {
-    accessToken = await auth.getTokenSilent(account, { scopes: [YAMMER_SCOPE] });
-  } catch (err) {
-    if (!(err instanceof AuthError) || err.kind !== "silent-failed") throw err;
-    print(
-      "Yammer scope not yet consented — starting device-code login for Yammer...",
-    );
-    await auth.loginWithDeviceCode(print, { scopes: [YAMMER_SCOPE] });
-    accessToken = await auth.getTokenSilent(account, { scopes: [YAMMER_SCOPE] });
-  }
-
+  const auths =
+    deps.auths ??
+    (deps.auth !== undefined
+      ? [deps.auth]
+      : await buildDefaultVivaAuths(config));
+  const pairs = await resolveVivaAccountPairs(auths, accountUsername);
   const viva = deps.viva ?? (await buildDefaultVivaClient());
-  const communities = await discoverAllCommunities(viva, accessToken.token, print);
-  return { communities };
+  const out: VivaCommunity[] = [];
+  for (const { auth, account } of pairs) {
+    let accessToken: AccessToken;
+    try {
+      accessToken = await auth.getTokenSilent(account, {
+        scopes: [YAMMER_SCOPE],
+      });
+    } catch (err) {
+      if (!(err instanceof AuthError) || err.kind !== "silent-failed") throw err;
+      print(
+        "Yammer scope not yet consented — starting device-code login for Yammer...",
+      );
+      await auth.loginWithDeviceCode(print, { scopes: [YAMMER_SCOPE] });
+      accessToken = await auth.getTokenSilent(account, {
+        scopes: [YAMMER_SCOPE],
+      });
+    }
+    const perTenant = await discoverAllCommunities(
+      viva,
+      accessToken.token,
+      print,
+    );
+    for (const c of perTenant) {
+      out.push({ ...c, tenantId: account.tenantId });
+    }
+  }
+  return { communities: out };
 }
 
 export async function realViva(
@@ -696,11 +786,27 @@ export async function realViva(
           deps,
           command.account,
         );
-        const colonIdx = command.communityId.indexOf(":");
+        const parts = command.communityId.split(":");
         let match: VivaCommunity | undefined;
-        if (colonIdx !== -1) {
-          const networkId = command.communityId.slice(0, colonIdx);
-          const communityId = command.communityId.slice(colonIdx + 1);
+        if (parts.length === 3) {
+          const [tenantId, networkId, communityId] = parts as [
+            string,
+            string,
+            string,
+          ];
+          match = communities.find(
+            (c) =>
+              (c.tenantId ?? "").toLowerCase() === tenantId.toLowerCase() &&
+              c.networkId.toLowerCase() === networkId.toLowerCase() &&
+              c.id.toLowerCase() === communityId.toLowerCase(),
+          );
+          if (!match) {
+            throw new CliUsageError(
+              `unknown community: ${command.communityId} — run --viva-discover --account ${command.account} to list available communities`,
+            );
+          }
+        } else if (parts.length === 2) {
+          const [networkId, communityId] = parts as [string, string];
           match = communities.find(
             (c) =>
               c.networkId.toLowerCase() === networkId.toLowerCase() &&
@@ -721,15 +827,18 @@ export async function realViva(
             );
           }
           if (matches.length > 1) {
-            const networkIds = matches.map((c) => c.networkId).join(", ");
+            const candidates = matches
+              .map((c) => `${c.tenantId ?? "-"}:${c.networkId}`)
+              .join(", ");
             throw new CliUsageError(
-              `ambiguous community id: ${command.communityId} appears in networks [${networkIds}] — use --viva-subscribe <networkId>:<communityId>`,
+              `ambiguous community id: ${command.communityId} appears in [${candidates}] — use --viva-subscribe <tenantId>:<networkId>:<communityId> (or <networkId>:<communityId> if unambiguous within a single tenant)`,
             );
           }
           match = matches[0]!;
         }
         const sub = await store!.subscribe({
           account: command.account,
+          ...(match.tenantId !== undefined && { tenantId: match.tenantId }),
           networkId: match.networkId,
           communityId: match.id,
           ...(match.networkName !== undefined && {
@@ -794,6 +903,23 @@ function buildRealAuth(env: Env): AuthClient {
     cacheStore,
   });
 }
+
+// Viva-scoped auth uses the Azure CLI public client ID so device-code login
+// works against external Entra tenants where our own app registration would be
+// blocked by "Admin consent required". Authority is per-tenant so the returned
+// token is scoped to that tenant's Yammer network.
+function buildRealVivaAuth(env: Env, tenantId: string): AuthClient {
+  const config = loadConfig(env);
+  const cacheStore = new TokenCacheStore({
+    fs: nodeFileSystem,
+    path: path.join(config.authDir, "token-cache.json"),
+  });
+  return new MsalAuthClient({
+    clientId: YAMMER_PUBLIC_CLIENT_ID,
+    authority: vivaAuthorityFor(tenantId),
+    cacheStore,
+  });
+}
 /* c8 ignore stop */
 
 export async function addAccount(
@@ -803,8 +929,16 @@ export async function addAccount(
   loadConfig(env);
   /* c8 ignore next -- default console.log path, only in production */
   const print: PrintFn = opts.print ?? ((m) => console.log(m));
-  /* c8 ignore next -- real MSAL adapter only constructed outside tests */
-  const auth = opts.auth ?? buildRealAuth(env);
+  const tenantId = opts.tenantId;
+  /* c8 ignore next 3 -- real MSAL adapters only constructed outside tests */
+  const auth =
+    opts.auth ??
+    (tenantId !== undefined ? buildRealVivaAuth(env, tenantId) : buildRealAuth(env));
+  if (tenantId !== undefined) {
+    return auth.loginWithDeviceCode((msg) => print(msg), {
+      scopes: [YAMMER_SCOPE],
+    });
+  }
   return auth.loginWithDeviceCode((msg) => print(msg));
 }
 
@@ -814,9 +948,24 @@ export async function runCli(
 ): Promise<RunCliResult> {
   const parsed = parseArgv(argv);
 
+  const tenantValue = parsed.values.get("--tenant");
   if (parsed.boolean.has("--add-account")) {
-    const account = await addAccount(opts);
+    let tenantId: string | undefined;
+    if (tenantValue !== undefined) {
+      if (!GUID_PATTERN.test(tenantValue)) {
+        throw new CliUsageError(
+          `--tenant expects a GUID, got "${tenantValue}"`,
+        );
+      }
+      tenantId = tenantValue;
+    }
+    const account = await addAccount(
+      tenantId !== undefined ? { ...opts, tenantId } : opts,
+    );
     return { mode: "add-account", account };
+  }
+  if (tenantValue !== undefined) {
+    throw new CliUsageError("--tenant requires --add-account");
   }
 
   const steerCmd = resolveSteerCommand(parsed);

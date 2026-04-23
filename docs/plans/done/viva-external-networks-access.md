@@ -156,6 +156,8 @@ can be nearly identical.
 
 ## 3. Slice 4a — user-memberships discovery endpoint
 
+**Status**: shipped 2026-04-23. Left in this file for context; Slice 4b is the next open slice.
+
 ### 3.1 Task
 
 Replace Yammer REST community discovery from `/groups.json?mine=1` (list-style,
@@ -527,7 +529,7 @@ Neither option is in 4a or 4b scope. Revisit after 4b ships.
 ## 6. What the fresh agent should do
 
 1. Read §1 top to bottom.
-2. Start the `/tdd-cycle` skill with `Slice 4a from docs/plans/viva-external-networks-access.md`
+2. Start the `/tdd-cycle` skill with `Slice 4a from docs/plans/done/viva-external-networks-access.md`
    as the argument. Post the FRAME, RED test list (copy from §3.5), get
    approval per the project's TDD discipline, then implement.
 3. Ship 4a (security scan + docs update + commit).

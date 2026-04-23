@@ -245,6 +245,58 @@ errors are isolated — a single failing community does not stop the
 others on the same tick. Requires the Yammer `user_impersonation`
 Entra delegated permission (see [setup.md §2](setup.md)).
 
+### 5b.1. External Viva Engage networks (guest access)
+
+If the communities you care about live in someone else's tenant — for
+example the Microsoft-hosted **BC Partners** communities, where you're
+a B2B guest — a normal `--add-account` won't reach them. A token
+issued via the default `/common/` authority is scoped to your home
+tenant's Yammer network only, so `--viva-discover` returns zero
+communities even though the Viva Engage web UI shows plenty.
+
+Fix: add a **per-tenant** Viva account. Pass `--tenant <guid>` (the
+external tenant's Entra tenant id) to `--add-account`:
+
+```sh
+# Add a Viva-only account for an external tenant. Uses the Azure CLI
+# public client id (pre-consented globally, so no "Admin consent
+# required" wall) and requests only the Yammer scope.
+npm run dev -- --add-account \
+  --tenant 72f988bf-86f1-41af-91ab-2d7cd011db47
+```
+
+Sign in with the same email you use day to day. You now have two
+cached accounts for that username — one home-tenant, one guest. From
+here on, `--viva-discover --account your@email.com` enumerates **all**
+cached tenants for that username and merges the results. The output
+gains a `tenant_id` column so you can tell which tenant each community
+belongs to:
+
+```
+community_id	network_id	network_name	tenant_id	display_name
+238049591296	107	Microsoft	72f988bf-…	BC Partners | AI, Agents, and Copilot
+240148481123	240148481	Dynex	d1…	General
+```
+
+If the same community id appears in more than one tenant, subscribe
+with the three-part colon form:
+
+```sh
+npm run dev -- --account your@email.com \
+  --viva-subscribe 72f988bf-86f1-41af-91ab-2d7cd011db47:107:238049591296
+```
+
+The two-part form `<networkId>:<communityId>` still works for within-
+tenant disambiguation. A plain `<communityId>` still auto-resolves if
+it's unique across all cached tenants.
+
+**Dependency note**: external-tenant Viva auth uses the Azure CLI
+first-party public client id (`04b07795-8ddb-461a-bbee-02f9e1bf7b46`).
+It's a well-known public identifier, pre-consented in every Entra
+tenant — the same trick `az login` uses. If Microsoft ever revokes it
+for third-party tools, external-network discovery breaks; a follow-up
+would be a verified-publisher registration for waldo.WTF itself.
+
 ## 6. Adding WhatsApp exports (Weekend 6+)
 
 The end-to-end flow, once set up:

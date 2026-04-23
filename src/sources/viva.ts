@@ -10,6 +10,7 @@ export interface VivaCommunity {
   readonly networkId: string;
   readonly networkName?: string;
   readonly description?: string;
+  readonly tenantId?: string;
 }
 
 export interface VivaPostAuthor {
@@ -60,7 +61,7 @@ export interface VivaPostPage {
 export interface VivaClient {
   /** Returns all Yammer networks visible to this token. */
   listNetworks(token: string): Promise<readonly VivaNetwork[]>;
-  /** Returns all groups the token holder has joined (?mine=1), across all networks. Paginates internally. */
+  /** Returns all communities the token holder has joined, across all networks reachable with this token. Single call, no pagination. */
   listCommunities(token: string): Promise<readonly VivaCommunity[]>;
   /** Returns a page of top-level threads in a community, newest-first. */
   listThreads(
