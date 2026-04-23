@@ -133,9 +133,9 @@ describe("HttpYammerClient.listCommunities", () => {
       { id: "333", displayName: "Marketing", networkId: "999" },
     ]);
     expect(calls).toHaveLength(3);
-    expect(calls[0]!.url).toContain("/groups.json?network_id=999&page=1");
-    expect(calls[1]!.url).toContain("/groups.json?network_id=999&page=2");
-    expect(calls[2]!.url).toContain("/groups.json?network_id=999&page=3");
+    expect(calls[0]!.url).toContain("/groups.json?mine=1&network_id=999&page=1");
+    expect(calls[1]!.url).toContain("/groups.json?mine=1&network_id=999&page=2");
+    expect(calls[2]!.url).toContain("/groups.json?mine=1&network_id=999&page=3");
     expect(calls[0]!.headers["Authorization"]).toBe("Bearer tok-2");
   });
 
@@ -149,6 +149,20 @@ describe("HttpYammerClient.listCommunities", () => {
     );
     expect(got).toEqual([]);
     expect(calls).toHaveLength(1);
+  });
+
+  it("uses mine=1 to return only joined groups", async () => {
+    // Regression test: plain ?network_id= returns suggested/popular groups,
+    // returning empty for guests in external networks (e.g. Microsoft Viva Engage).
+    // mine=1 restricts to groups the authenticated user has actually joined.
+    const { fetch, calls } = scriptFetch([
+      response({ status: 200, body: JSON.stringify([{ id: 42, full_name: "Insiders", network_id: 5 }]) }),
+      response({ status: 200, body: JSON.stringify([]) }),
+    ]);
+    await new HttpYammerClient({ fetch }).listCommunities("tok-mine", "5");
+    expect(calls[0]!.url).toContain("mine=1");
+    expect(calls[0]!.url).toContain("network_id=5");
+    expect(calls[0]!.url).toContain("page=1");
   });
 
   it("maps 401/429 to typed errors", async () => {

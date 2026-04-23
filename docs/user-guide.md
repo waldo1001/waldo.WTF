@@ -600,6 +600,7 @@ to `waldo-nas.<tailnet>.ts.net:8765`.
 | SQLite "database is locked" | WAL mode lost, or db is on SMB | Confirm `journal_mode=wal`, move db to internal disk |
 | MCP connection refused in Claude Desktop | Server not running, wrong port, or bearer mismatch | Curl the endpoint with `Authorization: Bearer ...`, verify |
 | Duplicate rows after re-import | Primary key collision disabled or hash function changed | Never change the hash function post-release; add a migration |
+| `--viva-discover` shows "no viva communities" despite having communities | Yammer API returned suggested groups (empty for guests in external networks) | Fixed in 2026-04-23 deploy — upgrade and re-run `--viva-discover` |
 
 ## 10. What NOT to do
 

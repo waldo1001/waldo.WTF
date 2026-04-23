@@ -1433,4 +1433,41 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("--viva-discover prints network count and names", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-netlog-"));
+    try {
+      const dbPath = path.join(dir, "lake.db");
+      const db = new Database(dbPath);
+      applyMigrations(db);
+      db.close();
+
+      const auth = makeAuth("tok-netlog");
+      const viva = new FakeVivaClient({
+        steps: [
+          {
+            kind: "listNetworksOk",
+            response: [
+              { id: "net-1", name: "Acme Corp", permalink: "acme" },
+              { id: "net-2", name: "Partner Net", permalink: "partner" },
+            ],
+          },
+          { kind: "listCommunitiesOk", response: [] },
+          { kind: "listCommunitiesOk", response: [] },
+        ],
+      });
+      const prints: string[] = [];
+      await realViva(
+        makeConfig(dbPath),
+        { action: "discover", account: "a@example.test" },
+        { auth, viva, print: (m) => prints.push(m) },
+      );
+      const out = prints.join("\n");
+      expect(out).toContain("Found 2 network(s)");
+      expect(out).toContain("Acme Corp");
+      expect(out).toContain("Partner Net");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

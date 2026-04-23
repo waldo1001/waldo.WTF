@@ -607,8 +607,10 @@ async function resolveVivaAccount(
 async function discoverAllCommunities(
   viva: VivaClient,
   token: string,
+  print: PrintFn,
 ): Promise<readonly VivaCommunity[]> {
   const networks = await viva.listNetworks(token);
+  print(`Found ${networks.length} network(s): ${networks.map((n) => n.name).join(", ")}`);
   const all: VivaCommunity[] = [];
   for (const network of networks) {
     const communities = await viva.listCommunities(token, network.id);
@@ -642,7 +644,7 @@ async function discoverForAccount(
   }
 
   const viva = deps.viva ?? (await buildDefaultVivaClient());
-  const communities = await discoverAllCommunities(viva, accessToken.token);
+  const communities = await discoverAllCommunities(viva, accessToken.token, print);
   return { communities };
 }
 

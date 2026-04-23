@@ -110,7 +110,7 @@ export class HttpYammerClient implements VivaClient {
     for (;;) {
       const text = await fetchAndCheck(
         this.fetch,
-        `${BASE}/groups.json?network_id=${networkId}&page=${page}`,
+        `${BASE}/groups.json?mine=1&network_id=${networkId}&page=${page}`,
         token,
       );
       const raw = parseYammer(text) as Array<{
