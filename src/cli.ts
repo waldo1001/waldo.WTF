@@ -611,14 +611,12 @@ async function discoverAllCommunities(
 ): Promise<readonly VivaCommunity[]> {
   const networks = await viva.listNetworks(token);
   print(`Found ${networks.length} network(s): ${networks.map((n) => n.name).join(", ")}`);
-  const all: VivaCommunity[] = [];
-  for (const network of networks) {
-    const communities = await viva.listCommunities(token, network.id);
-    for (const c of communities) {
-      all.push({ ...c, networkName: c.networkName ?? network.name });
-    }
-  }
-  return all;
+  const networkNameMap = new Map(networks.map((n) => [n.id, n.name]));
+  const communities = await viva.listCommunities(token);
+  return communities.map((c) => ({
+    ...c,
+    networkName: c.networkName ?? networkNameMap.get(c.networkId) ?? c.networkId,
+  }));
 }
 
 async function discoverForAccount(

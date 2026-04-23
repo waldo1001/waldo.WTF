@@ -21,17 +21,17 @@ describe("FakeVivaClient", () => {
     expect(client.calls).toEqual([{ method: "listNetworks", token: "token-1" }]);
   });
 
-  it("listCommunities returns scripted communities and records token + networkId", async () => {
+  it("listCommunities returns scripted communities and records token", async () => {
     const communities = [
       { id: "com-1", displayName: "Engineering", networkId: "111" },
     ] as const;
     const client = new FakeVivaClient({
       steps: [{ kind: "listCommunitiesOk", response: communities }],
     });
-    const got = await client.listCommunities("token-1", "111");
+    const got = await client.listCommunities("token-1");
     expect(got).toBe(communities);
     expect(client.calls).toEqual([
-      { method: "listCommunities", token: "token-1", networkId: "111" },
+      { method: "listCommunities", token: "token-1" },
     ]);
   });
 
@@ -128,7 +128,7 @@ describe("FakeVivaClient", () => {
     expect(client.remainingSteps).toBe(3);
     await client.listNetworks("t");
     expect(client.remainingSteps).toBe(2);
-    await client.listCommunities("t", "net-1");
+    await client.listCommunities("t");
     expect(client.remainingSteps).toBe(1);
     await client.listThreads("t", "com-1", {});
     expect(client.remainingSteps).toBe(0);
@@ -147,7 +147,7 @@ describe("FakeVivaClient", () => {
       TokenExpiredError,
     );
     await expect(
-      client.listCommunities("t", "net-1"),
+      client.listCommunities("t"),
     ).rejects.toBeInstanceOf(GraphRateLimitedError);
     await expect(
       client.listThreads("t", "com-1", {}),
@@ -175,7 +175,7 @@ describe("FakeVivaClient", () => {
     const c2 = new FakeVivaClient({
       steps: [{ kind: "listNetworksOk", response: [] }],
     });
-    await expect(c2.listCommunities("t", "n")).rejects.toThrowError(
+    await expect(c2.listCommunities("t")).rejects.toThrowError(
       /expected listCommunitiesOk step/,
     );
 

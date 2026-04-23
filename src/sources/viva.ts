@@ -60,11 +60,8 @@ export interface VivaPostPage {
 export interface VivaClient {
   /** Returns all Yammer networks visible to this token. */
   listNetworks(token: string): Promise<readonly VivaNetwork[]>;
-  /** Returns all communities (groups) in a network; paginates internally. */
-  listCommunities(
-    token: string,
-    networkId: string,
-  ): Promise<readonly VivaCommunity[]>;
+  /** Returns all groups the token holder has joined (?mine=1), across all networks. Paginates internally. */
+  listCommunities(token: string): Promise<readonly VivaCommunity[]>;
   /** Returns a page of top-level threads in a community, newest-first. */
   listThreads(
     token: string,

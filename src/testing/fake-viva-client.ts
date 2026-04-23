@@ -19,7 +19,7 @@ export interface FakeVivaScript {
 
 export type FakeVivaCall =
   | { method: "listNetworks"; token: string }
-  | { method: "listCommunities"; token: string; networkId: string }
+  | { method: "listCommunities"; token: string }
   | {
       method: "listThreads";
       token: string;
@@ -51,11 +51,8 @@ export class FakeVivaClient implements VivaClient {
     return step.response;
   }
 
-  async listCommunities(
-    token: string,
-    networkId: string,
-  ): Promise<readonly VivaCommunity[]> {
-    this.calls.push({ method: "listCommunities", token, networkId });
+  async listCommunities(token: string): Promise<readonly VivaCommunity[]> {
+    this.calls.push({ method: "listCommunities", token });
     const step = this.nextStep("listCommunities");
     if (step.kind === "error") throw step.error;
     if (step.kind !== "listCommunitiesOk") {

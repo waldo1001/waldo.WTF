@@ -101,16 +101,13 @@ export class HttpYammerClient implements VivaClient {
     return raw.map((n) => ({ id: sid(n.id), name: n.name, permalink: n.permalink }));
   }
 
-  async listCommunities(
-    token: string,
-    networkId: string,
-  ): Promise<readonly VivaCommunity[]> {
+  async listCommunities(token: string): Promise<readonly VivaCommunity[]> {
     const all: VivaCommunity[] = [];
     let page = 1;
     for (;;) {
       const text = await fetchAndCheck(
         this.fetch,
-        `${BASE}/groups.json?mine=1&network_id=${networkId}&page=${page}`,
+        `${BASE}/groups.json?mine=1&page=${page}`,
         token,
       );
       const raw = parseYammer(text) as Array<{

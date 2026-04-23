@@ -1042,11 +1042,6 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
             response: [
               { id: "com-1", displayName: "Alpha", networkId: "net-1" },
               { id: "com-2", displayName: "Beta", networkId: "net-1" },
-            ],
-          },
-          {
-            kind: "listCommunitiesOk",
-            response: [
               { id: "com-3", displayName: "Gamma", networkId: "net-2" },
             ],
           },
@@ -1069,9 +1064,8 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
       const networkCall = viva.calls.find((c) => c.method === "listNetworks");
       expect(networkCall).toMatchObject({ token: "tok-123" });
       const commCalls = viva.calls.filter((c) => c.method === "listCommunities");
-      expect(commCalls).toHaveLength(2);
-      expect(commCalls[0]).toMatchObject({ token: "tok-123", networkId: "net-1" });
-      expect(commCalls[1]).toMatchObject({ token: "tok-123", networkId: "net-2" });
+      expect(commCalls).toHaveLength(1);
+      expect(commCalls[0]).toMatchObject({ token: "tok-123" });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1089,6 +1083,7 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
       const viva = new FakeVivaClient({
         steps: [
           { kind: "listNetworksOk", response: [] },
+          { kind: "listCommunitiesOk", response: [] },
         ],
       });
 
@@ -1275,7 +1270,10 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
         },
       };
       const viva = new FakeVivaClient({
-        steps: [{ kind: "listNetworksOk", response: [] }],
+        steps: [
+          { kind: "listNetworksOk", response: [] },
+          { kind: "listCommunitiesOk", response: [] },
+        ],
       });
 
       const prints: string[] = [];
@@ -1364,11 +1362,10 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
           },
           {
             kind: "listCommunitiesOk",
-            response: [{ id: "com-1", displayName: "Eng", networkId: "net-1" }],
-          },
-          {
-            kind: "listCommunitiesOk",
-            response: [{ id: "com-1", displayName: "Sales", networkId: "net-2" }],
+            response: [
+              { id: "com-1", displayName: "Eng", networkId: "net-1" },
+              { id: "com-1", displayName: "Sales", networkId: "net-2" },
+            ],
           },
         ],
       });
@@ -1411,11 +1408,10 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
           },
           {
             kind: "listCommunitiesOk",
-            response: [{ id: "com-dup", displayName: "Eng", networkId: "net-1" }],
-          },
-          {
-            kind: "listCommunitiesOk",
-            response: [{ id: "com-dup", displayName: "Sales", networkId: "net-2" }],
+            response: [
+              { id: "com-dup", displayName: "Eng", networkId: "net-1" },
+              { id: "com-dup", displayName: "Sales", networkId: "net-2" },
+            ],
           },
         ],
       });
@@ -1452,7 +1448,6 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
               { id: "net-2", name: "Partner Net", permalink: "partner" },
             ],
           },
-          { kind: "listCommunitiesOk", response: [] },
           { kind: "listCommunitiesOk", response: [] },
         ],
       });
