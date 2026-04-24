@@ -116,6 +116,7 @@ describe("MCP HTTP server end-to-end (SQLite + SDK client over HTTP)", () => {
     const names = res.tools.map((t) => t.name).sort();
     expect(names).toEqual([
       "add_steering_rule",
+      "diagnose_sync_health",
       "get_recent_activity",
       "get_steering",
       "get_sync_status",

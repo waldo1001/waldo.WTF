@@ -18,6 +18,7 @@ export interface VivaSubscriptionStore {
   listEnabledForAccount(
     account: string,
   ): Promise<readonly VivaSubscription[]>;
+  listAll(): Promise<readonly VivaSubscription[]>;
   setCursor(account: string, communityId: string, at: Date): Promise<void>;
   toggleEnabled(
     account: string,
@@ -81,6 +82,7 @@ export class SqliteVivaSubscriptionStore implements VivaSubscriptionStore {
   private readonly getStmt: Statement<[string, string]>;
   private readonly listAccountStmt: Statement<[string]>;
   private readonly listEnabledStmt: Statement<[string]>;
+  private readonly listAllStmt: Statement<[]>;
   private readonly deleteStmt: Statement<[string, string]>;
   private readonly setCursorStmt: Statement<[number, string, string]>;
   private readonly setEnabledStmt: Statement<[number, string, string]>;
@@ -114,6 +116,12 @@ export class SqliteVivaSubscriptionStore implements VivaSubscriptionStore {
       FROM viva_subscriptions
       WHERE account = ? AND enabled = 1
       ORDER BY subscribed_at ASC, community_id ASC
+    `);
+    this.listAllStmt = db.prepare(`
+      SELECT account, tenant_id, network_id, network_name, community_id, community_name,
+             enabled, subscribed_at, last_cursor_at
+      FROM viva_subscriptions
+      ORDER BY account ASC, community_id ASC
     `);
     this.deleteStmt = db.prepare(
       "DELETE FROM viva_subscriptions WHERE account = ? AND community_id = ?",
@@ -182,6 +190,11 @@ export class SqliteVivaSubscriptionStore implements VivaSubscriptionStore {
     account: string,
   ): Promise<readonly VivaSubscription[]> {
     const rows = this.listEnabledStmt.all(account) as VivaSubscriptionRow[];
+    return rows.map(rowToSub);
+  }
+
+  async listAll(): Promise<readonly VivaSubscription[]> {
+    const rows = this.listAllStmt.all() as VivaSubscriptionRow[];
     return rows.map(rowToSub);
   }
 

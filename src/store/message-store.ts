@@ -82,6 +82,7 @@ export interface MessageStore {
     opts: ListThreadSummariesOptions,
   ): Promise<readonly ThreadSummary[]>;
   getSyncStatus(now: Date): Promise<readonly SyncStatusRow[]>;
+  getSyncLogRecent(limit: number): Promise<readonly SyncLogEntry[]>;
   getChatCursor(
     account: string,
     chatId: string,

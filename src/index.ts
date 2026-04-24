@@ -40,7 +40,10 @@ import {
   type TickSummary,
 } from "./sync/sync-scheduler.js";
 import { createMcpHttpServer } from "./mcp/http-server.js";
-import { consoleLogger, type Logger } from "./logger.js";
+import {
+  createTimestampedConsoleLogger,
+  type Logger,
+} from "./logger.js";
 import { importWhatsAppFile } from "./sync/import-whatsapp.js";
 import {
   startWhatsAppWatcher,
@@ -104,9 +107,8 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
   const env = opts.env ?? process.env;
   const config = loadConfig(env);
   const overrides = opts.overrides ?? {};
-  const logger = overrides.logger ?? consoleLogger;
-
   const clock: Clock = systemClock;
+  const logger = overrides.logger ?? createTimestampedConsoleLogger(clock);
   const cacheStore = new TokenCacheStore({
     fs: nodeFileSystem,
     path: path.join(config.authDir, "token-cache.json"),
@@ -207,6 +209,7 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
     store,
     steering,
     clock,
+    vivaSubs,
     ...(oauth !== undefined ? { oauth } : {}),
   });
   await new Promise<void>((resolve) => {
@@ -256,7 +259,8 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
 export async function runFromCli(
   opts: RunFromCliOptions = {},
 ): Promise<MainResult> {
-  const logger = opts.overrides?.logger ?? consoleLogger;
+  const logger =
+    opts.overrides?.logger ?? createTimestampedConsoleLogger(systemClock);
   const signals = opts.signals ?? nodeSignals;
 
   const result = await main(opts);

@@ -1157,6 +1157,70 @@ export function runMessageStoreContract(
       expect(rows[0]?.threadName).toBeUndefined();
     });
 
+    it("getSyncLogRecent returns [] on an empty store", async () => {
+      const { store } = await factory();
+      expect(await store.getSyncLogRecent(100)).toEqual([]);
+    });
+
+    it("getSyncLogRecent returns the N most recent entries ordered by ts DESC", async () => {
+      const { store } = await factory();
+      await store.appendSyncLog({
+        ts: new Date("2026-04-13T10:00:00Z"),
+        account: "a@example.test",
+        source: "outlook",
+        status: "ok",
+        messagesAdded: 1,
+      });
+      await store.appendSyncLog({
+        ts: new Date("2026-04-13T11:00:00Z"),
+        account: "a@example.test",
+        source: "teams",
+        status: "error",
+        errorMessage: "x",
+      });
+      await store.appendSyncLog({
+        ts: new Date("2026-04-13T12:00:00Z"),
+        account: "b@example.test",
+        source: "outlook",
+        status: "ok",
+        messagesAdded: 3,
+      });
+      const rows = await store.getSyncLogRecent(100);
+      expect(rows).toHaveLength(3);
+      expect(rows[0]?.ts.toISOString()).toBe("2026-04-13T12:00:00.000Z");
+      expect(rows[1]?.ts.toISOString()).toBe("2026-04-13T11:00:00.000Z");
+      expect(rows[2]?.ts.toISOString()).toBe("2026-04-13T10:00:00.000Z");
+    });
+
+    it("getSyncLogRecent caps the result to the requested limit", async () => {
+      const { store } = await factory();
+      for (let i = 0; i < 5; i++) {
+        await store.appendSyncLog({
+          ts: new Date(Date.UTC(2026, 3, 13, 10 + i, 0, 0)),
+          account: "a@example.test",
+          source: "outlook",
+          status: "ok",
+          messagesAdded: 1,
+        });
+      }
+      const rows = await store.getSyncLogRecent(2);
+      expect(rows).toHaveLength(2);
+      expect(rows[0]?.ts.toISOString()).toBe("2026-04-13T14:00:00.000Z");
+      expect(rows[1]?.ts.toISOString()).toBe("2026-04-13T13:00:00.000Z");
+    });
+
+    it("getSyncLogRecent with limit=0 returns []", async () => {
+      const { store } = await factory();
+      await store.appendSyncLog({
+        ts: new Date("2026-04-13T10:00:00Z"),
+        account: "a@example.test",
+        source: "outlook",
+        status: "ok",
+        messagesAdded: 1,
+      });
+      expect(await store.getSyncLogRecent(0)).toEqual([]);
+    });
+
     it("getRecentMessages honours the limit", async () => {
       const { store } = await factory();
       await store.upsertMessages([

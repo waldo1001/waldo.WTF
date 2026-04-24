@@ -8,11 +8,16 @@ import {
 import type { Clock } from "../clock.js";
 import type { MessageStore } from "../store/message-store.js";
 import type { SteeringStore } from "../store/steering-store.js";
+import type { VivaSubscriptionStore } from "../store/viva-subscription-store.js";
 import {
   ADD_STEERING_RULE_TOOL,
   handleAddSteeringRule,
   type AddSteeringRuleParams,
 } from "./tools/add-steering-rule.js";
+import {
+  DIAGNOSE_SYNC_HEALTH_TOOL,
+  handleDiagnoseSyncHealth,
+} from "./tools/diagnose-sync-health.js";
 import {
   GET_RECENT_ACTIVITY_TOOL,
   InvalidParamsError,
@@ -61,12 +66,14 @@ export interface McpServerDeps {
   readonly store: MessageStore;
   readonly steering: SteeringStore;
   readonly clock: Clock;
+  readonly vivaSubs?: VivaSubscriptionStore;
 }
 
 interface HandlerContext {
   readonly store: MessageStore;
   readonly steering: SteeringStore;
   readonly clock: Clock;
+  readonly vivaSubs: VivaSubscriptionStore | undefined;
 }
 
 type ToolHandler = (ctx: HandlerContext, args: unknown) => Promise<unknown>;
@@ -78,6 +85,7 @@ const TOOL_DESCRIPTORS = [
   GET_THREAD_TOOL,
   LIST_ACCOUNTS_TOOL,
   LIST_THREADS_TOOL,
+  DIAGNOSE_SYNC_HEALTH_TOOL,
   GET_STEERING_TOOL,
   ADD_STEERING_RULE_TOOL,
   REMOVE_STEERING_RULE_TOOL,
@@ -96,6 +104,8 @@ const TOOL_HANDLERS: Record<string, ToolHandler> = {
   [LIST_ACCOUNTS_TOOL.name]: (ctx) => handleListAccounts(ctx.store, ctx.clock),
   [LIST_THREADS_TOOL.name]: (ctx, args) =>
     handleListThreads(ctx.store, ctx.clock, args as ListThreadsParams),
+  [DIAGNOSE_SYNC_HEALTH_TOOL.name]: (ctx) =>
+    handleDiagnoseSyncHealth(ctx.store, ctx.vivaSubs, ctx.clock),
   [GET_STEERING_TOOL.name]: (ctx) => handleGetSteering(ctx.steering, ctx.clock),
   [ADD_STEERING_RULE_TOOL.name]: (ctx, args) =>
     handleAddSteeringRule(ctx.steering, ctx.clock, args as AddSteeringRuleParams),
@@ -152,6 +162,7 @@ export function createMcpServer(deps: McpServerDeps): Server {
         store: deps.store,
         steering: deps.steering,
         clock: deps.clock,
+        vivaSubs: deps.vivaSubs,
       };
       const result = await handler(ctx, args ?? {});
       return {

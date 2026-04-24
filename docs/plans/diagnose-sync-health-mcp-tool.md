@@ -1,5 +1,11 @@
 # Plan: Agent-Consumable Sync Health Diagnosis
 
+**Status (2026-04-24):** implementation shipped — see
+[done/weekend-8-diagnose-sync-health.md](done/weekend-8-diagnose-sync-health.md).
+This file remains as the parent design doc for the out-of-scope
+follow-ups (CLI `waldo sync-doctor`, per-chat Teams drift,
+auto-remediation). Leave it in `docs/plans/` until those land.
+
 ## Context
 
 **Problem.** waldo.WTF runs a background scheduler that syncs Outlook inbox/sent, Teams, and Viva Engage (including external tenants) into the local lake. When something goes sideways — a token expires, a delta cursor is invalidated, a Viva external-tenant subscription stops pulling — the user has no fast way to notice and no structured way to hand the issue to an agent to fix. Today the signal is buried: [sync_log](src/db/schema.ts) has every attempt with `status` + `error_message`, [get_sync_status](src/mcp/tools/get-sync-status.ts) exposes only a *latest-state* projection, and Viva subscription drift isn't exposed to MCP at all.

@@ -212,6 +212,18 @@ export class InMemoryMessageStore implements MessageStore {
     return { hits: hits.slice(0, limit), mutedCount };
   }
 
+  async getSyncLogRecent(limit: number): Promise<readonly SyncLogEntry[]> {
+    if (limit <= 0) return [];
+    const sorted = this.syncLog
+      .map((entry, idx) => ({ entry, idx }))
+      .sort((a, b) => {
+        const t = b.entry.ts.getTime() - a.entry.ts.getTime();
+        if (t !== 0) return t;
+        return b.idx - a.idx;
+      });
+    return sorted.slice(0, limit).map((x) => x.entry);
+  }
+
   async getSyncStatus(now: Date): Promise<readonly SyncStatusRow[]> {
     this.calls.push({ method: "getSyncStatus", now });
     const pairs = new Map<string, { account: string; source: MessageSource }>();

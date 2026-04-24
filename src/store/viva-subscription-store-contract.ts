@@ -235,6 +235,38 @@ export function runVivaSubscriptionStoreContract(
       expect(row?.tenantId).toBeUndefined();
     });
 
+    it("listAll returns [] on an empty store", async () => {
+      const store = await factory();
+      expect(await store.listAll()).toEqual([]);
+    });
+
+    it("listAll returns every row across accounts, sorted (account ASC, communityId ASC)", async () => {
+      const store = await factory();
+      await store.subscribe({
+        account: "b@example.test",
+        networkId: "net-1",
+        communityId: "com-2",
+      });
+      await store.subscribe({
+        account: "a@example.test",
+        networkId: "net-1",
+        communityId: "com-2",
+      });
+      await store.subscribe({
+        account: "a@example.test",
+        networkId: "net-1",
+        communityId: "com-1",
+      });
+      const rows = await store.listAll();
+      expect(
+        rows.map((r) => `${r.account}/${r.communityId}`),
+      ).toEqual([
+        "a@example.test/com-1",
+        "a@example.test/com-2",
+        "b@example.test/com-2",
+      ]);
+    });
+
     it("listEnabledForAccount returns only enabled rows", async () => {
       const store = await factory();
       await store.subscribe({

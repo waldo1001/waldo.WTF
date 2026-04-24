@@ -50,6 +50,7 @@ describe("createMcpServer (SDK, in-memory transport)", () => {
     const names = res.tools.map((t) => t.name).sort();
     expect(names).toEqual([
       "add_steering_rule",
+      "diagnose_sync_health",
       "get_recent_activity",
       "get_steering",
       "get_sync_status",
@@ -129,6 +130,25 @@ describe("createMcpServer (SDK, in-memory transport)", () => {
     };
     expect(parsed.count).toBe(1);
     expect(parsed.messages[0]?.id).toBe("hi");
+  });
+
+  it("wraps diagnose_sync_health result in a text content block", async () => {
+    const res = await client.callTool({
+      name: "diagnose_sync_health",
+      arguments: {},
+    });
+    const content = res.content as Array<{ type: string; text: string }>;
+    expect(content[0]?.type).toBe("text");
+    const parsed = JSON.parse(content[0]!.text) as {
+      generatedAt: string;
+      overallStatus: string;
+      summary: { totalFindings: number };
+      findings: unknown[];
+    };
+    expect(parsed.generatedAt).toBe("2026-04-13T12:00:00.000Z");
+    expect(parsed.overallStatus).toBe("healthy");
+    expect(parsed.summary.totalFindings).toBe(0);
+    expect(parsed.findings).toEqual([]);
   });
 
   it("wraps get_sync_status result in a text content block", async () => {

@@ -413,6 +413,33 @@ export class SqliteMessageStore implements MessageStore {
     return buildSteeringPredicate(rules);
   }
 
+  async getSyncLogRecent(limit: number): Promise<readonly SyncLogEntry[]> {
+    if (limit <= 0) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT ts, account, source, status, messages_added, error_message
+         FROM sync_log
+         ORDER BY ts DESC, rowid DESC
+         LIMIT ?`,
+      )
+      .all(limit) as {
+      ts: number;
+      account: string;
+      source: string;
+      status: "ok" | "error";
+      messages_added: number | null;
+      error_message: string | null;
+    }[];
+    return rows.map((r) => ({
+      ts: new Date(r.ts),
+      account: r.account,
+      source: r.source as MessageSource,
+      status: r.status,
+      ...(r.messages_added !== null && { messagesAdded: r.messages_added }),
+      ...(r.error_message !== null && { errorMessage: r.error_message }),
+    }));
+  }
+
   async getSyncStatus(now: Date): Promise<readonly SyncStatusRow[]> {
     const since24h = now.getTime() - 24 * 3600 * 1000;
     const rows = this.db

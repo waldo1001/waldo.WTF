@@ -9,6 +9,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { Clock } from "../clock.js";
 import type { MessageStore } from "../store/message-store.js";
 import type { SteeringStore } from "../store/steering-store.js";
+import type { VivaSubscriptionStore } from "../store/viva-subscription-store.js";
 import type { AuthStore } from "../auth/oauth/auth-store.js";
 import type { RandomIdSource } from "../auth/oauth/ids.js";
 import {
@@ -40,6 +41,7 @@ export interface McpHttpServerOptions {
   readonly store: MessageStore;
   readonly steering: SteeringStore;
   readonly clock: Clock;
+  readonly vivaSubs?: VivaSubscriptionStore;
   readonly oauth?: OAuthHttpOptions;
 }
 
@@ -287,6 +289,7 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
         store: opts.store,
         steering: opts.steering,
         clock: opts.clock,
+        ...(opts.vivaSubs !== undefined && { vivaSubs: opts.vivaSubs }),
       });
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,

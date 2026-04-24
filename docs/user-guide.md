@@ -22,7 +22,7 @@ on in my life?" return a better answer?* If no, don't build it.
 
 ## 2. The MCP tool surface (v1)
 
-Five tools total. Claude chooses which to call.
+Seven tools total. Claude chooses which to call.
 
 ### `get_recent_activity(hours, sources?, accounts?)`
 
@@ -129,6 +129,27 @@ Top-level `generatedAt`, `accountsTracked`, `staleCount`. **Critical**
 for "is Claude's answer stale?" — Claude should check this at the top
 of any triage.
 
+### `diagnose_sync_health()`
+
+Zero-input, read-only triage tool. Scans `sync_log`, `sync_state`,
+`accounts`, and `viva_subscriptions` and returns a ranked list of
+findings — each with a `category`, `severity`, and a paste-ready
+`remediationPrompt` you can hand to a fresh agent session.
+
+Categories: `auth` (token expired), `rate-limit` (server-imposed
+backoff), `delta-invalid` (cursor rejected, resync needed), `stale`
+(no ok tick in ≥15 min), `repeated-failure` (≥3 consecutive errors),
+`viva-sub-drift` (enabled Viva subscription with no posts in 24h),
+`never-synced` (account present but never ticked), `unknown-error`
+(unclassified). `overallStatus` rolls up to `healthy` / `degraded` /
+`critical`.
+
+`lastError` strings are redacted (Bearer tokens, long opaque blobs)
+before surfacing in either `evidence` or `remediationPrompt` — safe
+to paste into chat. Typical prompt: *"is anything wrong with
+sync?"* — Claude calls this, names the affected accounts, and
+surfaces the first remediation prompt verbatim.
+
 ---
 
 ## 3. System prompt for Claude Desktop
@@ -140,6 +161,8 @@ project:
 When I ask about my messages, emails, chats, or "wtf is going on":
 1. First call get_sync_status() to verify freshness. If staleCount > 0
    or any row has lastStatus="error", flag that before answering.
+   For a ranked, remediation-ready view (auth expiry, rate-limit,
+   stale, viva-sub drift, etc.), call diagnose_sync_health() instead.
 2. Then call list_accounts() if you haven't yet this session.
 3. Default to checking ALL accounts and ALL sources unless I specify.
 4. Call get_recent_activity(24) as the baseline, then drill deeper with
