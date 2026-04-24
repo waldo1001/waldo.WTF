@@ -11,6 +11,10 @@ skill.
 
 ---
 
+## 2026-04-24
+
+- Fixed `parseYammer` big-integer preservation on Node 20: replaced the ES2025 TC39 `context.source` reviver (Node 22+ only) with a pre-processing pass that quotes integer tokens exceeding `Number.MAX_SAFE_INTEGER` before `JSON.parse`. Yammer community and message IDs above 2^53 now round-trip losslessly as exact strings on all supported Node versions. Two previously-failing tests now pass.
+
 ## 2026-04-23
 
 - Slice 4b-4 of the external-networks redesign: fixed the real external-tenant discovery gap. `AuthClient.getTokenSilent` now accepts an `authority` override, plumbed into `MsalAuthClient` so the same cached refresh token can be redeemed against a different tenant's authority. New sidecar `data/auth/viva-external-tenants.json` (mode 0600, written at `--add-account --tenant <guid>` time via [`VivaExternalTenantsStore`](../src/auth/viva-external-tenants-store.ts)) records `(homeAccountId, externalTenantId)` so `--viva-discover --account <u>` can fan out: once per home authority, then once per registered external tenant with `authority: vivaAuthorityFor(tenantId)`. Failing external silent acquisitions are logged and skipped; stale registrations (no matching account) warn. Replaces Slice 4b-3's cross-clientId merge — MSAL's account cache is keyed by home tenant, not external, so the previous clientId-partition model was wrong. Plan: [plans/done/viva-external-tenant-token-acquisition.md](plans/done/viva-external-tenant-token-acquisition.md).

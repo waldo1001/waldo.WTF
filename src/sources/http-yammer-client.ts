@@ -52,21 +52,48 @@ function minId(ids: ReadonlyArray<string | number>): string | number {
   );
 }
 
-// Parse Yammer JSON preserving exact digit strings for integer-valued fields.
-// JSON.parse loses precision for numbers > Number.MAX_SAFE_INTEGER (2^53-1).
-// The TC39 "JSON.parse source text access" proposal (ES2025, Node 22+) lets the
-// reviver read the raw source text before coercion to double.
-function parseYammer<T>(text: string): T {
-  return JSON.parse(text, function (_key, value, context) {
-    if (
-      typeof value === "number" &&
-      typeof context?.source === "string" &&
-      /^\d+$/.test(context.source)
-    ) {
-      return context.source; // keep as exact string, not rounded double
+// Quote integer tokens in raw JSON that exceed Number.MAX_SAFE_INTEGER (2^53-1)
+// so they survive JSON.parse as exact strings. Works on all Node versions.
+// Strings inside JSON string values are copied verbatim; only bare integer
+// tokens are inspected and conditionally quoted.
+function quoteUnsafeInts(json: string): string {
+  const out: string[] = [];
+  let i = 0;
+  while (i < json.length) {
+    const c = json[i]!;
+    if (c === '"') {
+      out.push(c);
+      i++;
+      while (i < json.length) {
+        const s = json[i]!;
+        out.push(s);
+        if (s === "\\") {
+          i++;
+          if (i < json.length) { out.push(json[i]!); i++; }
+        } else if (s === '"') { i++; break; }
+        else { i++; }
+      }
+    } else if (c >= "0" && c <= "9") {
+      const start = i;
+      while (i < json.length && json[i]! >= "0" && json[i]! <= "9") i++;
+      const s = json.slice(start, i);
+      // Quote if value > MAX_SAFE_INTEGER ("9007199254740992").
+      // Equal-length string comparison is equivalent to numeric for digit strings.
+      if (s.length > 16 || (s.length === 16 && s > "9007199254740992")) {
+        out.push('"', s, '"');
+      } else {
+        out.push(s);
+      }
+    } else {
+      out.push(c);
+      i++;
     }
-    return value;
-  }) as T;
+  }
+  return out.join("");
+}
+
+function parseYammer<T>(text: string): T {
+  return JSON.parse(quoteUnsafeInts(text)) as T;
 }
 
 function resolveUser(
