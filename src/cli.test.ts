@@ -1836,6 +1836,7 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
         homeAccountId: `eric-oid.${HOME_TENANT}`,
         tenantId: HOME_TENANT,
       };
+      const HOME_AUTHORITY = vivaAuthorityFor(HOME_TENANT);
       const EXT_AUTHORITY = vivaAuthorityFor(EXT_TENANT);
       const auth = new FakeAuthClient({
         accounts: [HOME_ACCT],
@@ -1844,7 +1845,7 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
           { token: string; expiresOn: Date; account: Account }
         >([
           [
-            HOME_ACCT.homeAccountId,
+            `${HOME_ACCT.homeAccountId}|${HOME_AUTHORITY}`,
             {
               token: "home-token",
               expiresOn: new Date("2099-01-01T00:00:00Z"),
@@ -1922,7 +1923,7 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
         (c as Extract<typeof silentCalls[number], { method: "getTokenSilent" }>)
           .authority,
       );
-      expect(authorities).toEqual([undefined, EXT_AUTHORITY]);
+      expect(authorities).toEqual([HOME_AUTHORITY, EXT_AUTHORITY]);
 
       const tokens = viva.calls
         .filter((c) => c.method === "listCommunities")
@@ -1934,7 +1935,7 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
     }
   });
 
-  it("--viva-discover without external-tenant registrations only discovers home networks", async () => {
+  it("--viva-discover passes explicit account-tenant authority on home fetch", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-home-only-"));
     try {
       const dbPath = path.join(dir, "lake.db");
@@ -1978,7 +1979,7 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
       expect(
         (silent[0] as Extract<typeof silent[number], { method: "getTokenSilent" }>)
           .authority,
-      ).toBeUndefined();
+      ).toBe(vivaAuthorityFor("tenant-a"));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2000,6 +2001,7 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
         homeAccountId: `eric-oid.${HOME_TENANT}`,
         tenantId: HOME_TENANT,
       };
+      const homeAuthority = vivaAuthorityFor(HOME_TENANT);
       const goodAuthority = vivaAuthorityFor(GOOD_TENANT);
       const badAuthority = vivaAuthorityFor(BAD_TENANT);
       const auth = new FakeAuthClient({
@@ -2009,7 +2011,7 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
           { token: string; expiresOn: Date; account: Account } | Error
         >([
           [
-            HOME_ACCT.homeAccountId,
+            `${HOME_ACCT.homeAccountId}|${homeAuthority}`,
             {
               token: "home-tok",
               expiresOn: new Date("2099-01-01T00:00:00Z"),
@@ -2087,19 +2089,23 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
     }
   });
 
-  it("a registration with no matching account is ignored with a warning", async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-stale-"));
+  it("--viva-discover matches registrations by username, not homeAccountId", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-match-username-"));
     try {
       const dbPath = path.join(dir, "lake.db");
       const db = new Database(dbPath);
       applyMigrations(db);
       db.close();
 
+      const HOME_TENANT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+      const EXT_TENANT = "cccccccc-cccc-cccc-cccc-cccccccccccc";
       const HOME_ACCT: Account = {
-        username: "eric@example.invalid",
-        homeAccountId: "eric-oid.home",
-        tenantId: "tenant-a",
+        username: "Eric@Example.invalid",
+        homeAccountId: `eric-oid.${HOME_TENANT}`,
+        tenantId: HOME_TENANT,
       };
+      const homeAuthority = vivaAuthorityFor(HOME_TENANT);
+      const extAuthority = vivaAuthorityFor(EXT_TENANT);
       const auth = new FakeAuthClient({
         accounts: [HOME_ACCT],
         tokens: new Map<
@@ -2107,9 +2113,17 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
           { token: string; expiresOn: Date; account: Account }
         >([
           [
-            HOME_ACCT.homeAccountId,
+            `${HOME_ACCT.homeAccountId}|${homeAuthority}`,
             {
-              token: "tok",
+              token: "home-tok",
+              expiresOn: new Date("2099-01-01T00:00:00Z"),
+              account: HOME_ACCT,
+            },
+          ],
+          [
+            `${HOME_ACCT.homeAccountId}|${extAuthority}`,
+            {
+              token: "ext-tok",
               expiresOn: new Date("2099-01-01T00:00:00Z"),
               account: HOME_ACCT,
             },
@@ -2120,31 +2134,130 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
         steps: [
           { kind: "listNetworksOk", response: [] },
           { kind: "listCommunitiesOk", response: [] },
+          {
+            kind: "listNetworksOk",
+            response: [{ id: "net-ext", name: "Ext", permalink: "ext" }],
+          },
+          {
+            kind: "listCommunitiesOk",
+            response: [
+              { id: "com-ext-1", displayName: "Ext C1", networkId: "net-ext" },
+            ],
+          },
         ],
       });
       const externalTenantsStore = new VivaExternalTenantsStore({
         fs: new InMemoryFileSystem(),
         path: "/auth/viva-external-tenants.json",
       });
-      // Registration references a stale homeAccountId (no matching account).
+      // Registration's homeAccountId differs from the resolved account's
+      // (MSAL cache shuffled — the guest-tenant login minted a different
+      // homeAccountId). Username matches case-insensitively; that's what
+      // we key on now.
+      await externalTenantsStore.add({
+        username: "eric@example.invalid",
+        homeAccountId: "different-oid.different-home",
+        externalTenantId: EXT_TENANT,
+      });
+
+      const result = await realViva(
+        makeConfig(dbPath),
+        { action: "discover", account: HOME_ACCT.username },
+        { auth, viva, externalTenantsStore },
+      );
+      const communities = (
+        result as Extract<VivaCliResult, { action: "discover" }>
+      ).communities;
+      expect(communities.map((c) => c.id)).toEqual(["com-ext-1"]);
+      expect(communities[0]?.tenantId).toBe(EXT_TENANT);
+
+      const silent = auth.calls.filter((c) => c.method === "getTokenSilent");
+      expect(silent).toHaveLength(2);
+      const authorities = silent.map(
+        (c) =>
+          (c as Extract<typeof silent[number], { method: "getTokenSilent" }>)
+            .authority,
+      );
+      expect(authorities).toEqual([homeAuthority, extAuthority]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("--viva-discover skips registrations that duplicate the home tenant", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-dedupe-"));
+    try {
+      const dbPath = path.join(dir, "lake.db");
+      const db = new Database(dbPath);
+      applyMigrations(db);
+      db.close();
+
+      const HOME_TENANT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+      const HOME_ACCT: Account = {
+        username: "eric@example.invalid",
+        homeAccountId: `eric-oid.${HOME_TENANT}`,
+        tenantId: HOME_TENANT,
+      };
+      const homeAuthority = vivaAuthorityFor(HOME_TENANT);
+      const auth = new FakeAuthClient({
+        accounts: [HOME_ACCT],
+        tokens: new Map<
+          string,
+          { token: string; expiresOn: Date; account: Account }
+        >([
+          [
+            `${HOME_ACCT.homeAccountId}|${homeAuthority}`,
+            {
+              token: "home-tok",
+              expiresOn: new Date("2099-01-01T00:00:00Z"),
+              account: HOME_ACCT,
+            },
+          ],
+        ]),
+      });
+      const viva = new FakeVivaClient({
+        steps: [
+          {
+            kind: "listNetworksOk",
+            response: [{ id: "net-home", name: "Home", permalink: "home" }],
+          },
+          {
+            kind: "listCommunitiesOk",
+            response: [
+              { id: "com-home-1", displayName: "Home C1", networkId: "net-home" },
+            ],
+          },
+        ],
+      });
+      const externalTenantsStore = new VivaExternalTenantsStore({
+        fs: new InMemoryFileSystem(),
+        path: "/auth/viva-external-tenants.json",
+      });
+      // Registration's externalTenantId equals the home tenant — the user
+      // accidentally ran --add-account --tenant <their-own-home>. Already
+      // covered by home discover, so skip.
       await externalTenantsStore.add({
         username: HOME_ACCT.username,
-        homeAccountId: "stale-oid.home",
-        externalTenantId: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        homeAccountId: HOME_ACCT.homeAccountId,
+        externalTenantId: HOME_TENANT,
       });
 
       const prints: string[] = [];
-      await realViva(
+      const result = await realViva(
         makeConfig(dbPath),
         { action: "discover", account: HOME_ACCT.username },
         { auth, viva, externalTenantsStore, print: (m) => prints.push(m) },
       );
+      const communities = (
+        result as Extract<VivaCliResult, { action: "discover" }>
+      ).communities;
+      expect(communities.map((c) => c.id)).toEqual(["com-home-1"]);
 
-      // Stale registration must not trigger a silent call for the external
-      // authority — only the home account's default-authority call.
+      // Only one silent call (home fetch) — the dupe registration is skipped.
       const silent = auth.calls.filter((c) => c.method === "getTokenSilent");
       expect(silent).toHaveLength(1);
-      expect(prints.some((p) => /stale|no matching/i.test(p))).toBe(true);
+      // And only one "Found N network(s)" line — no duplicate discovery.
+      expect(prints.filter((p) => /Found \d+ network/.test(p))).toHaveLength(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -13,6 +13,7 @@ skill.
 
 ## 2026-04-24
 
+- Fixed `--viva-discover` returning 0 communities against external tenants (6th attempt — the real fix this time). Three surgical changes to `discoverForAccount`: (1) home fetch now passes explicit `authority: vivaAuthorityFor(account.tenantId)` instead of relying on MSAL's `/common` default, which resolved to the guest's home IDP and minted a Yammer token scoped to the wrong `network_id`; (2) external-tenant registrations are matched by `username` case-insensitively rather than by `homeAccountId`, which changes across MSAL cache shuffles when `--add-account --tenant` stores the guest-tenant login's id; (3) registrations whose `externalTenantId` equals the home tenant are skipped to avoid double-listing. Proven against live Microsoft Yammer network with the POC token pattern. Plan: [plans/done/viva-discover-explicit-authority.md](plans/done/viva-discover-explicit-authority.md).
 - Fixed `parseYammer` big-integer preservation on Node 20: replaced the ES2025 TC39 `context.source` reviver (Node 22+ only) with a pre-processing pass that quotes integer tokens exceeding `Number.MAX_SAFE_INTEGER` before `JSON.parse`. Yammer community and message IDs above 2^53 now round-trip losslessly as exact strings on all supported Node versions. Two previously-failing tests now pass.
 
 ## 2026-04-23

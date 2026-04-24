@@ -682,11 +682,15 @@ async function discoverForAccount(
   const out: VivaCommunity[] = [];
   const seen = new Set<string>();
 
-  // Step 1: home-tenant discover (default authority).
+  // Step 1: home-tenant discover. Explicit authority keeps MSAL from
+  // resolving /common to a guest's home IDP and minting a Yammer token
+  // scoped to the wrong network.
+  const homeAuthority = vivaAuthorityFor(account.tenantId);
   let homeToken: AccessToken;
   try {
     homeToken = await auth.getTokenSilent(account, {
       scopes: [YAMMER_SCOPE],
+      authority: homeAuthority,
     });
   } catch (err) {
     if (!(err instanceof AuthError) || err.kind !== "silent-failed") throw err;
@@ -696,6 +700,7 @@ async function discoverForAccount(
     await auth.loginWithDeviceCode(print, { scopes: [YAMMER_SCOPE] });
     homeToken = await auth.getTokenSilent(account, {
       scopes: [YAMMER_SCOPE],
+      authority: homeAuthority,
     });
   }
   const homeCommunities = await discoverAllCommunities(
@@ -710,12 +715,17 @@ async function discoverForAccount(
     out.push({ ...c, tenantId: account.tenantId });
   }
 
-  // Step 2: per external-tenant registration for this home account.
+  // Step 2: per external-tenant registration for this username.
+  // Match by username (case-insensitive) because --add-account --tenant
+  // stores the guest-tenant login's homeAccountId, which may differ
+  // from the account resolveVivaAccount returns as MSAL's cache shuffles.
+  // Dedupe registrations whose externalTenantId equals the home tenant —
+  // already covered by Step 1.
+  const accountUsernameLower = account.username.toLowerCase();
   const regs = await externalTenantsStore.list();
   for (const reg of regs) {
-    if (reg.homeAccountId !== account.homeAccountId) continue;
-    // AC13: defensive — listAccounts must still surface the home account.
-    // Already asserted above by resolveVivaAccount.
+    if (reg.username.toLowerCase() !== accountUsernameLower) continue;
+    if (reg.externalTenantId === account.tenantId) continue;
     const authority = vivaAuthorityFor(reg.externalTenantId);
     let extToken: AccessToken;
     try {
@@ -742,18 +752,6 @@ async function discoverForAccount(
       seen.add(key);
       out.push({ ...c, tenantId: reg.externalTenantId });
     }
-  }
-
-  // AC13 warning: surface stale registrations that don't match listAccounts.
-  const accounts = await auth.listAccounts();
-  const knownHomeIds = new Set(accounts.map((a) => a.homeAccountId));
-  for (const reg of regs) {
-    if (reg.homeAccountId === account.homeAccountId) continue;
-    if (knownHomeIds.has(reg.homeAccountId)) continue;
-    if (reg.username.toLowerCase() !== accountUsername.toLowerCase()) continue;
-    print(
-      `Ignoring stale external-tenant registration for ${reg.username} (no matching account in MSAL cache; homeAccountId=${reg.homeAccountId}).`,
-    );
   }
 
   return { communities: out };
