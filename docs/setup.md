@@ -126,15 +126,18 @@ account).
 
 ```
 data/
-├── lake.db             ← SQLite WAL (gitignored)
-├── lake.db-wal         ← WAL sidecar
-├── lake.db-shm         ← shared memory
-└── token-cache.json    ← MSAL token cache (chmod 600, gitignored)
+├── lake.db                                ← SQLite WAL (gitignored)
+├── lake.db-wal                            ← WAL sidecar
+├── lake.db-shm                            ← shared memory
+├── token-cache.json                       ← MSAL token cache (chmod 600, gitignored)
+└── auth/
+    └── viva-external-tenants.json         ← per-account external-tenant registrations (chmod 600, gitignored)
 ```
 
-`chmod 700 data/` and `chmod 600 data/token-cache.json`. These files
-contain refresh tokens and customer-tenant message bodies — treat like
-credentials.
+`chmod 700 data/` and `chmod 600 data/token-cache.json
+data/auth/viva-external-tenants.json`. These files contain refresh
+tokens, external-tenant opt-ins, and customer-tenant message bodies —
+treat like credentials.
 
 ## 7. Running the sync worker (project, Weekend 2+)
 

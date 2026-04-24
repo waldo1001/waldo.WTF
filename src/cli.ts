@@ -7,6 +7,7 @@ import {
   YAMMER_SCOPE,
 } from "./auth/msal-auth-client.js";
 import { TokenCacheStore } from "./auth/token-cache-store.js";
+import { VivaExternalTenantsStore } from "./auth/viva-external-tenants-store.js";
 import type { AuthClient } from "./auth/auth-client.js";
 import { AuthError, type AccessToken, type Account } from "./auth/types.js";
 import { main, type MainOptions, type MainResult } from "./index.js";
@@ -37,6 +38,7 @@ export interface AddAccountOptions {
   readonly auth?: AuthClient;
   readonly print?: PrintFn;
   readonly tenantId?: string;
+  readonly externalTenantsStore?: VivaExternalTenantsStore;
 }
 
 export interface BackfillCliResult {
@@ -120,9 +122,9 @@ export type VivaCliResult =
 
 export interface VivaDeps {
   readonly auth?: AuthClient;
-  readonly auths?: readonly AuthClient[];
   readonly viva?: VivaClient;
   readonly store?: VivaSubscriptionStore;
+  readonly externalTenantsStore?: VivaExternalTenantsStore;
   readonly print?: PrintFn;
 }
 
@@ -604,36 +606,20 @@ async function realBackfill(dbPath: string): Promise<BackfillCliResult> {
   }
 }
 
+// The Viva path runs entirely under the Azure CLI public clientId because
+// `--add-account --tenant` records refresh tokens there. Home-tenant
+// Yammer access requires the same clientId + the user's home-tenant
+// authority override; external-tenant access is driven by entries in the
+// external-tenants sidecar store.
 async function buildDefaultVivaAuth(config: Config): Promise<AuthClient> {
   const cacheStore = new TokenCacheStore({
     fs: nodeFileSystem,
     path: path.join(config.authDir, "token-cache.json"),
   });
   return new MsalAuthClient({
-    clientId: config.msClientId,
+    clientId: YAMMER_PUBLIC_CLIENT_ID,
     cacheStore,
   });
-}
-
-// MSAL's token cache is partitioned by clientId. Home-tenant accounts are
-// logged in under `config.msClientId`; external-tenant accounts added via
-// `--add-account --tenant` are logged in under `YAMMER_PUBLIC_CLIENT_ID`.
-// Both partitions coexist in token-cache.json, so discover must query
-// both via separate MsalAuthClient instances and union the results.
-async function buildDefaultVivaAuths(
-  config: Config,
-): Promise<readonly AuthClient[]> {
-  const cacheStore = new TokenCacheStore({
-    fs: nodeFileSystem,
-    path: path.join(config.authDir, "token-cache.json"),
-  });
-  return [
-    new MsalAuthClient({ clientId: config.msClientId, cacheStore }),
-    new MsalAuthClient({
-      clientId: YAMMER_PUBLIC_CLIENT_ID,
-      cacheStore,
-    }),
-  ];
 }
 
 async function buildDefaultVivaClient(): Promise<VivaClient> {
@@ -641,41 +627,28 @@ async function buildDefaultVivaClient(): Promise<VivaClient> {
   return new HttpYammerClient({ fetch: globalThis.fetch.bind(globalThis) });
 }
 
+function buildDefaultExternalTenantsStore(
+  config: Config,
+): VivaExternalTenantsStore {
+  return new VivaExternalTenantsStore({
+    fs: nodeFileSystem,
+    path: path.join(config.authDir, "viva-external-tenants.json"),
+  });
+}
+
 async function resolveVivaAccount(
   auth: AuthClient,
   username: string,
 ): Promise<Account> {
-  const pairs = await resolveVivaAccountPairs([auth], username);
-  return pairs[0]!.account;
-}
-
-interface AccountAuthPair {
-  readonly auth: AuthClient;
-  readonly account: Account;
-}
-
-async function resolveVivaAccountPairs(
-  auths: readonly AuthClient[],
-  username: string,
-): Promise<readonly AccountAuthPair[]> {
   const target = username.toLowerCase();
-  const pairs: AccountAuthPair[] = [];
-  const seen = new Set<string>();
-  for (const auth of auths) {
-    const accounts = await auth.listAccounts();
-    for (const account of accounts) {
-      if (account.username.toLowerCase() !== target) continue;
-      if (seen.has(account.homeAccountId)) continue;
-      seen.add(account.homeAccountId);
-      pairs.push({ auth, account });
-    }
-  }
-  if (pairs.length === 0) {
+  const accounts = await auth.listAccounts();
+  const match = accounts.find((a) => a.username.toLowerCase() === target);
+  if (!match) {
     throw new CliUsageError(
       `unknown account: ${username} — run --add-account first, or check --account spelling`,
     );
   }
-  return pairs;
+  return match;
 }
 
 async function discoverAllCommunities(
@@ -700,39 +673,89 @@ async function discoverForAccount(
 ): Promise<{ readonly communities: readonly VivaCommunity[] }> {
   /* c8 ignore next -- default console.log only in production */
   const print: PrintFn = deps.print ?? ((m) => console.log(m));
-  const auths =
-    deps.auths ??
-    (deps.auth !== undefined
-      ? [deps.auth]
-      : await buildDefaultVivaAuths(config));
-  const pairs = await resolveVivaAccountPairs(auths, accountUsername);
+  const auth = deps.auth ?? (await buildDefaultVivaAuth(config));
+  const account = await resolveVivaAccount(auth, accountUsername);
   const viva = deps.viva ?? (await buildDefaultVivaClient());
+  const externalTenantsStore =
+    deps.externalTenantsStore ?? buildDefaultExternalTenantsStore(config);
+
   const out: VivaCommunity[] = [];
-  for (const { auth, account } of pairs) {
-    let accessToken: AccessToken;
+  const seen = new Set<string>();
+
+  // Step 1: home-tenant discover (default authority).
+  let homeToken: AccessToken;
+  try {
+    homeToken = await auth.getTokenSilent(account, {
+      scopes: [YAMMER_SCOPE],
+    });
+  } catch (err) {
+    if (!(err instanceof AuthError) || err.kind !== "silent-failed") throw err;
+    print(
+      "Yammer scope not yet consented — starting device-code login for Yammer...",
+    );
+    await auth.loginWithDeviceCode(print, { scopes: [YAMMER_SCOPE] });
+    homeToken = await auth.getTokenSilent(account, {
+      scopes: [YAMMER_SCOPE],
+    });
+  }
+  const homeCommunities = await discoverAllCommunities(
+    viva,
+    homeToken.token,
+    print,
+  );
+  for (const c of homeCommunities) {
+    const key = `${account.tenantId}:${c.networkId}:${c.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ ...c, tenantId: account.tenantId });
+  }
+
+  // Step 2: per external-tenant registration for this home account.
+  const regs = await externalTenantsStore.list();
+  for (const reg of regs) {
+    if (reg.homeAccountId !== account.homeAccountId) continue;
+    // AC13: defensive — listAccounts must still surface the home account.
+    // Already asserted above by resolveVivaAccount.
+    const authority = vivaAuthorityFor(reg.externalTenantId);
+    let extToken: AccessToken;
     try {
-      accessToken = await auth.getTokenSilent(account, {
+      extToken = await auth.getTokenSilent(account, {
         scopes: [YAMMER_SCOPE],
+        authority,
       });
     } catch (err) {
-      if (!(err instanceof AuthError) || err.kind !== "silent-failed") throw err;
       print(
-        "Yammer scope not yet consented — starting device-code login for Yammer...",
+        `Skipping external tenant ${reg.externalTenantId}: silent token acquisition failed (${
+          err instanceof Error ? err.message : String(err)
+        }). Re-run --add-account --tenant ${reg.externalTenantId} if consent was revoked.`,
       );
-      await auth.loginWithDeviceCode(print, { scopes: [YAMMER_SCOPE] });
-      accessToken = await auth.getTokenSilent(account, {
-        scopes: [YAMMER_SCOPE],
-      });
+      continue;
     }
-    const perTenant = await discoverAllCommunities(
+    const extCommunities = await discoverAllCommunities(
       viva,
-      accessToken.token,
+      extToken.token,
       print,
     );
-    for (const c of perTenant) {
-      out.push({ ...c, tenantId: account.tenantId });
+    for (const c of extCommunities) {
+      const key = `${reg.externalTenantId}:${c.networkId}:${c.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ ...c, tenantId: reg.externalTenantId });
     }
   }
+
+  // AC13 warning: surface stale registrations that don't match listAccounts.
+  const accounts = await auth.listAccounts();
+  const knownHomeIds = new Set(accounts.map((a) => a.homeAccountId));
+  for (const reg of regs) {
+    if (reg.homeAccountId === account.homeAccountId) continue;
+    if (knownHomeIds.has(reg.homeAccountId)) continue;
+    if (reg.username.toLowerCase() !== accountUsername.toLowerCase()) continue;
+    print(
+      `Ignoring stale external-tenant registration for ${reg.username} (no matching account in MSAL cache; homeAccountId=${reg.homeAccountId}).`,
+    );
+  }
+
   return { communities: out };
 }
 
@@ -926,7 +949,7 @@ export async function addAccount(
   opts: AddAccountOptions = {},
 ): Promise<Account> {
   const env = resolveEnv(opts);
-  loadConfig(env);
+  const config = loadConfig(env);
   /* c8 ignore next -- default console.log path, only in production */
   const print: PrintFn = opts.print ?? ((m) => console.log(m));
   const tenantId = opts.tenantId;
@@ -935,9 +958,17 @@ export async function addAccount(
     opts.auth ??
     (tenantId !== undefined ? buildRealVivaAuth(env, tenantId) : buildRealAuth(env));
   if (tenantId !== undefined) {
-    return auth.loginWithDeviceCode((msg) => print(msg), {
+    const account = await auth.loginWithDeviceCode((msg) => print(msg), {
       scopes: [YAMMER_SCOPE],
     });
+    const store =
+      opts.externalTenantsStore ?? buildDefaultExternalTenantsStore(config);
+    await store.add({
+      username: account.username,
+      homeAccountId: account.homeAccountId,
+      externalTenantId: tenantId,
+    });
+    return account;
   }
   return auth.loginWithDeviceCode((msg) => print(msg));
 }

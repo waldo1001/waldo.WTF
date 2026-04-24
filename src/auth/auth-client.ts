@@ -2,6 +2,7 @@ import type { AccessToken, Account } from "./types.js";
 
 export interface GetTokenOptions {
   readonly scopes?: readonly string[];
+  readonly authority?: string;
 }
 
 export interface LoginWithDeviceCodeOptions {

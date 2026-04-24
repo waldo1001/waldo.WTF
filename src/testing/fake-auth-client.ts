@@ -7,11 +7,14 @@ export type FakeAuthClientCall =
       method: "getTokenSilent";
       account: Account;
       scopes?: readonly string[];
+      authority?: string;
     }
   | { method: "loginWithDeviceCode"; scopes?: readonly string[] };
 
 export interface FakeAuthClientOptions {
   accounts: readonly Account[];
+  // Token keys: `<homeAccountId>` for default authority; or
+  // `<homeAccountId>|<authority>` for authority-scoped tokens.
   tokens?: ReadonlyMap<string, AccessToken | Error>;
   deviceCodeResult?: Account | Error;
   deviceCodeMessage?: string;
@@ -31,12 +34,17 @@ export class FakeAuthClient implements AuthClient {
     account: Account,
     options?: GetTokenOptions,
   ): Promise<AccessToken> {
-    const call: FakeAuthClientCall =
-      options?.scopes !== undefined
-        ? { method: "getTokenSilent", account, scopes: options.scopes }
-        : { method: "getTokenSilent", account };
+    const call: FakeAuthClientCall = {
+      method: "getTokenSilent",
+      account,
+      ...(options?.scopes !== undefined && { scopes: options.scopes }),
+      ...(options?.authority !== undefined && { authority: options.authority }),
+    };
     this.calls.push(call);
-    const scripted = this.opts.tokens?.get(account.homeAccountId);
+    const scripted =
+      (options?.authority !== undefined
+        ? this.opts.tokens?.get(`${account.homeAccountId}|${options.authority}`)
+        : undefined) ?? this.opts.tokens?.get(account.homeAccountId);
     if (scripted === undefined) {
       throw new AuthError(
         "silent-failed",

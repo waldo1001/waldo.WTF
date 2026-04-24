@@ -30,7 +30,11 @@ interface FakePcaOptions {
 }
 
 class FakePca {
-  readonly silentCalls: Array<{ account: AccountInfo; scopes: string[] }> = [];
+  readonly silentCalls: Array<{
+    account: AccountInfo;
+    scopes: string[];
+    authority?: string;
+  }> = [];
   readonly deviceCodeCalls: Array<{ scopes: string[] }> = [];
 
   constructor(private readonly opts: FakePcaOptions) {}
@@ -42,8 +46,13 @@ class FakePca {
   async acquireTokenSilent(req: {
     account: AccountInfo;
     scopes: string[];
+    authority?: string;
   }): Promise<{ accessToken: string; expiresOn: Date; account: AccountInfo }> {
-    this.silentCalls.push({ account: req.account, scopes: req.scopes });
+    this.silentCalls.push(
+      req.authority !== undefined
+        ? { account: req.account, scopes: req.scopes, authority: req.authority }
+        : { account: req.account, scopes: req.scopes },
+    );
     if (this.opts.silentError) throw this.opts.silentError;
     if (!this.opts.silentResult) {
       throw new Error("FakePca: no silentResult configured");
@@ -224,6 +233,43 @@ describe("MsalAuthClient", () => {
     expect(pca.silentCalls).toHaveLength(1);
     expect(pca.silentCalls[0]?.scopes).toEqual(["Mail.Read", "Chat.Read"]);
     expect(pca.silentCalls[0]?.account.homeAccountId).toBe("home-1");
+  });
+
+  it("forwards authority option to acquireTokenSilent", async () => {
+    const info = makeAccountInfo();
+    const expires = new Date("2026-04-23T10:00:00Z");
+    const pca = new FakePca({
+      silentResult: { accessToken: "tok-ms", expiresOn: expires, account: info },
+    });
+    const client = new MsalAuthClient({
+      clientId: "cid",
+      cacheStore: makeCacheStore(),
+      pca: pca as unknown as never,
+    });
+    const account: Account = makeAccountInfo();
+    const authority = "https://login.microsoftonline.com/cccccccc-cccc-cccc-cccc-cccccccccccc/";
+    await client.getTokenSilent(account, {
+      scopes: ["https://api.yammer.com/user_impersonation"],
+      authority,
+    });
+    expect(pca.silentCalls).toHaveLength(1);
+    expect(pca.silentCalls[0]?.authority).toBe(authority);
+  });
+
+  it("omits authority when option is absent", async () => {
+    const info = makeAccountInfo();
+    const expires = new Date("2026-04-23T10:00:00Z");
+    const pca = new FakePca({
+      silentResult: { accessToken: "tok", expiresOn: expires, account: info },
+    });
+    const client = new MsalAuthClient({
+      clientId: "cid",
+      cacheStore: makeCacheStore(),
+      pca: pca as unknown as never,
+    });
+    await client.getTokenSilent(makeAccountInfo());
+    expect(pca.silentCalls).toHaveLength(1);
+    expect(pca.silentCalls[0]?.authority).toBeUndefined();
   });
 
   it("getTokenSilent with scopes override forwards those scopes verbatim to MSAL acquireTokenSilent", async () => {

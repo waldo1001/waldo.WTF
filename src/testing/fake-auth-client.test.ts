@@ -67,6 +67,57 @@ describe("FakeAuthClient", () => {
     ]);
   });
 
+  it("records authority on the call log when provided", async () => {
+    const client = new FakeAuthClient({
+      accounts: [alice],
+      tokens: new Map([[alice.homeAccountId, tokenFor(alice)]]),
+    });
+    await client.getTokenSilent(alice, {
+      scopes: ["https://api.yammer.com/user_impersonation"],
+      authority: "https://login.microsoftonline.com/tenant-x/",
+    });
+    expect(client.calls).toEqual([
+      {
+        method: "getTokenSilent",
+        account: alice,
+        scopes: ["https://api.yammer.com/user_impersonation"],
+        authority: "https://login.microsoftonline.com/tenant-x/",
+      },
+    ]);
+  });
+
+  it("returns a different scripted token per authority", async () => {
+    const defaultTok: AccessToken = {
+      token: "home-tok",
+      expiresOn: new Date("2099-01-01T00:00:00Z"),
+      account: alice,
+    };
+    const msTok: AccessToken = {
+      token: "ms-tok",
+      expiresOn: new Date("2099-01-01T00:00:00Z"),
+      account: alice,
+    };
+    const client = new FakeAuthClient({
+      accounts: [alice],
+      tokens: new Map<string, AccessToken>([
+        [alice.homeAccountId, defaultTok],
+        [
+          `${alice.homeAccountId}|https://login.microsoftonline.com/tenant-x/`,
+          msTok,
+        ],
+      ]),
+    });
+    const home = await client.getTokenSilent(alice, {
+      scopes: ["https://api.yammer.com/user_impersonation"],
+    });
+    const external = await client.getTokenSilent(alice, {
+      scopes: ["https://api.yammer.com/user_impersonation"],
+      authority: "https://login.microsoftonline.com/tenant-x/",
+    });
+    expect(home.token).toBe("home-tok");
+    expect(external.token).toBe("ms-tok");
+  });
+
   it("getTokenSilent throws AuthError(silent-failed) for an unscripted account", async () => {
     const client = new FakeAuthClient({ accounts: [] });
     await expect(client.getTokenSilent(alice)).rejects.toBeInstanceOf(

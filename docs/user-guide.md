@@ -265,12 +265,15 @@ npm run dev -- --add-account \
   --tenant 72f988bf-86f1-41af-91ab-2d7cd011db47
 ```
 
-Sign in with the same email you use day to day. You now have two
-cached accounts for that username — one home-tenant, one guest. From
-here on, `--viva-discover --account your@email.com` enumerates **all**
-cached tenants for that username and merges the results. The output
-gains a `tenant_id` column so you can tell which tenant each community
-belongs to:
+Sign in with the same email you use day to day. Behind the scenes,
+waldo.WTF records a `(homeAccountId, externalTenantId)` registration
+in `data/auth/viva-external-tenants.json` (mode 0600) so future
+`--viva-discover` runs know to redeem a token against that external
+tenant's authority. From here on,
+`--viva-discover --account your@email.com` fans out — once against
+your home tenant, then once per registered external tenant — and
+merges the results. The output gains a `tenant_id` column so you can
+tell which tenant each community belongs to:
 
 ```
 community_id	network_id	network_name	tenant_id	display_name

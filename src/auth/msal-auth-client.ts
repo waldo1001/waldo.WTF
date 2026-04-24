@@ -53,6 +53,7 @@ export interface MsalLikePca {
   acquireTokenSilent(req: {
     account: MsalAccountInfo;
     scopes: readonly string[];
+    authority?: string;
   }): Promise<MsalAuthResult>;
   acquireTokenByDeviceCode(req: {
     scopes: readonly string[];
@@ -99,6 +100,7 @@ export class MsalAuthClient implements AuthClient {
         const r = (await real.acquireTokenSilent({
           account: req.account as MsalAccountInfoReal,
           scopes: [...req.scopes],
+          ...(req.authority !== undefined && { authority: req.authority }),
         })) as AuthenticationResult;
         return {
           accessToken: r.accessToken,
@@ -137,6 +139,7 @@ export class MsalAuthClient implements AuthClient {
           tenantId: account.tenantId,
         },
         scopes: options?.scopes ?? SCOPES,
+        ...(options?.authority !== undefined && { authority: options.authority }),
       });
       return {
         token: res.accessToken,

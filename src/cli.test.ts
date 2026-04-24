@@ -31,6 +31,8 @@ import { SqliteSteeringStore } from "./store/steering-store.js";
 import type { AddSteeringRuleInput, SteeringRule } from "./store/types.js";
 import { FakeClock } from "./testing/fake-clock.js";
 import { YAMMER_SCOPE } from "./auth/msal-auth-client.js";
+import { InMemoryFileSystem } from "./testing/in-memory-file-system.js";
+import { VivaExternalTenantsStore } from "./auth/viva-external-tenants-store.js";
 
 const VALID_TENANT = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 
@@ -114,6 +116,41 @@ describe("runCli", () => {
         >
       )?.scopes,
     ).toEqual([YAMMER_SCOPE]);
+  });
+
+  it("--add-account --tenant records an external-tenant registration", async () => {
+    const acctWithHome: Account = {
+      username: "eric@example.invalid",
+      homeAccountId: "eric-oid.home",
+      tenantId: "home-tenant",
+    };
+    const auth = new FakeAuthClient({
+      accounts: [],
+      deviceCodeResult: acctWithHome,
+    });
+    const fs = new InMemoryFileSystem();
+    const externalTenantsStore = new VivaExternalTenantsStore({
+      fs,
+      path: "/auth/viva-external-tenants.json",
+    });
+    await runCli(
+      ["--add-account", "--tenant", VALID_TENANT],
+      {
+        env: ENV,
+        loadDotenv: false,
+        auth,
+        externalTenantsStore,
+        print: () => {},
+      },
+    );
+    const regs = await externalTenantsStore.list();
+    expect(regs).toEqual([
+      {
+        username: acctWithHome.username,
+        homeAccountId: acctWithHome.homeAccountId,
+        externalTenantId: VALID_TENANT,
+      },
+    ]);
   });
 
   it("--add-account without --tenant does not request the Yammer scope", async () => {
@@ -1532,14 +1569,14 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
         homeAccountId: "oid-1.tenant-home",
         tenantId: "tenant-home",
       };
-      const GUEST_ACCT: Account = {
-        username: "a@example.test",
-        homeAccountId: "oid-2.tenant-guest",
-        tenantId: "tenant-guest",
-      };
+      const GUEST_TENANT = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+      const guestAuthority = vivaAuthorityFor(GUEST_TENANT);
       const auth = new FakeAuthClient({
-        accounts: [HOME_ACCT, GUEST_ACCT],
-        tokens: new Map([
+        accounts: [HOME_ACCT],
+        tokens: new Map<
+          string,
+          { token: string; expiresOn: Date; account: Account }
+        >([
           [
             HOME_ACCT.homeAccountId,
             {
@@ -1549,11 +1586,11 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
             },
           ],
           [
-            GUEST_ACCT.homeAccountId,
+            `${HOME_ACCT.homeAccountId}|${guestAuthority}`,
             {
               token: "tok-guest",
               expiresOn: new Date("2099-01-01T00:00:00Z"),
-              account: GUEST_ACCT,
+              account: HOME_ACCT,
             },
           ],
         ]),
@@ -1582,26 +1619,35 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
           },
         ],
       });
+      const externalTenantsStore = new VivaExternalTenantsStore({
+        fs: new InMemoryFileSystem(),
+        path: "/auth/viva-external-tenants.json",
+      });
+      await externalTenantsStore.add({
+        username: HOME_ACCT.username,
+        homeAccountId: HOME_ACCT.homeAccountId,
+        externalTenantId: GUEST_TENANT,
+      });
 
       const result = await realViva(
         makeConfig(dbPath),
         {
           action: "subscribe",
           account: "a@example.test",
-          communityId: "tenant-guest:net-107:com-dup",
+          communityId: `${GUEST_TENANT}:net-107:com-dup`,
         },
-        { auth, viva, store },
+        { auth, viva, store, externalTenantsStore },
       );
       expect(result.action).toBe("subscribe");
       const sub = (result as Extract<VivaCliResult, { action: "subscribe" }>).sub;
-      expect(sub.tenantId).toBe("tenant-guest");
+      expect(sub.tenantId).toBe(GUEST_TENANT);
       expect(sub.networkId).toBe("net-107");
       expect(sub.communityId).toBe("com-dup");
       expect(sub.communityName).toBe("GuestDup");
 
       const rows = await store.listForAccount("a@example.test");
       expect(rows).toHaveLength(1);
-      expect(rows[0]?.tenantId).toBe("tenant-guest");
+      expect(rows[0]?.tenantId).toBe(GUEST_TENANT);
       db.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -1621,14 +1667,14 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
         homeAccountId: "oid-1.tenant-home",
         tenantId: "tenant-home",
       };
-      const GUEST_ACCT: Account = {
-        username: "a@example.test",
-        homeAccountId: "oid-2.tenant-guest",
-        tenantId: "tenant-guest",
-      };
+      const GUEST_TENANT = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+      const guestAuthority = vivaAuthorityFor(GUEST_TENANT);
       const auth = new FakeAuthClient({
-        accounts: [HOME_ACCT, GUEST_ACCT],
-        tokens: new Map([
+        accounts: [HOME_ACCT],
+        tokens: new Map<
+          string,
+          { token: string; expiresOn: Date; account: Account }
+        >([
           [
             HOME_ACCT.homeAccountId,
             {
@@ -1638,11 +1684,11 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
             },
           ],
           [
-            GUEST_ACCT.homeAccountId,
+            `${HOME_ACCT.homeAccountId}|${guestAuthority}`,
             {
               token: "tok-guest",
               expiresOn: new Date("2099-01-01T00:00:00Z"),
-              account: GUEST_ACCT,
+              account: HOME_ACCT,
             },
           ],
         ]),
@@ -1671,6 +1717,15 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
           },
         ],
       });
+      const externalTenantsStore = new VivaExternalTenantsStore({
+        fs: new InMemoryFileSystem(),
+        path: "/auth/viva-external-tenants.json",
+      });
+      await externalTenantsStore.add({
+        username: HOME_ACCT.username,
+        homeAccountId: HOME_ACCT.homeAccountId,
+        externalTenantId: GUEST_TENANT,
+      });
 
       const err = await realViva(
         makeConfig(dbPath),
@@ -1679,13 +1734,13 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
           account: "a@example.test",
           communityId: "com-dup",
         },
-        { auth, viva, store },
+        { auth, viva, store, externalTenantsStore },
       ).catch((e: unknown) => e);
 
       expect(err).toBeInstanceOf(CliUsageError);
       const msg = (err as Error).message;
       expect(msg).toMatch(/tenant-home/);
-      expect(msg).toMatch(/tenant-guest/);
+      expect(msg).toMatch(new RegExp(GUEST_TENANT));
       expect(msg).toContain("<tenantId>:<networkId>:<communityId>");
       db.close();
     } finally {
@@ -1764,50 +1819,44 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
     }
   });
 
-  // ── Slice 4b-2: cross-tenant discover aggregation ─────────────────
+  // ── Slice 4b-4: per-tenant authority fan-out ─────────────────
 
-  it("--viva-discover lists accounts across multiple clientId-partitioned auth clients", async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-multi-"));
+  it("--viva-discover fans out across registered external tenants with per-tenant authority", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-ext-"));
     try {
       const dbPath = path.join(dir, "lake.db");
       const db = new Database(dbPath);
       applyMigrations(db);
       db.close();
 
+      const HOME_TENANT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+      const EXT_TENANT = "cccccccc-cccc-cccc-cccc-cccccccccccc";
       const HOME_ACCT: Account = {
-        username: "a@example.test",
-        homeAccountId: "oid-1.tenant-home",
-        tenantId: "tenant-home",
+        username: "eric@example.invalid",
+        homeAccountId: `eric-oid.${HOME_TENANT}`,
+        tenantId: HOME_TENANT,
       };
-      const GUEST_ACCT: Account = {
-        username: "a@example.test",
-        homeAccountId: "oid-2.tenant-guest",
-        tenantId: "tenant-guest",
-      };
-      // authHome = project's msClientId partition: only sees HOME_ACCT.
-      const authHome = new FakeAuthClient({
+      const EXT_AUTHORITY = vivaAuthorityFor(EXT_TENANT);
+      const auth = new FakeAuthClient({
         accounts: [HOME_ACCT],
-        tokens: new Map([
+        tokens: new Map<
+          string,
+          { token: string; expiresOn: Date; account: Account }
+        >([
           [
             HOME_ACCT.homeAccountId,
             {
-              token: "tok-home",
+              token: "home-token",
               expiresOn: new Date("2099-01-01T00:00:00Z"),
               account: HOME_ACCT,
             },
           ],
-        ]),
-      });
-      // authYammer = YAMMER_PUBLIC_CLIENT_ID partition: only sees GUEST_ACCT.
-      const authYammer = new FakeAuthClient({
-        accounts: [GUEST_ACCT],
-        tokens: new Map([
           [
-            GUEST_ACCT.homeAccountId,
+            `${HOME_ACCT.homeAccountId}|${EXT_AUTHORITY}`,
             {
-              token: "tok-guest",
+              token: "ms-token",
               expiresOn: new Date("2099-01-01T00:00:00Z"),
-              account: GUEST_ACCT,
+              account: HOME_ACCT,
             },
           ],
         ]),
@@ -1816,17 +1865,17 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
         steps: [
           {
             kind: "listNetworksOk",
-            response: [{ id: "net-home", name: "Dynex", permalink: "dynex" }],
+            response: [{ id: "net-home", name: "Example Home", permalink: "home" }],
           },
           {
             kind: "listCommunitiesOk",
             response: [
-              { id: "com-home-1", displayName: "Home-1", networkId: "net-home" },
+              { id: "com-home-1", displayName: "Home Net", networkId: "net-home" },
             ],
           },
           {
             kind: "listNetworksOk",
-            response: [{ id: "net-107", name: "Microsoft", permalink: "ms" }],
+            response: [{ id: "net-107", name: "BC Partners", permalink: "bcp" }],
           },
           {
             kind: "listCommunitiesOk",
@@ -1838,81 +1887,234 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
         ],
       });
 
+      const externalTenantsStore = new VivaExternalTenantsStore({
+        fs: new InMemoryFileSystem(),
+        path: "/auth/viva-external-tenants.json",
+      });
+      await externalTenantsStore.add({
+        username: HOME_ACCT.username,
+        homeAccountId: HOME_ACCT.homeAccountId,
+        externalTenantId: EXT_TENANT,
+      });
+
       const result = await realViva(
         makeConfig(dbPath),
-        { action: "discover", account: "a@example.test" },
-        { auths: [authHome, authYammer], viva },
+        { action: "discover", account: HOME_ACCT.username },
+        { auth, viva, externalTenantsStore },
       );
       expect(result.action).toBe("discover");
-      const communities =
-        (result as Extract<VivaCliResult, { action: "discover" }>).communities;
+      const communities = (
+        result as Extract<VivaCliResult, { action: "discover" }>
+      ).communities;
       expect(communities.map((c) => c.id).sort()).toEqual(
         ["com-bcp-1", "com-bcp-2", "com-home-1"].sort(),
       );
       const byId = new Map(communities.map((c) => [c.id, c] as const));
-      expect(byId.get("com-home-1")?.tenantId).toBe("tenant-home");
-      expect(byId.get("com-bcp-1")?.tenantId).toBe("tenant-guest");
-      expect(byId.get("com-bcp-2")?.tenantId).toBe("tenant-guest");
+      expect(byId.get("com-home-1")?.tenantId).toBe(HOME_TENANT);
+      expect(byId.get("com-bcp-1")?.tenantId).toBe(EXT_TENANT);
+      expect(byId.get("com-bcp-2")?.tenantId).toBe(EXT_TENANT);
 
-      // Routing: authHome was only asked for HOME_ACCT token.
-      const homeTokenCalls = authHome.calls.filter(
+      const silentCalls = auth.calls.filter(
         (c) => c.method === "getTokenSilent",
       );
-      expect(homeTokenCalls).toHaveLength(1);
-      expect(
-        (homeTokenCalls[0] as Extract<typeof homeTokenCalls[number], { method: "getTokenSilent" }>)
-          .account.homeAccountId,
-      ).toBe(HOME_ACCT.homeAccountId);
-      // authYammer was only asked for GUEST_ACCT token — no cross-talk.
-      const yammerTokenCalls = authYammer.calls.filter(
-        (c) => c.method === "getTokenSilent",
+      expect(silentCalls).toHaveLength(2);
+      const authorities = silentCalls.map((c) =>
+        (c as Extract<typeof silentCalls[number], { method: "getTokenSilent" }>)
+          .authority,
       );
-      expect(yammerTokenCalls).toHaveLength(1);
-      expect(
-        (yammerTokenCalls[0] as Extract<typeof yammerTokenCalls[number], { method: "getTokenSilent" }>)
-          .account.homeAccountId,
-      ).toBe(GUEST_ACCT.homeAccountId);
+      expect(authorities).toEqual([undefined, EXT_AUTHORITY]);
 
-      const commCalls = viva.calls.filter((c) => c.method === "listCommunities");
-      expect(commCalls).toHaveLength(2);
-      const tokens = commCalls.map((c) => c.token).sort();
-      expect(tokens).toEqual(["tok-guest", "tok-home"]);
+      const tokens = viva.calls
+        .filter((c) => c.method === "listCommunities")
+        .map((c) => c.token)
+        .sort();
+      expect(tokens).toEqual(["home-token", "ms-token"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("--viva-discover dedupes an account that appears in both auth caches", async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-dedupe-"));
+  it("--viva-discover without external-tenant registrations only discovers home networks", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-home-only-"));
     try {
       const dbPath = path.join(dir, "lake.db");
       const db = new Database(dbPath);
       applyMigrations(db);
       db.close();
 
-      const SHARED: Account = {
-        username: "a@example.test",
-        homeAccountId: "oid-1.tenant-home",
-        tenantId: "tenant-home",
+      const auth = makeAuth("home-only");
+      const viva = new FakeVivaClient({
+        steps: [
+          {
+            kind: "listNetworksOk",
+            response: [{ id: "net-home", name: "Home", permalink: "home" }],
+          },
+          {
+            kind: "listCommunitiesOk",
+            response: [
+              { id: "com-home-1", displayName: "Home", networkId: "net-home" },
+            ],
+          },
+        ],
+      });
+      const externalTenantsStore = new VivaExternalTenantsStore({
+        fs: new InMemoryFileSystem(),
+        path: "/auth/viva-external-tenants.json",
+      });
+
+      const result = await realViva(
+        makeConfig(dbPath),
+        { action: "discover", account: "a@example.test" },
+        { auth, viva, externalTenantsStore },
+      );
+      const communities = (
+        result as Extract<VivaCliResult, { action: "discover" }>
+      ).communities;
+      expect(communities.map((c) => c.id)).toEqual(["com-home-1"]);
+      expect(communities[0]?.tenantId).toBe("tenant-a");
+
+      const silent = auth.calls.filter((c) => c.method === "getTokenSilent");
+      expect(silent).toHaveLength(1);
+      expect(
+        (silent[0] as Extract<typeof silent[number], { method: "getTokenSilent" }>)
+          .authority,
+      ).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a failing external-tenant silent acquisition is logged and skipped", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-skip-"));
+    try {
+      const dbPath = path.join(dir, "lake.db");
+      const db = new Database(dbPath);
+      applyMigrations(db);
+      db.close();
+
+      const HOME_TENANT = "aaaaaaaa-1111-1111-1111-111111111111";
+      const GOOD_TENANT = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+      const BAD_TENANT = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+      const HOME_ACCT: Account = {
+        username: "eric@example.invalid",
+        homeAccountId: `eric-oid.${HOME_TENANT}`,
+        tenantId: HOME_TENANT,
       };
-      const authA = new FakeAuthClient({
-        accounts: [SHARED],
-        tokens: new Map([
+      const goodAuthority = vivaAuthorityFor(GOOD_TENANT);
+      const badAuthority = vivaAuthorityFor(BAD_TENANT);
+      const auth = new FakeAuthClient({
+        accounts: [HOME_ACCT],
+        tokens: new Map<
+          string,
+          { token: string; expiresOn: Date; account: Account } | Error
+        >([
           [
-            SHARED.homeAccountId,
+            HOME_ACCT.homeAccountId,
             {
-              token: "tok-a",
+              token: "home-tok",
               expiresOn: new Date("2099-01-01T00:00:00Z"),
-              account: SHARED,
+              account: HOME_ACCT,
             },
+          ],
+          [
+            `${HOME_ACCT.homeAccountId}|${goodAuthority}`,
+            {
+              token: "good-tok",
+              expiresOn: new Date("2099-01-01T00:00:00Z"),
+              account: HOME_ACCT,
+            },
+          ],
+          [
+            `${HOME_ACCT.homeAccountId}|${badAuthority}`,
+            new AuthError("silent-failed", "consent revoked"),
           ],
         ]),
       });
-      // authB returns the same homeAccountId; dedupe must keep the first
-      // (authA) and not call authB for this account.
-      const authB = new FakeAuthClient({
-        accounts: [SHARED],
-        tokens: new Map(),
+      const viva = new FakeVivaClient({
+        steps: [
+          { kind: "listNetworksOk", response: [] },
+          { kind: "listCommunitiesOk", response: [] },
+          {
+            kind: "listNetworksOk",
+            response: [{ id: "net-good", name: "Good", permalink: "good" }],
+          },
+          {
+            kind: "listCommunitiesOk",
+            response: [
+              { id: "com-good-1", displayName: "Good", networkId: "net-good" },
+            ],
+          },
+        ],
+      });
+      const externalTenantsStore = new VivaExternalTenantsStore({
+        fs: new InMemoryFileSystem(),
+        path: "/auth/viva-external-tenants.json",
+      });
+      await externalTenantsStore.add({
+        username: HOME_ACCT.username,
+        homeAccountId: HOME_ACCT.homeAccountId,
+        externalTenantId: BAD_TENANT,
+      });
+      await externalTenantsStore.add({
+        username: HOME_ACCT.username,
+        homeAccountId: HOME_ACCT.homeAccountId,
+        externalTenantId: GOOD_TENANT,
+      });
+
+      const prints: string[] = [];
+      const result = await realViva(
+        makeConfig(dbPath),
+        { action: "discover", account: HOME_ACCT.username },
+        {
+          auth,
+          viva,
+          externalTenantsStore,
+          print: (m) => prints.push(m),
+        },
+      );
+      const communities = (
+        result as Extract<VivaCliResult, { action: "discover" }>
+      ).communities;
+      expect(communities.map((c) => c.id)).toEqual(["com-good-1"]);
+      expect(communities[0]?.tenantId).toBe(GOOD_TENANT);
+      expect(
+        prints.some(
+          (p) => p.includes(BAD_TENANT) && /skip/i.test(p),
+        ),
+      ).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a registration with no matching account is ignored with a warning", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-cli-viva-stale-"));
+    try {
+      const dbPath = path.join(dir, "lake.db");
+      const db = new Database(dbPath);
+      applyMigrations(db);
+      db.close();
+
+      const HOME_ACCT: Account = {
+        username: "eric@example.invalid",
+        homeAccountId: "eric-oid.home",
+        tenantId: "tenant-a",
+      };
+      const auth = new FakeAuthClient({
+        accounts: [HOME_ACCT],
+        tokens: new Map<
+          string,
+          { token: string; expiresOn: Date; account: Account }
+        >([
+          [
+            HOME_ACCT.homeAccountId,
+            {
+              token: "tok",
+              expiresOn: new Date("2099-01-01T00:00:00Z"),
+              account: HOME_ACCT,
+            },
+          ],
+        ]),
       });
       const viva = new FakeVivaClient({
         steps: [
@@ -1920,23 +2122,29 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
           { kind: "listCommunitiesOk", response: [] },
         ],
       });
+      const externalTenantsStore = new VivaExternalTenantsStore({
+        fs: new InMemoryFileSystem(),
+        path: "/auth/viva-external-tenants.json",
+      });
+      // Registration references a stale homeAccountId (no matching account).
+      await externalTenantsStore.add({
+        username: HOME_ACCT.username,
+        homeAccountId: "stale-oid.home",
+        externalTenantId: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      });
 
-      const result = await realViva(
+      const prints: string[] = [];
+      await realViva(
         makeConfig(dbPath),
-        { action: "discover", account: "a@example.test" },
-        { auths: [authA, authB], viva },
+        { action: "discover", account: HOME_ACCT.username },
+        { auth, viva, externalTenantsStore, print: (m) => prints.push(m) },
       );
-      expect(result.action).toBe("discover");
 
-      // Dedupe: authA iterates once; authB is listed but never asked for a token.
-      expect(
-        authA.calls.filter((c) => c.method === "getTokenSilent"),
-      ).toHaveLength(1);
-      expect(
-        authB.calls.filter((c) => c.method === "getTokenSilent"),
-      ).toHaveLength(0);
-      const commCalls = viva.calls.filter((c) => c.method === "listCommunities");
-      expect(commCalls).toHaveLength(1);
+      // Stale registration must not trigger a silent call for the external
+      // authority — only the home account's default-authority call.
+      const silent = auth.calls.filter((c) => c.method === "getTokenSilent");
+      expect(silent).toHaveLength(1);
+      expect(prints.some((p) => /stale|no matching/i.test(p))).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
