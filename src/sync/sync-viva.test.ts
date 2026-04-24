@@ -250,22 +250,6 @@ describe("syncViva", () => {
     );
   });
 
-  it("rethrows TokenExpiredError without mutating sync state", async () => {
-    const store = new InMemoryMessageStore();
-    const subs = new InMemoryVivaSubscriptionStore();
-    await seedSub(subs, { communityId: "com-1" });
-    const clock = new FakeClock(new Date("2026-04-21T12:00:00Z"));
-    const viva = new FakeVivaClient({
-      steps: [{ kind: "error", error: new TokenExpiredError("401") }],
-    });
-    const auth = authWithToken();
-    await expect(
-      syncViva({ account, auth, viva, store, subs, clock }),
-    ).rejects.toBeInstanceOf(TokenExpiredError);
-    const setSync = store.calls.filter((c) => c.method === "setSyncState");
-    expect(setSync).toHaveLength(0);
-  });
-
   it("rethrows GraphRateLimitedError without mutating sync state", async () => {
     const store = new InMemoryMessageStore();
     const subs = new InMemoryVivaSubscriptionStore();
@@ -896,5 +880,314 @@ describe("syncViva", () => {
       (listThreadsCalls[0] as Extract<(typeof listThreadsCalls)[number], { method: "listThreads" }>)
         .communityId,
     ).toBe("com-home");
+  });
+
+  // ── Same-tick self-heal on Yammer 401 ──────────────────────────────────
+  // Stale MSAL-cached AT (e.g. post-deploy tenant-consent churn) hits Yammer
+  // and gets 401. syncViva re-acquires with forceRefresh=true and retries the
+  // offending community once before either succeeding or recording a
+  // per-community error. Investigation: docs/investigations/viva-sync-401.md.
+
+  it("retries community once with forceRefresh after Yammer 401, ingesting fresh-token results", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryVivaSubscriptionStore();
+    await subs.subscribe({
+      account: account.username,
+      tenantId: account.tenantId,
+      networkId: "net-1",
+      communityId: "com-1",
+    });
+    const clock = new FakeClock(new Date("2026-04-24T09:05:00Z"));
+    const authority = vivaAuthorityFor(account.tenantId);
+    const staleToken: AccessToken = {
+      token: "stale-tok",
+      expiresOn: new Date("2026-04-24T10:00:00Z"),
+      account,
+    };
+    const freshToken: AccessToken = {
+      token: "fresh-tok",
+      expiresOn: new Date("2026-04-24T10:05:00Z"),
+      account,
+    };
+    const auth = new FakeAuthClient({
+      accounts: [account],
+      tokens: new Map([
+        [`${account.homeAccountId}|${authority}`, staleToken],
+        [`${account.homeAccountId}|${authority}|forceRefresh=true`, freshToken],
+      ]),
+    });
+    const viva = new FakeVivaClient({
+      steps: [
+        // First listThreads with stale-tok 401s.
+        { kind: "error", error: new TokenExpiredError("401") },
+        // Retry after forceRefresh — fresh-tok succeeds.
+        { kind: "listThreadsOk", response: threadsPage([thread("thr-1")]) },
+        {
+          kind: "listPostsOk",
+          response: postsPage([makePost({ id: "p-1", conversationId: "thr-1" })]),
+        },
+      ],
+    });
+
+    const res = await syncViva({ account, auth, viva, store, subs, clock });
+
+    expect(res.perCommunity).toEqual([{ communityId: "com-1", added: 1 }]);
+    expect(res.added).toBe(1);
+
+    const tokenCalls = auth.calls.filter((c) => c.method === "getTokenSilent");
+    const forceRefreshCalls = tokenCalls.filter(
+      (c) =>
+        (c as Extract<(typeof tokenCalls)[number], { method: "getTokenSilent" }>)
+          .forceRefresh === true,
+    );
+    expect(forceRefreshCalls).toHaveLength(1);
+
+    const listThreadsCalls = viva.calls.filter((c) => c.method === "listThreads");
+    expect(listThreadsCalls).toHaveLength(2);
+    const tokens = listThreadsCalls.map(
+      (c) =>
+        (c as Extract<(typeof listThreadsCalls)[number], { method: "listThreads" }>)
+          .token,
+    );
+    expect(tokens[0]).toBe("stale-tok");
+    expect(tokens[1]).toBe("fresh-tok");
+  });
+
+  it("surfaces second 401 as per-community error and continues with other subs", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryVivaSubscriptionStore();
+    await subs.subscribe({
+      account: account.username,
+      tenantId: account.tenantId,
+      networkId: "net-1",
+      communityId: "com-bad",
+    });
+    await subs.subscribe({
+      account: account.username,
+      tenantId: account.tenantId,
+      networkId: "net-1",
+      communityId: "com-good",
+    });
+    const clock = new FakeClock(new Date("2026-04-24T09:05:00Z"));
+    const authority = vivaAuthorityFor(account.tenantId);
+    // Both the original and the force-refreshed token still 401 — simulates
+    // a genuinely broken sub (revoked grant, network-disabled user, etc.).
+    const anyToken: AccessToken = {
+      token: "stale-still",
+      expiresOn: new Date("2026-04-24T10:00:00Z"),
+      account,
+    };
+    const auth = new FakeAuthClient({
+      accounts: [account],
+      tokens: new Map([[`${account.homeAccountId}|${authority}`, anyToken]]),
+    });
+    const viva = new FakeVivaClient({
+      steps: [
+        // com-bad: initial 401
+        { kind: "error", error: new TokenExpiredError("401") },
+        // com-bad retry: second 401
+        { kind: "error", error: new TokenExpiredError("401") },
+        // com-good: single success
+        { kind: "listThreadsOk", response: threadsPage([]) },
+      ],
+    });
+
+    const res = await syncViva({ account, auth, viva, store, subs, clock });
+
+    const bad = res.perCommunity.find((p) => p.communityId === "com-bad");
+    const good = res.perCommunity.find((p) => p.communityId === "com-good");
+    expect(bad?.added).toBe(0);
+    expect(bad?.error).toBeDefined();
+    expect(bad?.error).toContain("401");
+    expect(good).toEqual({ communityId: "com-good", added: 0 });
+  });
+
+  it("does not retry on GraphRateLimitedError (429 path preserved)", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryVivaSubscriptionStore();
+    await seedSub(subs, { communityId: "com-1" });
+    const clock = new FakeClock(new Date("2026-04-24T09:05:00Z"));
+    const viva = new FakeVivaClient({
+      steps: [{ kind: "error", error: new GraphRateLimitedError(7) }],
+    });
+    const auth = authWithToken();
+
+    await expect(
+      syncViva({ account, auth, viva, store, subs, clock }),
+    ).rejects.toBeInstanceOf(GraphRateLimitedError);
+
+    const tokenCalls = auth.calls.filter((c) => c.method === "getTokenSilent");
+    const forceRefreshCalls = tokenCalls.filter(
+      (c) =>
+        (c as Extract<(typeof tokenCalls)[number], { method: "getTokenSilent" }>)
+          .forceRefresh === true,
+    );
+    expect(forceRefreshCalls).toHaveLength(0);
+  });
+
+  it("retry with forceRefresh fires once per 401 incident, not once per sub", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryVivaSubscriptionStore();
+    await subs.subscribe({
+      account: account.username,
+      tenantId: account.tenantId,
+      networkId: "net-1",
+      communityId: "com-A",
+    });
+    await subs.subscribe({
+      account: account.username,
+      tenantId: account.tenantId,
+      networkId: "net-1",
+      communityId: "com-B",
+    });
+    const clock = new FakeClock(new Date("2026-04-24T09:05:00Z"));
+    const authority = vivaAuthorityFor(account.tenantId);
+    const staleToken: AccessToken = {
+      token: "stale-tok",
+      expiresOn: new Date("2026-04-24T10:00:00Z"),
+      account,
+    };
+    const freshToken: AccessToken = {
+      token: "fresh-tok",
+      expiresOn: new Date("2026-04-24T10:05:00Z"),
+      account,
+    };
+    const auth = new FakeAuthClient({
+      accounts: [account],
+      tokens: new Map([
+        [`${account.homeAccountId}|${authority}`, staleToken],
+        [`${account.homeAccountId}|${authority}|forceRefresh=true`, freshToken],
+      ]),
+    });
+    const viva = new FakeVivaClient({
+      steps: [
+        // com-A stale → 401
+        { kind: "error", error: new TokenExpiredError("401") },
+        // com-A retry with fresh → ok
+        { kind: "listThreadsOk", response: threadsPage([]) },
+        // com-B with whatever token it has → ok (should be fresh, see AC6)
+        { kind: "listThreadsOk", response: threadsPage([]) },
+      ],
+    });
+
+    await syncViva({ account, auth, viva, store, subs, clock });
+
+    const tokenCalls = auth.calls.filter((c) => c.method === "getTokenSilent");
+    const forceRefreshCalls = tokenCalls.filter(
+      (c) =>
+        (c as Extract<(typeof tokenCalls)[number], { method: "getTokenSilent" }>)
+          .forceRefresh === true,
+    );
+    expect(forceRefreshCalls).toHaveLength(1);
+  });
+
+  it("records per-community error when forceRefresh acquisition itself fails", async () => {
+    // If MSAL can't mint a new AT (e.g. refresh-token revoked, network blip on
+    // the token endpoint), the retry cannot proceed. The sub gets a
+    // per-community error carrying the refresh-failure message, and the pass
+    // continues for other subs.
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryVivaSubscriptionStore();
+    await subs.subscribe({
+      account: account.username,
+      tenantId: account.tenantId,
+      networkId: "net-1",
+      communityId: "com-1",
+    });
+    const clock = new FakeClock(new Date("2026-04-24T09:05:00Z"));
+    const authority = vivaAuthorityFor(account.tenantId);
+    const staleToken: AccessToken = {
+      token: "stale-tok",
+      expiresOn: new Date("2026-04-24T10:00:00Z"),
+      account,
+    };
+    const auth = new FakeAuthClient({
+      accounts: [account],
+      tokens: new Map<string, AccessToken | Error>([
+        [`${account.homeAccountId}|${authority}`, staleToken],
+        [
+          `${account.homeAccountId}|${authority}|forceRefresh=true`,
+          new AuthError("silent-failed", "refresh token revoked"),
+        ],
+      ]),
+    });
+    const viva = new FakeVivaClient({
+      steps: [
+        // First listThreads with stale-tok → 401.
+        { kind: "error", error: new TokenExpiredError("401") },
+        // No retry step expected — the forceRefresh fails before we get here.
+      ],
+    });
+
+    const res = await syncViva({ account, auth, viva, store, subs, clock });
+
+    const com = res.perCommunity.find((p) => p.communityId === "com-1");
+    expect(com?.added).toBe(0);
+    expect(com?.error).toContain("refresh token revoked");
+  });
+
+  it("force-refreshed token replaces tokenCache entry so subsequent same-tenant subs reuse it", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryVivaSubscriptionStore();
+    await subs.subscribe({
+      account: account.username,
+      tenantId: account.tenantId,
+      networkId: "net-1",
+      communityId: "com-A",
+    });
+    await subs.subscribe({
+      account: account.username,
+      tenantId: account.tenantId,
+      networkId: "net-1",
+      communityId: "com-C",
+    });
+    const clock = new FakeClock(new Date("2026-04-24T09:05:00Z"));
+    const authority = vivaAuthorityFor(account.tenantId);
+    const staleToken: AccessToken = {
+      token: "stale-tok",
+      expiresOn: new Date("2026-04-24T10:00:00Z"),
+      account,
+    };
+    const freshToken: AccessToken = {
+      token: "fresh-tok",
+      expiresOn: new Date("2026-04-24T10:05:00Z"),
+      account,
+    };
+    const auth = new FakeAuthClient({
+      accounts: [account],
+      tokens: new Map([
+        [`${account.homeAccountId}|${authority}`, staleToken],
+        [`${account.homeAccountId}|${authority}|forceRefresh=true`, freshToken],
+      ]),
+    });
+    const viva = new FakeVivaClient({
+      steps: [
+        // com-A stale → 401
+        { kind: "error", error: new TokenExpiredError("401") },
+        // com-A retry → fresh ok
+        { kind: "listThreadsOk", response: threadsPage([]) },
+        // com-C (same tenant) — must use fresh, not trigger a second forceRefresh
+        { kind: "listThreadsOk", response: threadsPage([]) },
+      ],
+    });
+
+    await syncViva({ account, auth, viva, store, subs, clock });
+
+    const listThreadsCalls = viva.calls.filter((c) => c.method === "listThreads");
+    const tokens = listThreadsCalls.map(
+      (c) =>
+        (c as Extract<(typeof listThreadsCalls)[number], { method: "listThreads" }>)
+          .token,
+    );
+    // Order: com-A stale (401), com-A fresh (retry), com-C fresh (reuse).
+    expect(tokens).toEqual(["stale-tok", "fresh-tok", "fresh-tok"]);
+
+    const tokenCalls = auth.calls.filter((c) => c.method === "getTokenSilent");
+    const forceRefreshCalls = tokenCalls.filter(
+      (c) =>
+        (c as Extract<(typeof tokenCalls)[number], { method: "getTokenSilent" }>)
+          .forceRefresh === true,
+    );
+    expect(forceRefreshCalls).toHaveLength(1);
   });
 });

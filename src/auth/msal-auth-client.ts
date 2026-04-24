@@ -58,6 +58,7 @@ export interface MsalLikePca {
     account: MsalAccountInfo;
     scopes: readonly string[];
     authority?: string;
+    forceRefresh?: boolean;
   }): Promise<MsalAuthResult>;
   acquireTokenByDeviceCode(req: {
     scopes: readonly string[];
@@ -105,6 +106,7 @@ export class MsalAuthClient implements AuthClient {
           account: req.account as MsalAccountInfoReal,
           scopes: [...req.scopes],
           ...(req.authority !== undefined && { authority: req.authority }),
+          ...(req.forceRefresh !== undefined && { forceRefresh: req.forceRefresh }),
         })) as AuthenticationResult;
         return {
           accessToken: r.accessToken,
@@ -144,6 +146,9 @@ export class MsalAuthClient implements AuthClient {
         },
         scopes: options?.scopes ?? SCOPES,
         ...(options?.authority !== undefined && { authority: options.authority }),
+        ...(options?.forceRefresh !== undefined && {
+          forceRefresh: options.forceRefresh,
+        }),
       });
       return {
         token: res.accessToken,

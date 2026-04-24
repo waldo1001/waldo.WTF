@@ -8,13 +8,16 @@ export type FakeAuthClientCall =
       account: Account;
       scopes?: readonly string[];
       authority?: string;
+      forceRefresh?: boolean;
     }
   | { method: "loginWithDeviceCode"; scopes?: readonly string[] };
 
 export interface FakeAuthClientOptions {
   accounts: readonly Account[];
-  // Token keys: `<homeAccountId>` for default authority; or
-  // `<homeAccountId>|<authority>` for authority-scoped tokens.
+  // Token keys, tried in order:
+  //   `<homeAccountId>|<authority>|forceRefresh=true`  (only when forceRefresh: true)
+  //   `<homeAccountId>|<authority>`                     (authority-scoped)
+  //   `<homeAccountId>`                                 (plain / default authority)
   tokens?: ReadonlyMap<string, AccessToken | Error>;
   deviceCodeResult?: Account | Error;
   deviceCodeMessage?: string;
@@ -39,12 +42,27 @@ export class FakeAuthClient implements AuthClient {
       account,
       ...(options?.scopes !== undefined && { scopes: options.scopes }),
       ...(options?.authority !== undefined && { authority: options.authority }),
+      ...(options?.forceRefresh !== undefined && {
+        forceRefresh: options.forceRefresh,
+      }),
     };
     this.calls.push(call);
-    const scripted =
-      (options?.authority !== undefined
-        ? this.opts.tokens?.get(`${account.homeAccountId}|${options.authority}`)
-        : undefined) ?? this.opts.tokens?.get(account.homeAccountId);
+    const tryKeys: string[] = [];
+    if (options?.forceRefresh === true && options?.authority !== undefined) {
+      tryKeys.push(`${account.homeAccountId}|${options.authority}|forceRefresh=true`);
+    }
+    if (options?.authority !== undefined) {
+      tryKeys.push(`${account.homeAccountId}|${options.authority}`);
+    }
+    tryKeys.push(account.homeAccountId);
+    let scripted: AccessToken | Error | undefined;
+    for (const key of tryKeys) {
+      const v = this.opts.tokens?.get(key);
+      if (v !== undefined) {
+        scripted = v;
+        break;
+      }
+    }
     if (scripted === undefined) {
       throw new AuthError(
         "silent-failed",

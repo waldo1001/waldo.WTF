@@ -34,6 +34,7 @@ class FakePca {
     account: AccountInfo;
     scopes: string[];
     authority?: string;
+    forceRefresh?: boolean;
   }> = [];
   readonly deviceCodeCalls: Array<{ scopes: string[] }> = [];
 
@@ -47,12 +48,17 @@ class FakePca {
     account: AccountInfo;
     scopes: string[];
     authority?: string;
+    forceRefresh?: boolean;
   }): Promise<{ accessToken: string; expiresOn: Date; account: AccountInfo }> {
-    this.silentCalls.push(
-      req.authority !== undefined
-        ? { account: req.account, scopes: req.scopes, authority: req.authority }
-        : { account: req.account, scopes: req.scopes },
-    );
+    const rec: {
+      account: AccountInfo;
+      scopes: string[];
+      authority?: string;
+      forceRefresh?: boolean;
+    } = { account: req.account, scopes: req.scopes };
+    if (req.authority !== undefined) rec.authority = req.authority;
+    if (req.forceRefresh !== undefined) rec.forceRefresh = req.forceRefresh;
+    this.silentCalls.push(rec);
     if (this.opts.silentError) throw this.opts.silentError;
     if (!this.opts.silentResult) {
       throw new Error("FakePca: no silentResult configured");
@@ -254,6 +260,44 @@ describe("MsalAuthClient", () => {
     });
     expect(pca.silentCalls).toHaveLength(1);
     expect(pca.silentCalls[0]?.authority).toBe(authority);
+  });
+
+  it("forwards forceRefresh option to acquireTokenSilent", async () => {
+    const info = makeAccountInfo();
+    const expires = new Date("2026-04-24T10:00:00Z");
+    const pca = new FakePca({
+      silentResult: { accessToken: "tok-fresh", expiresOn: expires, account: info },
+    });
+    const client = new MsalAuthClient({
+      clientId: "cid",
+      cacheStore: makeCacheStore(),
+      pca: pca as unknown as never,
+    });
+    await client.getTokenSilent(makeAccountInfo(), {
+      scopes: ["https://api.yammer.com/user_impersonation"],
+      forceRefresh: true,
+    });
+    expect(pca.silentCalls).toHaveLength(1);
+    expect(pca.silentCalls[0]?.forceRefresh).toBe(true);
+  });
+
+  it("omits forceRefresh when option is absent", async () => {
+    const info = makeAccountInfo();
+    const expires = new Date("2026-04-24T10:00:00Z");
+    const pca = new FakePca({
+      silentResult: { accessToken: "tok", expiresOn: expires, account: info },
+    });
+    const client = new MsalAuthClient({
+      clientId: "cid",
+      cacheStore: makeCacheStore(),
+      pca: pca as unknown as never,
+    });
+    await client.getTokenSilent(makeAccountInfo());
+    expect(pca.silentCalls).toHaveLength(1);
+    expect(pca.silentCalls[0]?.forceRefresh).toBeUndefined();
+    // Property-absence semantics: the key must not be present (matches the
+    // way `authority` is handled so MSAL sees a clean request object).
+    expect("forceRefresh" in pca.silentCalls[0]!).toBe(false);
   });
 
   it("omits authority when option is absent", async () => {

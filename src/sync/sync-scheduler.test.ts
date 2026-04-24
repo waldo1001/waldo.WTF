@@ -678,7 +678,12 @@ describe("SyncScheduler", () => {
     expect(vivaRow?.status).toBe("ok");
   });
 
-  it("viva hardstop (TokenExpired) is recorded as error row, doesn't crash tick", async () => {
+  it("viva persistent 401 after force-refresh retry resolves as ok row (syncViva does not throw)", async () => {
+    // Regression guard for the force-refresh-on-401 retry: even when both the
+    // initial and the forceRefresh acquisition return the same stale token and
+    // the viva fake 401s twice, syncViva must resolve (per-community error),
+    // and the scheduler writes ok — not error — because the tick did not
+    // crash. See docs/plans/viva-sync-force-refresh-on-401.md AC3.
     const a1 = acc("alice");
     const store = new InMemoryMessageStore();
     const graph = new FakeGraphClient({
@@ -688,7 +693,10 @@ describe("SyncScheduler", () => {
       ],
     });
     const viva = new FakeVivaClient({
-      steps: [{ kind: "error", error: new TokenExpiredError() }],
+      steps: [
+        { kind: "error", error: new TokenExpiredError() },
+        { kind: "error", error: new TokenExpiredError() },
+      ],
     });
     const vivaSubs = new InMemoryVivaSubscriptionStore();
     await vivaSubs.subscribe({
@@ -715,7 +723,7 @@ describe("SyncScheduler", () => {
     });
     await scheduler.runOnce();
     const vivaRow = store.syncLog.find((e) => e.source === "viva-engage");
-    expect(vivaRow?.status).toBe("error");
+    expect(vivaRow?.status).toBe("ok");
   });
 
   it("viva hardstop (GraphRateLimited) is recorded as error row, doesn't crash tick", async () => {
@@ -928,6 +936,79 @@ describe("SyncScheduler", () => {
 
     const vivaRow = store.syncLog.find((e) => e.source === "viva-engage");
     expect(vivaRow?.status).toBe("ok");
+  });
+
+  it("records status=ok when syncViva self-heals a 401 mid-pass", async () => {
+    // Same-tick recovery: underlying Yammer fake 401s, syncViva force-refreshes
+    // the token and retries; from the scheduler's point of view it was a normal
+    // success. Exactly one ok row, no error row. Closes the Observable churn
+    // concern in docs/plans/viva-sync-force-refresh-on-401.md.
+    const a1 = acc("alice");
+    const homeAuthority = vivaAuthorityFor(a1.tenantId);
+
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
+    });
+    const viva = new FakeVivaClient({
+      steps: [
+        // First attempt: stale-tok → 401.
+        { kind: "error", error: new TokenExpiredError("401") },
+        // Retry with fresh-tok → empty page, still ok.
+        { kind: "listThreadsOk", response: { value: [] } },
+      ],
+    });
+    const vivaSubs = new InMemoryVivaSubscriptionStore();
+    await vivaSubs.subscribe({
+      account: a1.username,
+      tenantId: a1.tenantId,
+      networkId: "net-1",
+      communityId: "com-1",
+    });
+
+    const staleYammer: AccessToken = {
+      token: "stale-yammer",
+      expiresOn: new Date("2026-04-24T10:00:00Z"),
+      account: a1,
+    };
+    const freshYammer: AccessToken = {
+      token: "fresh-yammer",
+      expiresOn: new Date("2026-04-24T10:05:00Z"),
+      account: a1,
+    };
+    const vivaAuth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([
+        [`${a1.homeAccountId}|${homeAuthority}`, staleYammer],
+        [`${a1.homeAccountId}|${homeAuthority}|forceRefresh=true`, freshYammer],
+      ]),
+    });
+    const mainAuth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+
+    const clock = new FakeClock(new Date("2026-04-24T09:05:00Z"));
+    const timer = makeFakeSetTimer();
+    const scheduler = new SyncScheduler({
+      auth: mainAuth,
+      graph,
+      viva,
+      vivaSubs,
+      vivaAuth,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+
+    const vivaRows = store.syncLog.filter((e) => e.source === "viva-engage");
+    expect(vivaRows).toHaveLength(1);
+    expect(vivaRows[0]?.status).toBe("ok");
   });
 
   it("SyncScheduler falls back to main auth for viva when vivaAuth not set", async () => {

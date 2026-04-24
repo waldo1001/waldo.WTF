@@ -208,9 +208,46 @@ export async function syncViva(deps: SyncVivaDeps): Promise<SyncVivaResult> {
       return e;
     }
   };
+  // Same-tick self-heal: MSAL holds a stale-but-unexpired AT for the
+  // Yammer-clientId partition after tenant-consent churn or deploy. One
+  // forceRefresh request mints a new AT; replace the per-run cache so
+  // later subs in the same tenant reuse it. Failure here is always an
+  // MSAL-side AuthError (token endpoint unreachable, refresh token
+  // revoked, etc.) — it cannot be a Yammer TokenExpiredError /
+  // GraphRateLimitedError, because those live in the HTTP-to-Yammer
+  // layer, not in MSAL.
+  const forceRefreshTokenForTenant = async (
+    tenantId: string,
+  ): Promise<AccessToken | Error> => {
+    try {
+      const tok = await auth.getTokenSilent(account, {
+        scopes: [YAMMER_SCOPE],
+        authority: vivaAuthorityFor(tenantId),
+        forceRefresh: true,
+      });
+      tokenCache.set(tenantId, tok);
+      return tok;
+    } catch (err) {
+      return err instanceof Error ? err : new Error(String(err));
+    }
+  };
 
   let added = 0;
   const perCommunity: SyncVivaCommunityResult[] = [];
+  const recordSuccess = async (
+    sub: VivaSubscription,
+    res: { added: number; newCursor: Date | undefined },
+  ): Promise<void> => {
+    added += res.added;
+    if (
+      res.newCursor !== undefined &&
+      (sub.lastCursorAt === undefined ||
+        res.newCursor.getTime() > sub.lastCursorAt.getTime())
+    ) {
+      await subs.setCursor(account.username, sub.communityId, res.newCursor);
+    }
+    perCommunity.push({ communityId: sub.communityId, added: res.added });
+  };
   for (const sub of enabled) {
     const tenantId = sub.tenantId ?? account.tenantId;
     const tokResult = await getTokenForTenant(tenantId);
@@ -231,16 +268,40 @@ export async function syncViva(deps: SyncVivaDeps): Promise<SyncVivaResult> {
         subs,
         clock,
       });
-      added += res.added;
-      if (
-        res.newCursor !== undefined &&
-        (sub.lastCursorAt === undefined ||
-          res.newCursor.getTime() > sub.lastCursorAt.getTime())
-      ) {
-        await subs.setCursor(account.username, sub.communityId, res.newCursor);
-      }
-      perCommunity.push({ communityId: sub.communityId, added: res.added });
+      await recordSuccess(sub, res);
     } catch (err) {
+      if (err instanceof TokenExpiredError) {
+        const fresh = await forceRefreshTokenForTenant(tenantId);
+        if (fresh instanceof Error) {
+          perCommunity.push({
+            communityId: sub.communityId,
+            added: 0,
+            error: fresh.message,
+          });
+          continue;
+        }
+        try {
+          const retryRes = await syncOneCommunity({
+            viva,
+            token: fresh.token,
+            sub,
+            store,
+            subs,
+            clock,
+          });
+          await recordSuccess(sub, retryRes);
+        } catch (retryErr) {
+          // 429 still aborts the whole pass (Retry-After contract).
+          // A second 401 is treated as a genuine per-community failure.
+          if (retryErr instanceof GraphRateLimitedError) throw retryErr;
+          perCommunity.push({
+            communityId: sub.communityId,
+            added: 0,
+            error: retryErr instanceof Error ? retryErr.message : String(retryErr),
+          });
+        }
+        continue;
+      }
       if (isHardStop(err)) throw err;
       perCommunity.push({
         communityId: sub.communityId,
