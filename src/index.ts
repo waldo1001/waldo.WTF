@@ -3,7 +3,10 @@ import Database from "better-sqlite3";
 import { config as loadDotenv } from "dotenv";
 import { loadConfig, type Config } from "./config.js";
 import { systemClock, type Clock } from "./clock.js";
-import { MsalAuthClient } from "./auth/msal-auth-client.js";
+import {
+  MsalAuthClient,
+  YAMMER_PUBLIC_CLIENT_ID,
+} from "./auth/msal-auth-client.js";
 import { TokenCacheStore } from "./auth/token-cache-store.js";
 import type { FileSystem } from "./fs.js";
 import { nodeFileSystem } from "./fs-node.js";
@@ -47,6 +50,7 @@ import type { Server } from "node:http";
 
 export interface MainOverrides {
   readonly auth?: AuthClient;
+  readonly vivaAuth?: AuthClient;
   readonly graph?: GraphClient;
   readonly teams?: TeamsClient;
   readonly viva?: VivaClient;
@@ -113,6 +117,15 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
       clientId: config.msClientId,
       cacheStore,
     });
+  // Viva needs the Yammer public clientId because --add-account --tenant
+  // writes external-tenant refresh tokens under that cache partition.
+  // See docs/plans/done/sync-viva-yammer-clientid.md.
+  const vivaAuth: AuthClient =
+    overrides.vivaAuth ??
+    new MsalAuthClient({
+      clientId: YAMMER_PUBLIC_CLIENT_ID,
+      cacheStore,
+    });
   const ownsDb = overrides.store === undefined;
   const db = ownsDb ? openDatabase(config.dbPath) : null;
   const steering: SteeringStore =
@@ -145,6 +158,7 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
 
   const scheduler = new SyncScheduler({
     auth,
+    vivaAuth,
     graph,
     teams,
     viva,

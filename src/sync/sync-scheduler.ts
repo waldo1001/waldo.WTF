@@ -30,6 +30,13 @@ export interface TickSummary {
 
 export interface SyncSchedulerDeps {
   readonly auth: AuthClient;
+  // Separate AuthClient for viva-engage token acquisition. Viva requires
+  // the Azure CLI public clientId (YAMMER_PUBLIC_CLIENT_ID) because
+  // --add-account --tenant records external-tenant refresh tokens there;
+  // MSAL caches are partitioned by clientId, so reusing `auth` would
+  // silent-fail on the authority override. Falls back to `auth` when
+  // omitted — keeps tests that don't care about the partition green.
+  readonly vivaAuth?: AuthClient;
   readonly graph: GraphClient;
   readonly teams?: TeamsClient;
   readonly viva?: VivaClient;
@@ -168,7 +175,7 @@ export class SyncScheduler {
             try {
               const r = await syncViva({
                 account,
-                auth: this.deps.auth,
+                auth: this.deps.vivaAuth ?? this.deps.auth,
                 viva: this.deps.viva,
                 store: this.deps.store,
                 subs: this.deps.vivaSubs,

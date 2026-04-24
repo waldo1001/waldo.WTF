@@ -13,6 +13,7 @@ import { InMemoryMessageStore } from "../testing/in-memory-message-store.js";
 import { InMemoryVivaSubscriptionStore } from "../testing/in-memory-viva-subscription-store.js";
 import { FakeClock } from "../testing/fake-clock.js";
 import { GraphRateLimitedError, TokenExpiredError } from "../sources/viva.js";
+import { vivaAuthorityFor, YAMMER_SCOPE } from "../auth/msal-auth-client.js";
 import type { Account, AccessToken } from "../auth/types.js";
 import type { GraphDeltaResponse } from "../sources/graph.js";
 
@@ -842,5 +843,147 @@ describe("SyncScheduler", () => {
     expect(summary.errorCount).toBe(1);
     // Contract: callback fires after sync_log has been written
     expect(store.syncLog).toHaveLength(4);
+  });
+
+  // ── vivaAuth injection: viva tokens require a separate MSAL cache
+  // partition (YAMMER_PUBLIC_CLIENT_ID), so the scheduler must allow a
+  // distinct AuthClient for viva syncs. Without this, getTokenSilent with
+  // an external-tenant authority silently fails under the main clientId
+  // (no cached account for that (clientId, authority) pair), and viva-engage
+  // ticks record ok/0 forever.
+
+  it("SyncScheduler passes vivaAuth to syncViva when provided", async () => {
+    const a1 = acc("alice");
+    const externalTenant = "72f988bf-86f1-41af-91ab-2d7cd011db47";
+    const externalAuthority = vivaAuthorityFor(externalTenant);
+
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
+    });
+    const viva = new FakeVivaClient({
+      steps: [{ kind: "listThreadsOk", response: { value: [] } }],
+    });
+    const vivaSubs = new InMemoryVivaSubscriptionStore();
+    await vivaSubs.subscribe({
+      account: a1.username,
+      tenantId: externalTenant,
+      networkId: "net-ext",
+      communityId: "com-ext",
+    });
+
+    const mainAuth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const vivaYammerToken: AccessToken = {
+      token: "yammer-tok",
+      expiresOn: new Date("2026-04-13T13:00:00Z"),
+      account: a1,
+    };
+    const vivaAuth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([
+        [`${a1.homeAccountId}|${externalAuthority}`, vivaYammerToken],
+      ]),
+    });
+
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth: mainAuth,
+      graph,
+      viva,
+      vivaSubs,
+      vivaAuth,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+
+    const vivaTokenCalls = vivaAuth.calls.filter(
+      (c) => c.method === "getTokenSilent",
+    );
+    expect(vivaTokenCalls).toHaveLength(1);
+    const call = vivaTokenCalls[0] as Extract<
+      (typeof vivaTokenCalls)[number],
+      { method: "getTokenSilent" }
+    >;
+    expect(call.authority).toBe(externalAuthority);
+    expect(call.scopes).toEqual([YAMMER_SCOPE]);
+
+    // mainAuth must NOT have received a Yammer-scope call.
+    const mainYammerCalls = mainAuth.calls.filter(
+      (c) =>
+        c.method === "getTokenSilent" &&
+        c.scopes?.includes(YAMMER_SCOPE) === true,
+    );
+    expect(mainYammerCalls).toHaveLength(0);
+
+    const vivaRow = store.syncLog.find((e) => e.source === "viva-engage");
+    expect(vivaRow?.status).toBe("ok");
+  });
+
+  it("SyncScheduler falls back to main auth for viva when vivaAuth not set", async () => {
+    // Regression guard: existing callers that don't set vivaAuth still work
+    // — the scheduler uses `this.deps.auth` for viva tokens as before.
+    const a1 = acc("alice");
+    const homeAuthority = vivaAuthorityFor(a1.tenantId);
+
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
+    });
+    const viva = new FakeVivaClient({
+      steps: [{ kind: "listThreadsOk", response: { value: [] } }],
+    });
+    const vivaSubs = new InMemoryVivaSubscriptionStore();
+    await vivaSubs.subscribe({
+      account: a1.username,
+      tenantId: a1.tenantId,
+      networkId: "net-1",
+      communityId: "com-1",
+    });
+
+    // Only the main auth is scripted with a token for the home authority.
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([
+        [`${a1.homeAccountId}|${homeAuthority}`, tok(a1)],
+      ]),
+    });
+
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      viva,
+      vivaSubs,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+
+    const yammerCalls = auth.calls.filter(
+      (c) =>
+        c.method === "getTokenSilent" &&
+        c.scopes?.includes(YAMMER_SCOPE) === true,
+    );
+    expect(yammerCalls).toHaveLength(1);
+    const vivaRow = store.syncLog.find((e) => e.source === "viva-engage");
+    expect(vivaRow?.status).toBe("ok");
   });
 });
