@@ -6,7 +6,8 @@ import { InMemoryMessageStore } from "../testing/in-memory-message-store.js";
 import { InMemoryVivaSubscriptionStore } from "../testing/in-memory-viva-subscription-store.js";
 import { FakeClock } from "../testing/fake-clock.js";
 import type { Account, AccessToken } from "../auth/types.js";
-import { YAMMER_SCOPE } from "../auth/msal-auth-client.js";
+import { vivaAuthorityFor, YAMMER_SCOPE } from "../auth/msal-auth-client.js";
+import { AuthError } from "../auth/types.js";
 import {
   GraphRateLimitedError,
   TokenExpiredError,
@@ -698,5 +699,202 @@ describe("syncViva", () => {
     expect(
       (postCalls[1] as Extract<(typeof postCalls)[number], { method: "listPosts" }>).olderThan,
     ).toBe("p-50");
+  });
+
+  // ── Per-tenant authority: same root cause as discover, different seam. ──
+  // /common resolves to the account's home IDP, minting a Yammer token scoped
+  // to the home network only. Subs pointing at external networks need a
+  // token minted against an authority = vivaAuthorityFor(sub.tenantId).
+
+  it("syncViva requests token with explicit home-tenant authority", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryVivaSubscriptionStore();
+    await subs.subscribe({
+      account: account.username,
+      tenantId: account.tenantId,
+      networkId: "net-1",
+      communityId: "com-1",
+    });
+    const clock = new FakeClock(new Date("2026-04-22T10:00:00Z"));
+    const viva = new FakeVivaClient({
+      steps: [{ kind: "listThreadsOk", response: threadsPage([]) }],
+    });
+    const homeAuthority = vivaAuthorityFor(account.tenantId);
+    const auth = new FakeAuthClient({
+      accounts: [account],
+      tokens: new Map([
+        [`${account.homeAccountId}|${homeAuthority}`, accessToken],
+      ]),
+    });
+
+    await syncViva({ account, auth, viva, store, subs, clock });
+
+    const tokenCalls = auth.calls.filter((c) => c.method === "getTokenSilent");
+    expect(tokenCalls).toHaveLength(1);
+    expect(
+      (tokenCalls[0] as Extract<(typeof tokenCalls)[number], { method: "getTokenSilent" }>)
+        .authority,
+    ).toBe(homeAuthority);
+  });
+
+  it("syncViva acquires a separate token per subscription tenantId", async () => {
+    const HOME_TENANT = account.tenantId;
+    const EXT_TENANT = "72f988bf-86f1-41af-91ab-2d7cd011db47";
+    const HOME_AUTHORITY = vivaAuthorityFor(HOME_TENANT);
+    const EXT_AUTHORITY = vivaAuthorityFor(EXT_TENANT);
+
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryVivaSubscriptionStore();
+    await subs.subscribe({
+      account: account.username,
+      tenantId: HOME_TENANT,
+      networkId: "net-home",
+      communityId: "com-home",
+    });
+    await subs.subscribe({
+      account: account.username,
+      tenantId: EXT_TENANT,
+      networkId: "net-ext",
+      communityId: "com-ext",
+    });
+    const clock = new FakeClock(new Date("2026-04-22T10:00:00Z"));
+    const viva = new FakeVivaClient({
+      steps: [
+        { kind: "listThreadsOk", response: threadsPage([]) },
+        { kind: "listThreadsOk", response: threadsPage([]) },
+      ],
+    });
+    const homeToken: AccessToken = {
+      token: "home-tok",
+      expiresOn: new Date("2026-04-22T13:00:00Z"),
+      account,
+    };
+    const extToken: AccessToken = {
+      token: "ext-tok",
+      expiresOn: new Date("2026-04-22T13:00:00Z"),
+      account,
+    };
+    const auth = new FakeAuthClient({
+      accounts: [account],
+      tokens: new Map([
+        [`${account.homeAccountId}|${HOME_AUTHORITY}`, homeToken],
+        [`${account.homeAccountId}|${EXT_AUTHORITY}`, extToken],
+      ]),
+    });
+
+    await syncViva({ account, auth, viva, store, subs, clock });
+
+    const tokenCalls = auth.calls.filter((c) => c.method === "getTokenSilent");
+    const authorities = tokenCalls.map(
+      (c) =>
+        (c as Extract<(typeof tokenCalls)[number], { method: "getTokenSilent" }>)
+          .authority,
+    );
+    expect(authorities.sort()).toEqual([HOME_AUTHORITY, EXT_AUTHORITY].sort());
+
+    const listThreadsCalls = viva.calls.filter(
+      (c) => c.method === "listThreads",
+    );
+    const tokenByCommunity = new Map<string, string>();
+    for (const c of listThreadsCalls) {
+      const lt = c as Extract<(typeof listThreadsCalls)[number], { method: "listThreads" }>;
+      tokenByCommunity.set(lt.communityId, lt.token);
+    }
+    expect(tokenByCommunity.get("com-home")).toBe("home-tok");
+    expect(tokenByCommunity.get("com-ext")).toBe("ext-tok");
+  });
+
+  it("syncViva falls back to account tenant when subscription tenantId is missing", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryVivaSubscriptionStore();
+    await subs.subscribe({
+      account: account.username,
+      // tenantId omitted — simulates pre-slice-4b-2 row
+      networkId: "net-1",
+      communityId: "com-1",
+    });
+    const clock = new FakeClock(new Date("2026-04-22T10:00:00Z"));
+    const viva = new FakeVivaClient({
+      steps: [{ kind: "listThreadsOk", response: threadsPage([]) }],
+    });
+    const homeAuthority = vivaAuthorityFor(account.tenantId);
+    const auth = new FakeAuthClient({
+      accounts: [account],
+      tokens: new Map([
+        [`${account.homeAccountId}|${homeAuthority}`, accessToken],
+      ]),
+    });
+
+    await syncViva({ account, auth, viva, store, subs, clock });
+
+    const tokenCalls = auth.calls.filter((c) => c.method === "getTokenSilent");
+    expect(tokenCalls).toHaveLength(1);
+    expect(
+      (tokenCalls[0] as Extract<(typeof tokenCalls)[number], { method: "getTokenSilent" }>)
+        .authority,
+    ).toBe(homeAuthority);
+  });
+
+  it("syncViva isolates per-tenant token-acquisition failures", async () => {
+    const HOME_TENANT = account.tenantId;
+    const BAD_TENANT = "72f988bf-86f1-41af-91ab-2d7cd011db47";
+    const HOME_AUTHORITY = vivaAuthorityFor(HOME_TENANT);
+    const BAD_AUTHORITY = vivaAuthorityFor(BAD_TENANT);
+
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryVivaSubscriptionStore();
+    await subs.subscribe({
+      account: account.username,
+      tenantId: HOME_TENANT,
+      networkId: "net-home",
+      communityId: "com-home",
+    });
+    await subs.subscribe({
+      account: account.username,
+      tenantId: BAD_TENANT,
+      networkId: "net-bad",
+      communityId: "com-bad",
+    });
+    const clock = new FakeClock(new Date("2026-04-22T10:00:00Z"));
+    const viva = new FakeVivaClient({
+      steps: [
+        // Only the home sub reaches listThreads — the bad-tenant sub fails
+        // at token acquisition, before any Graph call.
+        { kind: "listThreadsOk", response: threadsPage([]) },
+      ],
+    });
+    const homeToken: AccessToken = {
+      token: "home-tok",
+      expiresOn: new Date("2026-04-22T13:00:00Z"),
+      account,
+    };
+    const auth = new FakeAuthClient({
+      accounts: [account],
+      tokens: new Map([
+        [`${account.homeAccountId}|${HOME_AUTHORITY}`, homeToken],
+        [
+          `${account.homeAccountId}|${BAD_AUTHORITY}`,
+          new AuthError("silent-failed", "no token for bad tenant"),
+        ],
+      ]),
+    });
+
+    const res = await syncViva({ account, auth, viva, store, subs, clock });
+
+    const homeRes = res.perCommunity.find((p) => p.communityId === "com-home");
+    const badRes = res.perCommunity.find((p) => p.communityId === "com-bad");
+    expect(homeRes).toEqual({ communityId: "com-home", added: 0 });
+    expect(badRes?.error).toBeDefined();
+    expect(badRes?.added).toBe(0);
+
+    // No Graph call for the failed-token sub.
+    const listThreadsCalls = viva.calls.filter(
+      (c) => c.method === "listThreads",
+    );
+    expect(listThreadsCalls).toHaveLength(1);
+    expect(
+      (listThreadsCalls[0] as Extract<(typeof listThreadsCalls)[number], { method: "listThreads" }>)
+        .communityId,
+    ).toBe("com-home");
   });
 });

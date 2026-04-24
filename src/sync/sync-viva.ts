@@ -1,6 +1,6 @@
 import type { AuthClient } from "../auth/auth-client.js";
-import { YAMMER_SCOPE } from "../auth/msal-auth-client.js";
-import type { Account } from "../auth/types.js";
+import { vivaAuthorityFor, YAMMER_SCOPE } from "../auth/msal-auth-client.js";
+import type { Account, AccessToken } from "../auth/types.js";
 import type { Clock } from "../clock.js";
 import type { MessageStore } from "../store/message-store.js";
 import type { VivaSubscriptionStore } from "../store/viva-subscription-store.js";
@@ -186,17 +186,46 @@ async function syncOneCommunity(deps: {
 
 export async function syncViva(deps: SyncVivaDeps): Promise<SyncVivaResult> {
   const { account, auth, viva, store, subs, clock } = deps;
-  const token = await auth.getTokenSilent(account, { scopes: [YAMMER_SCOPE] });
-
   const enabled = await subs.listEnabledForAccount(account.username);
+
+  const tokenCache = new Map<string, AccessToken | Error>();
+  const getTokenForTenant = async (
+    tenantId: string,
+  ): Promise<AccessToken | Error> => {
+    const cached = tokenCache.get(tenantId);
+    if (cached !== undefined) return cached;
+    try {
+      const tok = await auth.getTokenSilent(account, {
+        scopes: [YAMMER_SCOPE],
+        authority: vivaAuthorityFor(tenantId),
+      });
+      tokenCache.set(tenantId, tok);
+      return tok;
+    } catch (err) {
+      if (isHardStop(err)) throw err;
+      const e = err instanceof Error ? err : new Error(String(err));
+      tokenCache.set(tenantId, e);
+      return e;
+    }
+  };
 
   let added = 0;
   const perCommunity: SyncVivaCommunityResult[] = [];
   for (const sub of enabled) {
+    const tenantId = sub.tenantId ?? account.tenantId;
+    const tokResult = await getTokenForTenant(tenantId);
+    if (tokResult instanceof Error) {
+      perCommunity.push({
+        communityId: sub.communityId,
+        added: 0,
+        error: tokResult.message,
+      });
+      continue;
+    }
     try {
       const res = await syncOneCommunity({
         viva,
-        token: token.token,
+        token: tokResult.token,
         sub,
         store,
         subs,

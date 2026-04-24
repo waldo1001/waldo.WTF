@@ -11,6 +11,10 @@ export const DEFAULT_AUTHORITY = "https://login.microsoftonline.com/common";
 export const YAMMER_SCOPE = "https://api.yammer.com/user_impersonation";
 export const SCOPES = ["Mail.Read", "Chat.Read"] as const;
 
+export function vivaAuthorityFor(tenantId: string): string {
+  return `https://login.microsoftonline.com/${tenantId}/`;
+}
+
 // Azure CLI's public first-party client ID. It is pre-consented globally by
 // Microsoft, which means device-code login against external tenants where our
 // own app registration would be blocked by "Admin consent required" works

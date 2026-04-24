@@ -3,6 +3,7 @@ import { config as loadDotenv } from "dotenv";
 import { loadConfig, type Config } from "./config.js";
 import {
   MsalAuthClient,
+  vivaAuthorityFor,
   YAMMER_PUBLIC_CLIENT_ID,
   YAMMER_SCOPE,
 } from "./auth/msal-auth-client.js";
@@ -182,9 +183,7 @@ const ADD_ACCOUNT_VALUE_FLAGS = new Set(["--tenant"]);
 
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function vivaAuthorityFor(tenantId: string): string {
-  return `https://login.microsoftonline.com/${tenantId}/`;
-}
+export { vivaAuthorityFor };
 
 const STEER_TOGGLE_ACTIONS: Readonly<
   Record<string, { readonly action: "setEnabled" | "remove"; readonly enabled?: boolean }>
