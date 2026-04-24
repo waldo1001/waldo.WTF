@@ -1,10 +1,10 @@
 # Plan: Agent-Consumable Sync Health Diagnosis
 
 **Status (2026-04-24):** implementation shipped — see
-[done/weekend-8-diagnose-sync-health.md](done/weekend-8-diagnose-sync-health.md).
-This file remains as the parent design doc for the out-of-scope
-follow-ups (CLI `waldo sync-doctor`, per-chat Teams drift,
-auto-remediation). Leave it in `docs/plans/` until those land.
+[weekend-8-diagnose-sync-health.md](weekend-8-diagnose-sync-health.md).
+Out-of-scope v1 items (CLI `waldo sync-doctor`, per-chat Teams
+drift, auto-remediation) will get their own plan files if and when
+they become real work.
 
 ## Context
 

@@ -1,6 +1,6 @@
 # Plan: Weekend 8 slice — `diagnose_sync_health` MCP tool
 
-Parent design doc: [docs/plans/diagnose-sync-health-mcp-tool.md](diagnose-sync-health-mcp-tool.md).
+Parent design doc: [docs/plans/done/diagnose-sync-health-mcp-tool.md](diagnose-sync-health-mcp-tool.md).
 
 ## Task
 
