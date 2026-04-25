@@ -50,6 +50,16 @@ import {
   startWhatsAppWatcher,
   type WhatsAppWatcherHandle,
 } from "./sync/whatsapp-watcher.js";
+import {
+  startEventLoopWatchdog as defaultStartEventLoopWatchdog,
+  type EventLoopWatchdogHandle,
+  type EventLoopWatchdogOptions,
+} from "./health/event-loop-watchdog.js";
+import {
+  startSelfProbe as defaultStartSelfProbe,
+  type SelfProbeHandle,
+  type SelfProbeOptions,
+} from "./health/self-probe.js";
 import type { Server } from "node:http";
 
 export interface MainOverrides {
@@ -65,6 +75,12 @@ export interface MainOverrides {
   readonly setTimer?: SetTimerFn;
   readonly logger?: Logger;
   readonly fs?: FileSystem;
+  readonly startEventLoopWatchdog?: (
+    opts: EventLoopWatchdogOptions,
+  ) => EventLoopWatchdogHandle;
+  readonly startSelfProbe?: (opts: SelfProbeOptions) => SelfProbeHandle;
+  readonly scheduleKill?: () => void;
+  readonly processExit?: (code: number) => void;
 }
 
 export interface MainOptions {
@@ -95,6 +111,25 @@ const nodeSetTimer: SetTimerFn = (fn, ms): TimerHandle => {
 };
 
 const DEFAULT_HTTP_TIMEOUT_MS = 60_000;
+
+const WATCHDOG_EVENT_LOOP_INTERVAL_MS = 5_000;
+const WATCHDOG_EVENT_LOOP_MAX_LAG_MS = 1_000;
+const WATCHDOG_SELF_PROBE_INTERVAL_MS = 30_000;
+const WATCHDOG_SELF_PROBE_TIMEOUT_MS = 5_000;
+const WATCHDOG_SELF_PROBE_FAILURES_BEFORE_WEDGE = 3;
+const WATCHDOG_SIGKILL_FALLBACK_MS = 5_000;
+
+/* c8 ignore next 6 -- production SIGKILL fallback, exercised only at runtime */
+const defaultScheduleKill = (): void => {
+  setTimeout(() => {
+    process.kill(process.pid, "SIGKILL");
+  }, WATCHDOG_SIGKILL_FALLBACK_MS).unref();
+};
+
+/* c8 ignore next 3 -- production process.exit, exercised only at runtime */
+const defaultProcessExit = (code: number): void => {
+  process.exit(code);
+};
 
 /* c8 ignore next 6 -- default process signal seam, exercised only at runtime */
 const nodeSignals: Signals = {
@@ -220,6 +255,38 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
 
   await scheduler.start();
 
+  const startEventLoopWatchdog =
+    overrides.startEventLoopWatchdog ?? defaultStartEventLoopWatchdog;
+  const startSelfProbe = overrides.startSelfProbe ?? defaultStartSelfProbe;
+  const scheduleKill = overrides.scheduleKill ?? defaultScheduleKill;
+  const processExit = overrides.processExit ?? defaultProcessExit;
+
+  let eventLoopWatchdog: EventLoopWatchdogHandle | undefined;
+  let selfProbe: SelfProbeHandle | undefined;
+  if (!config.watchdogDisabled) {
+    const onWedge = (): void => {
+      logger.error("watchdog: server wedged, exiting");
+      scheduleKill();
+      processExit(1);
+    };
+    eventLoopWatchdog = startEventLoopWatchdog({
+      clock,
+      logger,
+      intervalMs: WATCHDOG_EVENT_LOOP_INTERVAL_MS,
+      maxLagMs: WATCHDOG_EVENT_LOOP_MAX_LAG_MS,
+      onWedge,
+    });
+    selfProbe = startSelfProbe({
+      clock,
+      logger,
+      intervalMs: WATCHDOG_SELF_PROBE_INTERVAL_MS,
+      timeoutMs: WATCHDOG_SELF_PROBE_TIMEOUT_MS,
+      port: config.port,
+      failuresBeforeWedge: WATCHDOG_SELF_PROBE_FAILURES_BEFORE_WEDGE,
+      onWedge,
+    });
+  }
+
   let whatsappWatcher: WhatsAppWatcherHandle | undefined;
   if (config.whatsappWatch) {
     const watcherFs = overrides.fs ?? nodeFileSystem;
@@ -243,6 +310,8 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
   const shutdown = async (): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
+    eventLoopWatchdog?.stop();
+    selfProbe?.stop();
     whatsappWatcher?.stop();
     scheduler.stop();
     await new Promise<void>((resolve, reject) => {

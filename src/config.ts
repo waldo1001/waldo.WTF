@@ -20,6 +20,7 @@ export type Config = Readonly<{
   whatsappArchivePath: string;
   whatsappAccount: string;
   whatsappWatch: boolean;
+  watchdogDisabled: boolean;
 }>;
 
 export class ConfigError extends Error {
@@ -80,6 +81,7 @@ export function loadConfig(env: Env): Config {
       ? env.WALDO_WHATSAPP_ACCOUNT
       : DEFAULT_WHATSAPP_ACCOUNT,
     whatsappWatch: env.WALDO_WHATSAPP_WATCH === "true",
+    watchdogDisabled: env.WALDO_WATCHDOG_DISABLED === "1",
     ...(backfillDays !== undefined ? { backfillDays } : {}),
   };
 }

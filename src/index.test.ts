@@ -14,6 +14,8 @@ import type {
 import type { Logger } from "./logger.js";
 import type { Signals } from "./index.js";
 import type { AddressInfo } from "node:net";
+import type { EventLoopWatchdogOptions } from "./health/event-loop-watchdog.js";
+import type { SelfProbeOptions } from "./health/self-probe.js";
 
 const randomPort = (): string =>
   String(40000 + Math.floor(Math.random() * 20000));
@@ -219,6 +221,147 @@ describe("main", () => {
     );
     expect(meta.status).toBe(401);
     await result.shutdown();
+  });
+
+  it("starts both watchdogs by default with the documented intervals", async () => {
+    const h = makeHarness();
+    const overrides = makeOverrides();
+    const elwCalls: EventLoopWatchdogOptions[] = [];
+    const spCalls: SelfProbeOptions[] = [];
+    const startEventLoopWatchdog = vi.fn((opts: EventLoopWatchdogOptions) => {
+      elwCalls.push(opts);
+      return { stop: vi.fn() };
+    });
+    const startSelfProbe = vi.fn((opts: SelfProbeOptions) => {
+      spCalls.push(opts);
+      return { stop: vi.fn() };
+    });
+    const result = await main({
+      env: makeEnv(),
+      loadDotenv: false,
+      overrides: {
+        ...overrides,
+        setTimer: h.setTimer,
+        logger: h.logger,
+        startEventLoopWatchdog,
+        startSelfProbe,
+      },
+    });
+    expect(startEventLoopWatchdog).toHaveBeenCalledTimes(1);
+    expect(startSelfProbe).toHaveBeenCalledTimes(1);
+    expect(elwCalls[0]!.intervalMs).toBe(5_000);
+    expect(elwCalls[0]!.maxLagMs).toBe(1_000);
+    expect(spCalls[0]!.intervalMs).toBe(30_000);
+    expect(spCalls[0]!.timeoutMs).toBe(5_000);
+    expect(spCalls[0]!.failuresBeforeWedge).toBe(3);
+    await result.shutdown();
+  });
+
+  it("does not start watchdogs when WALDO_WATCHDOG_DISABLED=1", async () => {
+    const h = makeHarness();
+    const overrides = makeOverrides();
+    const startEventLoopWatchdog = vi.fn(() => ({ stop: vi.fn() }));
+    const startSelfProbe = vi.fn(() => ({ stop: vi.fn() }));
+    const result = await main({
+      env: { ...makeEnv(), WALDO_WATCHDOG_DISABLED: "1" },
+      loadDotenv: false,
+      overrides: {
+        ...overrides,
+        setTimer: h.setTimer,
+        logger: h.logger,
+        startEventLoopWatchdog,
+        startSelfProbe,
+      },
+    });
+    expect(startEventLoopWatchdog).not.toHaveBeenCalled();
+    expect(startSelfProbe).not.toHaveBeenCalled();
+    await result.shutdown();
+  });
+
+  it("shutdown() stops watchdogs before closing the http server", async () => {
+    const h = makeHarness();
+    const overrides = makeOverrides();
+    const order: string[] = [];
+    const elwStop = vi.fn(() => {
+      order.push("elw.stop");
+    });
+    const spStop = vi.fn(() => {
+      order.push("sp.stop");
+    });
+    const startEventLoopWatchdog = vi.fn(() => ({ stop: elwStop }));
+    const startSelfProbe = vi.fn(() => ({ stop: spStop }));
+    const result = await main({
+      env: makeEnv(),
+      loadDotenv: false,
+      overrides: {
+        ...overrides,
+        setTimer: h.setTimer,
+        logger: h.logger,
+        startEventLoopWatchdog,
+        startSelfProbe,
+      },
+    });
+    const realClose = result.httpServer.close.bind(result.httpServer);
+    result.httpServer.close = ((cb?: (err?: Error) => void) => {
+      order.push("server.close");
+      return realClose(cb);
+    }) as typeof result.httpServer.close;
+    await result.shutdown();
+    expect(order.indexOf("elw.stop")).toBeLessThan(order.indexOf("server.close"));
+    expect(order.indexOf("sp.stop")).toBeLessThan(order.indexOf("server.close"));
+    expect(elwStop).toHaveBeenCalledTimes(1);
+    expect(spStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("wedge handler logs error, schedules SIGKILL fallback, then calls processExit(1)", async () => {
+    const h = makeHarness();
+    const overrides = makeOverrides();
+    let capturedOnWedge: (() => void) | undefined;
+    const startEventLoopWatchdog = vi.fn(
+      (opts: EventLoopWatchdogOptions) => {
+        capturedOnWedge = opts.onWedge;
+        return { stop: vi.fn() };
+      },
+    );
+    const startSelfProbe = vi.fn(() => ({ stop: vi.fn() }));
+    const order: string[] = [];
+    const scheduleKill = vi.fn(() => {
+      order.push("scheduleKill");
+    });
+    const processExit = vi.fn(((_code: number) => {
+      order.push("processExit");
+    }) as (code: number) => never);
+    const result = await main({
+      env: makeEnv(),
+      loadDotenv: false,
+      overrides: {
+        ...overrides,
+        setTimer: h.setTimer,
+        logger: h.logger,
+        startEventLoopWatchdog,
+        startSelfProbe,
+        scheduleKill,
+        processExit,
+      },
+    });
+    expect(capturedOnWedge).toBeDefined();
+    capturedOnWedge!();
+    expect(scheduleKill).toHaveBeenCalledTimes(1);
+    expect(processExit).toHaveBeenCalledWith(1);
+    expect(order).toEqual(["scheduleKill", "processExit"]);
+    expect(h.errors.some((e) => /wedged/i.test(e))).toBe(true);
+    await result.shutdown();
+  });
+
+  it("WALDO_WATCHDOG_DISABLED=1: shutdown does not blow up when handles are absent", async () => {
+    const h = makeHarness();
+    const overrides = makeOverrides();
+    const result = await main({
+      env: { ...makeEnv(), WALDO_WATCHDOG_DISABLED: "1" },
+      loadDotenv: false,
+      overrides: { ...overrides, setTimer: h.setTimer, logger: h.logger },
+    });
+    await expect(result.shutdown()).resolves.toBeUndefined();
   });
 
   it("shutdown() stops the scheduler, closes the server, and is safe to call twice", async () => {

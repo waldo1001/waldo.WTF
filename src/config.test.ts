@@ -36,6 +36,7 @@ describe("loadConfig", () => {
       whatsappArchivePath: DEFAULT_WHATSAPP_ARCHIVE_PATH,
       whatsappAccount: DEFAULT_WHATSAPP_ACCOUNT,
       whatsappWatch: false,
+      watchdogDisabled: false,
     });
   });
 
@@ -196,6 +197,32 @@ describe("loadConfig", () => {
     expect(() =>
       loadConfig({ ...validEnv(), WALDO_BACKFILL_DAYS: "abc" }),
     ).toThrow(ConfigError);
+  });
+
+  it("watchdogDisabled defaults to false when WALDO_WATCHDOG_DISABLED is unset", () => {
+    expect(loadConfig(validEnv()).watchdogDisabled).toBe(false);
+  });
+
+  it("watchdogDisabled is true when WALDO_WATCHDOG_DISABLED=1", () => {
+    expect(
+      loadConfig({ ...validEnv(), WALDO_WATCHDOG_DISABLED: "1" })
+        .watchdogDisabled,
+    ).toBe(true);
+  });
+
+  it("watchdogDisabled stays false for any value other than '1'", () => {
+    expect(
+      loadConfig({ ...validEnv(), WALDO_WATCHDOG_DISABLED: "true" })
+        .watchdogDisabled,
+    ).toBe(false);
+    expect(
+      loadConfig({ ...validEnv(), WALDO_WATCHDOG_DISABLED: "yes" })
+        .watchdogDisabled,
+    ).toBe(false);
+    expect(
+      loadConfig({ ...validEnv(), WALDO_WATCHDOG_DISABLED: "0" })
+        .watchdogDisabled,
+    ).toBe(false);
   });
 
   it("does not mutate the input env object", () => {

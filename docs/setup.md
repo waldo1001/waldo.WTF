@@ -88,6 +88,12 @@ BEARER_TOKEN=generate-a-long-random-hex-string
 # WALDO_PUBLIC_URL=https://waldo-nas.your-tailnet.ts.net
 # WALDO_ADMIN_PASSWORD=  # generate with: openssl rand -hex 24 — gates consent (slice 2+)
 # WALDO_DISABLE_STATIC_BEARER=  # set to true once OAuth is the primary path (slice 4+)
+
+# Optional — kill switch for the in-process watchdogs (event-loop lag +
+# self-loopback healthcheck). On wedge, the process logs and exits so
+# Docker's restart policy + autoheal sidecar can recover. Set to "1" to
+# disable for interactive runs (e.g. --add-account) or local debugging.
+# WALDO_WATCHDOG_DISABLED=1
 ```
 
 `loadConfig` throws `ConfigError` listing every missing required key on
