@@ -1,4 +1,9 @@
-export type MessageSource = "teams" | "outlook" | "whatsapp" | "viva-engage";
+export type MessageSource =
+  | "teams"
+  | "teams-channel"
+  | "outlook"
+  | "whatsapp"
+  | "viva-engage";
 
 export type ChatType = "oneOnOne" | "group" | "channel";
 
@@ -135,6 +140,25 @@ export interface AddVivaSubscriptionInput {
   readonly networkName?: string;
   readonly communityId: string;
   readonly communityName?: string;
+}
+
+export interface TeamsChannelSubscription {
+  readonly account: string;
+  readonly teamId: string;
+  readonly teamName?: string;
+  readonly channelId: string;
+  readonly channelName?: string;
+  readonly enabled: boolean;
+  readonly subscribedAt: Date;
+  readonly lastCursorAt?: Date;
+}
+
+export interface AddTeamsChannelSubscriptionInput {
+  readonly account: string;
+  readonly teamId: string;
+  readonly teamName?: string;
+  readonly channelId: string;
+  readonly channelName?: string;
 }
 
 export type StoreErrorKind = "not-found" | "conflict" | "corrupt";

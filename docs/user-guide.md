@@ -28,8 +28,10 @@ Seven tools total. Claude chooses which to call.
 
 "What's happened recently". Returns rows across all sources and
 accounts, ordered `sent_at DESC`, within the last `hours`. Filter by
-`sources` (`["outlook", "teams", "whatsapp", "viva-engage"]`) or `accounts`
-(`["your@email.com"]`) to narrow.
+`sources` (`["outlook", "teams", "teams-channel", "whatsapp", "viva-engage"]`)
+or `accounts` (`["your@email.com"]`) to narrow. `teams` is 1:1 and group
+chats; `teams-channel` is messages from channels you've explicitly
+subscribed to via `--teams-subscribe` (see §5c).
 
 Each message carries an optional `replied: boolean` — true iff the
 latest in-window message in that thread has `fromMe: true` (your own
@@ -107,7 +109,8 @@ start of a session so it knows which tenants exist.
 ### `list_threads(source)`
 
 Diagnostic inventory of every distinct thread stored for a given
-source (`outlook`, `teams`, `whatsapp`, or `viva-engage`), with `messageCount` and
+source (`outlook`, `teams`, `teams-channel`, `whatsapp`, or
+`viva-engage`), with `messageCount` and
 `newestSentAt` / `oldestSentAt`. Ordered newest-first by the latest
 message in each thread.
 
@@ -322,6 +325,53 @@ It's a well-known public identifier, pre-consented in every Entra
 tenant — the same trick `az login` uses. If Microsoft ever revokes it
 for third-party tools, external-network discovery breaks; a follow-up
 would be a verified-publisher registration for waldo.WTF itself.
+
+## 5c. Subscribing to Teams channels
+
+Teams **channel** messages are a separate source from Teams 1:1 / group
+chats — they live under `source: "teams-channel"` and are opt-in per
+channel, mirroring the Viva Engage subscription pattern. Nothing is
+auto-synced; the lake only ingests channels you explicitly subscribed
+to. `get_recent_activity` and `search` accept `teams-channel` in their
+`sources` filter so you can mute the noise of org-wide broadcasts
+independently of personal chats.
+
+```sh
+# List Teams channel subscriptions for an account
+npm run dev -- --account your@email.com --teams-list
+
+# Discover: enumerate every team + channel the account can read.
+# On first use, prompts a device-code flow if the new scopes
+# (Team.ReadBasic.All, Channel.ReadBasic.All, ChannelMessage.Read.All)
+# need consent. Tenants that require admin consent for
+# ChannelMessage.Read.All print a one-line "admin-consent required"
+# message and the rest of the work continues.
+npm run dev -- --account your@email.com --teams-discover
+
+# Subscribe to one channel — pick the (teamId, channelId) pair from
+# --teams-discover and pass them colon-separated.
+npm run dev -- --account your@email.com \
+  --teams-subscribe <teamId>:<channelId>
+
+# Unsubscribe (rows already in the lake stay; only stops new pulls)
+npm run dev -- --account your@email.com \
+  --teams-unsubscribe <teamId>:<channelId>
+```
+
+Once subscribed, the next sync tick pulls channel messages via Graph's
+delta endpoint (`/teams/{id}/channels/{id}/messages/delta` with
+`$expand=replies`) and threads each conversation as
+`teams-channel:<teamId>:<channelId>:<rootId>` — root post and replies
+stay together, just like the Teams UI shows them. Per-channel errors
+are isolated; one failing channel does not stop the others on the same
+tick. If a tenant has not consented `ChannelMessage.Read.All` for the
+app, the scheduler logs one `admin-consent-required` row per affected
+account per tick and moves on.
+
+Steering rules apply to channel rows the same way they apply to any
+other source — `add_steering_rule(rule_type="thread_id", pattern=…)`
+mutes a single channel-thread without touching anything else, and
+`source: "teams-channel"` scopes a rule to channels only.
 
 ## 6. Adding WhatsApp exports (Weekend 6+)
 
@@ -679,6 +729,8 @@ to `waldo-nas.<tailnet>.ts.net:8765`.
 | MCP connection refused in Claude Desktop | Server not running, wrong port, or bearer mismatch | Curl the endpoint with `Authorization: Bearer ...`, verify |
 | Duplicate rows after re-import | Primary key collision disabled or hash function changed | Never change the hash function post-release; add a migration |
 | `--viva-discover` shows "no viva communities" despite having communities | Yammer API returned suggested groups (empty for guests in external networks) | Fixed in 2026-04-23 deploy — upgrade and re-run `--viva-discover` |
+| `--teams-discover` prints `admin-consent required` and returns no channels | Tenant has not consented `ChannelMessage.Read.All` for the app | Ask tenant admin to grant consent, or use a different account; other sources keep working |
+| `sync_log` shows `admin-consent-required` rows for a teams-channel account every tick | Same as above — scheduler degrades cleanly per-account | Either grant the consent or `--teams-unsubscribe` the affected channels to silence the rows |
 
 ## 10. What NOT to do
 

@@ -27,6 +27,7 @@ describe("LIST_THREADS_TOOL descriptor", () => {
     expect(LIST_THREADS_TOOL.inputSchema.properties.source.enum).toEqual([
       "outlook",
       "teams",
+      "teams-channel",
       "whatsapp",
       "viva-engage",
     ]);

@@ -44,16 +44,25 @@ One-time, per developer. Required for MSAL device code flow.
    **Delegated permissions**:
    - `User.Read` (added automatically)
    - `Mail.Read`
-   - Later (Weekend 4): `Chat.Read`, `ChannelMessage.Read.All`
+   - `Chat.Read` (Teams 1:1 + group chats)
+   - For Teams **channel** subscriptions (optional):
+     `Team.ReadBasic.All`, `Channel.ReadBasic.All`, and
+     `ChannelMessage.Read.All`. The first two are user-consentable;
+     `ChannelMessage.Read.All` typically requires **admin consent** in
+     the target tenant. Without it, `--teams-discover` returns an
+     "admin-consent required" message for that account and the
+     scheduler skips channel sync for that account only. Other
+     accounts and other sources continue to work.
    - For Viva Engage subscriptions (optional): **Yammer** →
      `user_impersonation` (delegated). Add this under **APIs my
      organisation uses** → search "Yammer". Only required if you intend
      to subscribe to one or more Viva communities via `--viva-subscribe`.
 
-   `--add-account` requests only the two Graph scopes (`Mail.Read`,
-   `Chat.Read`) in one device-code prompt. The Yammer scope is requested
-   separately, on first Viva sync, via MSAL's incremental-consent /
-   multi-resource token chain. **If you are upgrading from a version
+   `--add-account` requests only the two base Graph scopes (`Mail.Read`,
+   `Chat.Read`) in one device-code prompt. The Teams channel scopes
+   and the Yammer scope are requested separately on first use
+   (`--teams-discover` / `--viva-discover`), via MSAL's
+   incremental-consent / multi-resource token chain. **If you are upgrading from a version
    prior to 2026-04-22 (hotfix)**, every existing account must re-run
    `--add-account <username>` to clear the stale mixed-resource token
    cache; `--add-account` was broken by an earlier commit that mixed

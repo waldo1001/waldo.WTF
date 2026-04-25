@@ -12,6 +12,7 @@ export class InvalidParamsError extends Error {
 const KNOWN_SOURCES: ReadonlySet<MessageSource> = new Set([
   "outlook",
   "teams",
+  "teams-channel",
   "whatsapp",
   "viva-engage",
 ]);
@@ -71,7 +72,7 @@ export const GET_RECENT_ACTIVITY_TOOL = {
         type: "array",
         items: {
           type: "string",
-          enum: ["outlook", "teams", "whatsapp", "viva-engage"],
+          enum: ["outlook", "teams", "teams-channel", "whatsapp", "viva-engage"],
         },
         description: "Optional source filter.",
       },

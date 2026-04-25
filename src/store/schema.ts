@@ -1,6 +1,6 @@
 import type { Database } from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 13;
+export const CURRENT_SCHEMA_VERSION = 14;
 
 const MIGRATION_1 = `
 CREATE TABLE IF NOT EXISTS messages (
@@ -226,6 +226,27 @@ function migrateV13(db: Database): void {
   }
 }
 
+// v14 adds Teams channel subscriptions: per-channel opt-in mirroring the Viva
+// pattern. Three-tuple PK (account, team_id, channel_id) defends against
+// theoretical channel-id collisions across teams. Delta cursors live in
+// chat_cursors keyed as `channel:<teamId>:<channelId>`; last_cursor_at here is
+// display/observability metadata only.
+const MIGRATION_14 = `
+CREATE TABLE IF NOT EXISTS teams_channel_subscriptions (
+  account TEXT NOT NULL,
+  team_id TEXT NOT NULL,
+  team_name TEXT,
+  channel_id TEXT NOT NULL,
+  channel_name TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  subscribed_at INTEGER NOT NULL,
+  last_cursor_at INTEGER,
+  PRIMARY KEY (account, team_id, channel_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tcs_account_enabled
+  ON teams_channel_subscriptions(account, enabled);
+`;
+
 export function applyMigrations(db: Database): void {
   const current = (
     db.prepare("PRAGMA user_version").get() as { user_version: number }
@@ -272,6 +293,9 @@ export function applyMigrations(db: Database): void {
     }
     if (current < 13) {
       migrateV13(db);
+    }
+    if (current < 14) {
+      db.exec(MIGRATION_14);
     }
     db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
   });

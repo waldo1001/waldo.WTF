@@ -1,13 +1,20 @@
 import type { AuthClient } from "../auth/auth-client.js";
+import {
+  isConsentRequiredError,
+  TEAMS_CHANNEL_SCOPES,
+} from "../auth/msal-auth-client.js";
 import type { Clock } from "../clock.js";
 import type { MessageStore } from "../store/message-store.js";
+import type { TeamsChannelSubscriptionStore } from "../store/teams-channel-subscription-store.js";
 import type { VivaSubscriptionStore } from "../store/viva-subscription-store.js";
 import type { GraphClient } from "../sources/graph.js";
 import type { TeamsClient } from "../sources/teams.js";
+import type { TeamsChannelClient } from "../sources/teams-channel.js";
 import type { VivaClient } from "../sources/viva.js";
 import { syncInbox } from "./sync-inbox.js";
 import { syncSent } from "./sync-sent.js";
 import { syncTeams } from "./sync-teams.js";
+import { syncTeamsChannels } from "./sync-teams-channels.js";
 import { syncViva } from "./sync-viva.js";
 
 export const DEFAULT_SYNC_INTERVAL_MS = 300_000;
@@ -39,6 +46,8 @@ export interface SyncSchedulerDeps {
   readonly vivaAuth?: AuthClient;
   readonly graph: GraphClient;
   readonly teams?: TeamsClient;
+  readonly teamsChannel?: TeamsChannelClient;
+  readonly teamsChannelSubs?: TeamsChannelSubscriptionStore;
   readonly viva?: VivaClient;
   readonly vivaSubs?: VivaSubscriptionStore;
   readonly store: MessageStore;
@@ -161,6 +170,58 @@ export class SyncScheduler {
               errorMessage: errorToString(err),
             });
             errorCount += 1;
+          }
+        }
+        if (
+          this.deps.teamsChannel !== undefined &&
+          this.deps.teamsChannelSubs !== undefined
+        ) {
+          // Skip the per-account scope acquisition entirely if no enabled
+          // subscriptions exist — keeps idle ticks free of Graph traffic.
+          const enabled =
+            await this.deps.teamsChannelSubs.listEnabledForAccount(
+              account.username,
+            );
+          if (enabled.length > 0) {
+            try {
+              const tok = await this.deps.auth.getTokenSilent(account, {
+                scopes: TEAMS_CHANNEL_SCOPES,
+              });
+              const r = await syncTeamsChannels({
+                account,
+                token: tok.token,
+                client: this.deps.teamsChannel,
+                store: this.deps.store,
+                subs: this.deps.teamsChannelSubs,
+                clock: this.deps.clock,
+                ...(this.deps.backfillDays !== undefined && {
+                  backfillDays: this.deps.backfillDays,
+                }),
+              });
+              await this.deps.store.appendSyncLog({
+                ts: this.deps.clock.now(),
+                account: account.username,
+                source: "teams-channel",
+                status: "ok",
+                messagesAdded: r.added,
+              });
+              okCount += 1;
+            } catch (err) {
+              // Admin-consent rejection: log a single row per account per
+              // tick rather than spamming a row per subscription. The CLI
+              // surfaces the same hint via realTeams discovery.
+              const message = isConsentRequiredError(err)
+                ? `Teams channel scopes not consented for tenant ${account.tenantId} — ask a tenant admin to grant: ${TEAMS_CHANNEL_SCOPES.join(", ")}`
+                : errorToString(err);
+              await this.deps.store.appendSyncLog({
+                ts: this.deps.clock.now(),
+                account: account.username,
+                source: "teams-channel",
+                status: "error",
+                errorMessage: message,
+              });
+              errorCount += 1;
+            }
           }
         }
         if (

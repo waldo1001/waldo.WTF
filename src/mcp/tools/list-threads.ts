@@ -6,6 +6,7 @@ import { InvalidParamsError } from "./get-recent-activity.js";
 const KNOWN_SOURCES: ReadonlySet<MessageSource> = new Set([
   "outlook",
   "teams",
+  "teams-channel",
   "whatsapp",
   "viva-engage",
 ]);
@@ -42,7 +43,7 @@ export const LIST_THREADS_TOOL = {
     properties: {
       source: {
         type: "string",
-        enum: ["outlook", "teams", "whatsapp", "viva-engage"],
+        enum: ["outlook", "teams", "teams-channel", "whatsapp", "viva-engage"],
         description: "Which message source to enumerate threads for.",
       },
     },

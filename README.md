@@ -42,8 +42,9 @@ built.
 
 One Node + TypeScript process, one SQLite file (WAL mode, via
 `better-sqlite3`), two logical components sharing the db: a sync worker
-(MSAL-authed Graph delta queries for mail/Teams + Yammer REST for Viva
-Engage, 5-minute polling, multi-account) and an HTTP MCP server
+(MSAL-authed Graph delta queries for mail / Teams chats / Teams
+channel messages + Yammer REST for Viva Engage, 5-minute polling,
+multi-account) and an HTTP MCP server
 (bearer-token auth, read-only tools: `get_recent_activity`, `search`,
 `get_thread`, `list_accounts`, `list_threads`, `get_sync_status`, plus
 four steering tools that write only to the local `steering_rules`
@@ -55,10 +56,10 @@ Full architecture and decision rationale: [project brief §3–4](waldo.WTF-proj
 
 ## Status
 
-Weekends 3–8 complete. All four message sources are live and syncing on
-the NAS: Outlook (mail + sent), Teams (1:1 + group), Viva Engage (Yammer
-REST, including external/guest networks), and WhatsApp (manual export
-watcher). Full MCP surface operational — six read tools plus four
+Weekends 3–8 complete. All five message sources are live and syncing on
+the NAS: Outlook (mail + sent), Teams chats (1:1 + group), Teams channels
+(opt-in per channel), Viva Engage (Yammer REST, including external/guest
+networks), and WhatsApp (manual export watcher). Full MCP surface operational — six read tools plus four
 steering tools — behind both static-bearer (Claude Desktop) and OAuth
 2.1 (claude.ai custom connector) auth paths. Next: daily use and
 iteration; blog post.

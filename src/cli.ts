@@ -2,7 +2,9 @@ import * as path from "node:path";
 import { config as loadDotenv } from "dotenv";
 import { loadConfig, type Config } from "./config.js";
 import {
+  isConsentRequiredError,
   MsalAuthClient,
+  TEAMS_CHANNEL_SCOPES,
   vivaAuthorityFor,
   YAMMER_PUBLIC_CLIENT_ID,
   YAMMER_SCOPE,
@@ -18,10 +20,17 @@ import type {
   MessageSource,
   SteeringRule,
   SteeringRuleType,
+  TeamsChannelSubscription,
   VivaSubscription,
 } from "./store/types.js";
 import type { VivaClient, VivaCommunity } from "./sources/viva.js";
 import type { VivaSubscriptionStore } from "./store/viva-subscription-store.js";
+import type {
+  TeamsChannel,
+  TeamsChannelClient,
+  TeamsJoinedTeam,
+} from "./sources/teams-channel.js";
+import type { TeamsChannelSubscriptionStore } from "./store/teams-channel-subscription-store.js";
 
 export type Env = Readonly<Record<string, string | undefined>>;
 export type PrintFn = (message: string) => void;
@@ -135,6 +144,55 @@ export type VivaImpl = (
   deps?: VivaDeps,
 ) => Promise<VivaCliResult>;
 
+export interface DiscoveredChannel {
+  readonly teamId: string;
+  readonly teamName: string;
+  readonly channelId: string;
+  readonly channelName: string;
+  readonly membershipType?: "standard" | "private" | "shared";
+}
+
+export type TeamsCommand =
+  | { readonly action: "list"; readonly account: string }
+  | { readonly action: "discover"; readonly account: string }
+  | {
+      readonly action: "subscribe";
+      readonly account: string;
+      readonly teamId: string;
+      readonly channelId: string;
+    }
+  | {
+      readonly action: "unsubscribe";
+      readonly account: string;
+      readonly teamId: string;
+      readonly channelId: string;
+    };
+
+export type TeamsCliResult =
+  | {
+      readonly action: "list";
+      readonly subs: readonly TeamsChannelSubscription[];
+    }
+  | {
+      readonly action: "discover";
+      readonly channels: readonly DiscoveredChannel[];
+    }
+  | { readonly action: "subscribe"; readonly sub: TeamsChannelSubscription }
+  | { readonly action: "unsubscribe"; readonly removed: boolean };
+
+export interface TeamsDeps {
+  readonly auth?: AuthClient;
+  readonly client?: TeamsChannelClient;
+  readonly store?: TeamsChannelSubscriptionStore;
+  readonly print?: PrintFn;
+}
+
+export type TeamsImpl = (
+  config: Config,
+  command: TeamsCommand,
+  deps?: TeamsDeps,
+) => Promise<TeamsCliResult>;
+
 export interface RunCliOptions extends AddAccountOptions {
   readonly mainImpl?: (opts: MainOptions) => Promise<MainResult>;
   readonly backfillImpl?: (dbPath: string) => Promise<BackfillCliResult>;
@@ -142,6 +200,7 @@ export interface RunCliOptions extends AddAccountOptions {
   readonly steerImpl?: SteerImpl;
   readonly rethreadWhatsAppImpl?: RethreadWhatsAppImpl;
   readonly vivaImpl?: VivaImpl;
+  readonly teamsImpl?: TeamsImpl;
 }
 
 export type RunCliResult =
@@ -161,6 +220,7 @@ export type RunCliResult =
     }
   | { readonly mode: "steer"; readonly result: SteerCliResult }
   | { readonly mode: "viva"; readonly result: VivaCliResult }
+  | { readonly mode: "teams"; readonly result: TeamsCliResult }
   | { readonly mode: "server"; readonly main: MainResult };
 
 const BOOLEAN_FLAGS = new Set([
@@ -172,11 +232,18 @@ const BOOLEAN_FLAGS = new Set([
   "--steer-list",
   "--viva-list",
   "--viva-discover",
+  "--teams-list",
+  "--teams-discover",
 ]);
 
 const VIVA_VALUE_FLAGS = new Set([
   "--viva-subscribe",
   "--viva-unsubscribe",
+]);
+
+const TEAMS_VALUE_FLAGS = new Set([
+  "--teams-subscribe",
+  "--teams-unsubscribe",
 ]);
 
 const ADD_ACCOUNT_VALUE_FLAGS = new Set(["--tenant"]);
@@ -216,6 +283,7 @@ const STEER_MODIFIER_FLAGS = new Set([
 const KNOWN_SOURCES = new Set<MessageSource>([
   "outlook",
   "teams",
+  "teams-channel",
   "whatsapp",
   "viva-engage",
 ]);
@@ -239,6 +307,7 @@ function parseArgv(argv: readonly string[]): {
       STEER_TOGGLE_FLAGS.has(a) ||
       STEER_MODIFIER_FLAGS.has(a) ||
       VIVA_VALUE_FLAGS.has(a) ||
+      TEAMS_VALUE_FLAGS.has(a) ||
       ADD_ACCOUNT_VALUE_FLAGS.has(a)
     ) {
       const v = argv[i + 1];
@@ -253,7 +322,7 @@ function parseArgv(argv: readonly string[]): {
       continue;
     }
     throw new CliUsageError(
-      `Unknown flag: ${a}. Usage: waldo-wtf [--add-account | --backfill-bodies | --import-whatsapp | --steer-* | --viva-*]`,
+      `Unknown flag: ${a}. Usage: waldo-wtf [--add-account | --backfill-bodies | --import-whatsapp | --steer-* | --viva-* | --teams-*]`,
     );
   }
   return { boolean, values };
@@ -500,6 +569,124 @@ function reportVivaResult(result: VivaCliResult, print: PrintFn): void {
       print(
         result.removed
           ? "unsubscribed 1 community"
+          : "no subscription removed",
+      );
+      return;
+  }
+}
+
+function parseTeamChannelKey(
+  raw: string,
+  flag: string,
+): { teamId: string; channelId: string } {
+  const idx = raw.indexOf(":");
+  if (idx <= 0 || idx === raw.length - 1) {
+    throw new CliUsageError(
+      `${flag} expects <teamId>:<channelId>, got "${raw}"`,
+    );
+  }
+  return { teamId: raw.slice(0, idx), channelId: raw.slice(idx + 1) };
+}
+
+function resolveTeamsCommand(parsed: {
+  readonly boolean: Set<string>;
+  readonly values: Map<string, string>;
+}): TeamsCommand | null {
+  const list = parsed.boolean.has("--teams-list");
+  const discover = parsed.boolean.has("--teams-discover");
+  const subscribe = parsed.values.get("--teams-subscribe");
+  const unsubscribe = parsed.values.get("--teams-unsubscribe");
+
+  const activeCount =
+    (list ? 1 : 0) +
+    (discover ? 1 : 0) +
+    (subscribe !== undefined ? 1 : 0) +
+    (unsubscribe !== undefined ? 1 : 0);
+  if (activeCount === 0) return null;
+  if (activeCount > 1) {
+    throw new CliUsageError(
+      "only one --teams-* command may be given per invocation",
+    );
+  }
+
+  const account = parsed.values.get("--account");
+  if (account === undefined || account.trim() === "") {
+    throw new CliUsageError("--teams-* commands require --account <username>");
+  }
+
+  if (list) return { action: "list", account };
+  if (discover) return { action: "discover", account };
+  if (subscribe !== undefined) {
+    if (subscribe.trim() === "") {
+      throw new CliUsageError("--teams-subscribe pattern must not be empty");
+    }
+    const { teamId, channelId } = parseTeamChannelKey(
+      subscribe,
+      "--teams-subscribe",
+    );
+    return { action: "subscribe", account, teamId, channelId };
+  }
+  /* c8 ignore next 4 -- unsubscribe is the only remaining branch */
+  if (unsubscribe === undefined) return null;
+  if (unsubscribe.trim() === "") {
+    throw new CliUsageError("--teams-unsubscribe pattern must not be empty");
+  }
+  const { teamId, channelId } = parseTeamChannelKey(
+    unsubscribe,
+    "--teams-unsubscribe",
+  );
+  return { action: "unsubscribe", account, teamId, channelId };
+}
+
+function reportTeamsResult(result: TeamsCliResult, print: PrintFn): void {
+  switch (result.action) {
+    case "list":
+      if (result.subs.length === 0) {
+        print("no teams channel subscriptions");
+        return;
+      }
+      print(["team_id", "team_name", "channel_id", "channel_name", "enabled"].join("\t"));
+      for (const s of result.subs) {
+        print(
+          [
+            s.teamId,
+            s.teamName ?? "-",
+            s.channelId,
+            s.channelName ?? "-",
+            s.enabled ? "yes" : "no",
+          ].join("\t"),
+        );
+      }
+      return;
+    case "discover":
+      if (result.channels.length === 0) {
+        print("no teams channels visible to this account");
+        return;
+      }
+      print(
+        ["team_id", "team_name", "channel_id", "channel_name", "membership"].join("\t"),
+      );
+      for (const c of result.channels) {
+        print(
+          [
+            c.teamId,
+            c.teamName,
+            c.channelId,
+            c.channelName,
+            c.membershipType ?? "-",
+          ].join("\t"),
+        );
+      }
+      return;
+    case "subscribe":
+      print(
+        `subscribed to teams channel ${result.sub.teamId}:${result.sub.channelId}`,
+      );
+      return;
+    case "unsubscribe":
+      print(
+        result.removed
+          ? "unsubscribed 1 channel"
           : "no subscription removed",
       );
       return;
@@ -879,6 +1066,191 @@ export async function realViva(
   }
 }
 
+async function buildDefaultTeamsAuth(config: Config): Promise<AuthClient> {
+  const cacheStore = new TokenCacheStore({
+    fs: nodeFileSystem,
+    path: path.join(config.authDir, "token-cache.json"),
+  });
+  return new MsalAuthClient({
+    clientId: config.msClientId,
+    cacheStore,
+  });
+}
+
+async function buildDefaultTeamsChannelClient(): Promise<TeamsChannelClient> {
+  const { HttpTeamsChannelClient } = await import(
+    "./sources/http-teams-channel-client.js"
+  );
+  return new HttpTeamsChannelClient({
+    fetch: globalThis.fetch.bind(globalThis),
+  });
+}
+
+async function resolveCliAccount(
+  auth: AuthClient,
+  username: string,
+): Promise<Account> {
+  const target = username.toLowerCase();
+  const accounts = await auth.listAccounts();
+  const match = accounts.find((a) => a.username.toLowerCase() === target);
+  if (!match) {
+    throw new CliUsageError(
+      `unknown account: ${username} — run --add-account first, or check --account spelling`,
+    );
+  }
+  return match;
+}
+
+async function discoverTeamsChannels(
+  auth: AuthClient,
+  client: TeamsChannelClient,
+  account: Account,
+  print: PrintFn,
+): Promise<readonly DiscoveredChannel[]> {
+  let token: AccessToken;
+  try {
+    token = await auth.getTokenSilent(account, {
+      scopes: TEAMS_CHANNEL_SCOPES,
+    });
+  } catch (err) {
+    if (isConsentRequiredError(err)) {
+      throw new CliUsageError(
+        `Teams channel scopes are not consented for tenant ${account.tenantId}. ` +
+          `Ask a tenant admin to grant admin consent for: ${TEAMS_CHANNEL_SCOPES.join(", ")}.`,
+      );
+    }
+    if (!(err instanceof AuthError) || err.kind !== "silent-failed") throw err;
+    print(
+      "Teams channel scopes not yet consented — starting device-code login...",
+    );
+    await auth.loginWithDeviceCode(print, { scopes: TEAMS_CHANNEL_SCOPES });
+    token = await auth.getTokenSilent(account, {
+      scopes: TEAMS_CHANNEL_SCOPES,
+    });
+  }
+
+  const teams: TeamsJoinedTeam[] = [];
+  for await (const t of client.listJoinedTeams(token.token)) {
+    teams.push(t);
+  }
+  print(`Found ${teams.length} joined team(s)`);
+
+  const out: DiscoveredChannel[] = [];
+  for (const t of teams) {
+    const channels: TeamsChannel[] = [];
+    for await (const c of client.listChannels(token.token, t.id)) {
+      channels.push(c);
+    }
+    for (const c of channels) {
+      out.push({
+        teamId: t.id,
+        teamName: t.displayName,
+        channelId: c.id,
+        channelName: c.displayName,
+        ...(c.membershipType !== undefined && {
+          membershipType: c.membershipType,
+        }),
+      });
+    }
+  }
+  return out;
+}
+
+export async function realTeams(
+  config: Config,
+  command: TeamsCommand,
+  deps: TeamsDeps = {},
+): Promise<TeamsCliResult> {
+  const needsStore =
+    command.action === "list" ||
+    command.action === "subscribe" ||
+    command.action === "unsubscribe";
+
+  let db: import("better-sqlite3").Database | null = null;
+  let store: TeamsChannelSubscriptionStore | null = deps.store ?? null;
+
+  if (needsStore && store === null) {
+    const { default: Database } = await import("better-sqlite3");
+    const { SqliteTeamsChannelSubscriptionStore } = await import(
+      "./store/teams-channel-subscription-store.js"
+    );
+    db = new Database(config.dbPath);
+    db.pragma("journal_mode = WAL");
+    store = new SqliteTeamsChannelSubscriptionStore(db);
+  }
+
+  try {
+    switch (command.action) {
+      case "list": {
+        const subs = await store!.listForAccount(command.account);
+        return { action: "list", subs };
+      }
+      case "unsubscribe": {
+        const r = await store!.unsubscribe(
+          command.account,
+          command.teamId,
+          command.channelId,
+        );
+        return { action: "unsubscribe", removed: r.removed };
+      }
+      case "discover": {
+        /* c8 ignore next -- default console.log only in production */
+        const print: PrintFn = deps.print ?? ((m) => console.log(m));
+        const auth = deps.auth ?? (await buildDefaultTeamsAuth(config));
+        const account = await resolveCliAccount(auth, command.account);
+        const client =
+          deps.client ?? (await buildDefaultTeamsChannelClient());
+        const channels = await discoverTeamsChannels(
+          auth,
+          client,
+          account,
+          print,
+        );
+        return { action: "discover", channels };
+      }
+      case "subscribe": {
+        /* c8 ignore next -- default console.log only in production */
+        const print: PrintFn = deps.print ?? ((m) => console.log(m));
+        const auth = deps.auth ?? (await buildDefaultTeamsAuth(config));
+        const account = await resolveCliAccount(auth, command.account);
+        const client =
+          deps.client ?? (await buildDefaultTeamsChannelClient());
+        const channels = await discoverTeamsChannels(
+          auth,
+          client,
+          account,
+          print,
+        );
+        const teamIdLc = command.teamId.toLowerCase();
+        const channelIdLc = command.channelId.toLowerCase();
+        const match = channels.find(
+          (c) =>
+            c.teamId.toLowerCase() === teamIdLc &&
+            c.channelId.toLowerCase() === channelIdLc,
+        );
+        if (!match) {
+          throw new CliUsageError(
+            `unknown channel: ${command.teamId}:${command.channelId} — run --teams-discover --account ${command.account} to list available channels`,
+          );
+        }
+        const sub = await store!.subscribe({
+          account: command.account,
+          teamId: match.teamId,
+          teamName: match.teamName,
+          channelId: match.channelId,
+          channelName: match.channelName,
+        });
+        return { action: "subscribe", sub };
+      }
+    }
+    /* c8 ignore next 2 -- exhaustive switch above; only reachable if TeamsCommand grows */
+    const _exhaustive: never = command;
+    throw new Error(`unhandled teams action: ${JSON.stringify(_exhaustive)}`);
+  } finally {
+    if (db !== null) db.close();
+  }
+}
+
 async function realSteer(
   config: Config,
   command: SteerCommand,
@@ -1020,6 +1392,19 @@ export async function runCli(
     const result = await impl(config, vivaCmd);
     reportVivaResult(result, print);
     return { mode: "viva", result };
+  }
+
+  const teamsCmd = resolveTeamsCommand(parsed);
+  if (teamsCmd !== null) {
+    const env = resolveEnv(opts);
+    const config = loadConfig(env);
+    /* c8 ignore next -- default console.log only in production */
+    const print: PrintFn = opts.print ?? ((m) => console.log(m));
+    /* c8 ignore next -- realTeams only constructed outside tests */
+    const impl = opts.teamsImpl ?? realTeams;
+    const result = await impl(config, teamsCmd);
+    reportTeamsResult(result, print);
+    return { mode: "teams", result };
   }
 
   if (parsed.boolean.has("--import-whatsapp")) {

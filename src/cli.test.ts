@@ -7,6 +7,7 @@ import {
   runCli,
   addAccount,
   CliUsageError,
+  realTeams,
   realViva,
   vivaAuthorityFor,
 } from "./cli.js";
@@ -14,12 +15,18 @@ import type {
   SteerCommand,
   SteerCliResult,
   SteerImpl,
+  TeamsCliResult,
+  TeamsCommand,
+  TeamsImpl,
   VivaCommand,
   VivaCliResult,
   VivaImpl,
   VivaDeps,
 } from "./cli.js";
-import type { VivaSubscription } from "./store/types.js";
+import type {
+  TeamsChannelSubscription,
+  VivaSubscription,
+} from "./store/types.js";
 import type { Config } from "./config.js";
 import { ConfigError } from "./config.js";
 import { FakeAuthClient } from "./testing/fake-auth-client.js";
@@ -1052,6 +1059,238 @@ describe("runCli", () => {
     });
     expect(result).toEqual({ mode: "server", main: fakeMainResult });
     expect(captured).toEqual({ env: ENV, loadDotenv: false });
+  });
+
+  it("--teams-list --account a passes account to the teams impl and prints rows", async () => {
+    const calls: TeamsCommand[] = [];
+    const subs: readonly TeamsChannelSubscription[] = [
+      {
+        account: "a@example.test",
+        teamId: "team-1",
+        teamName: "Engineering",
+        channelId: "chan-1",
+        channelName: "General",
+        enabled: true,
+        subscribedAt: new Date("2026-04-21T10:00:00Z"),
+      },
+    ];
+    const teamsImpl: TeamsImpl = async (_cfg, cmd) => {
+      calls.push(cmd);
+      return { action: "list", subs };
+    };
+    const prints: string[] = [];
+    const result = await runCli(
+      ["--teams-list", "--account", "a@example.test"],
+      { env: ENV, loadDotenv: false, print: (m) => prints.push(m), teamsImpl },
+    );
+    expect(calls[0]).toEqual({ action: "list", account: "a@example.test" });
+    expect(result.mode).toBe("teams");
+    const out = prints.join("\n");
+    expect(out).toContain("team-1");
+    expect(out).toContain("chan-1");
+    expect(out).toContain("Engineering");
+    expect(out).toContain("General");
+  });
+
+  it("--teams-list prints empty-state message when no subs", async () => {
+    const teamsImpl: TeamsImpl = async () => ({ action: "list", subs: [] });
+    const prints: string[] = [];
+    await runCli(["--teams-list", "--account", "a@example.test"], {
+      env: ENV,
+      loadDotenv: false,
+      print: (m) => prints.push(m),
+      teamsImpl,
+    });
+    expect(
+      prints.some((p) => /no teams channel subscriptions/i.test(p)),
+    ).toBe(true);
+  });
+
+  it("--teams-discover lists channels returned by the injected impl", async () => {
+    const teamsImpl: TeamsImpl = async () => ({
+      action: "discover",
+      channels: [
+        {
+          teamId: "team-9",
+          teamName: "Sales",
+          channelId: "chan-9",
+          channelName: "Pipeline",
+          membershipType: "standard",
+        },
+      ],
+    });
+    const prints: string[] = [];
+    const result = await runCli(
+      ["--teams-discover", "--account", "a@example.test"],
+      { env: ENV, loadDotenv: false, print: (m) => prints.push(m), teamsImpl },
+    );
+    expect(result.mode).toBe("teams");
+    const out = prints.join("\n");
+    expect(out).toContain("team-9");
+    expect(out).toContain("chan-9");
+    expect(out).toContain("Pipeline");
+  });
+
+  it("--teams-discover prints empty-state when no channels", async () => {
+    const teamsImpl: TeamsImpl = async () => ({
+      action: "discover",
+      channels: [],
+    });
+    const prints: string[] = [];
+    await runCli(["--teams-discover", "--account", "a@example.test"], {
+      env: ENV,
+      loadDotenv: false,
+      print: (m) => prints.push(m),
+      teamsImpl,
+    });
+    expect(prints.some((p) => /no teams channels/i.test(p))).toBe(true);
+  });
+
+  it("--teams-subscribe team:channel calls subscribe and prints confirmation", async () => {
+    const calls: TeamsCommand[] = [];
+    const sub: TeamsChannelSubscription = {
+      account: "a@example.test",
+      teamId: "team-1",
+      channelId: "chan-1",
+      enabled: true,
+      subscribedAt: new Date("2026-04-21T10:00:00Z"),
+    };
+    const teamsImpl: TeamsImpl = async (_cfg, cmd) => {
+      calls.push(cmd);
+      return { action: "subscribe", sub };
+    };
+    const prints: string[] = [];
+    const result = await runCli(
+      [
+        "--teams-subscribe",
+        "team-1:chan-1",
+        "--account",
+        "a@example.test",
+      ],
+      { env: ENV, loadDotenv: false, print: (m) => prints.push(m), teamsImpl },
+    );
+    expect(calls[0]).toEqual({
+      action: "subscribe",
+      account: "a@example.test",
+      teamId: "team-1",
+      channelId: "chan-1",
+    });
+    expect((result as { result: TeamsCliResult }).result).toEqual({
+      action: "subscribe",
+      sub,
+    });
+    expect(prints.some((p) => p.includes("team-1:chan-1"))).toBe(true);
+  });
+
+  it("--teams-subscribe surfaces impl-thrown errors (e.g. unknown channel)", async () => {
+    const teamsImpl: TeamsImpl = async () => {
+      throw new CliUsageError("unknown channel");
+    };
+    await expect(
+      runCli(
+        ["--teams-subscribe", "team-x:chan-x", "--account", "a@example.test"],
+        { env: ENV, loadDotenv: false, print: () => {}, teamsImpl },
+      ),
+    ).rejects.toBeInstanceOf(CliUsageError);
+  });
+
+  it("--teams-unsubscribe team:channel calls unsubscribe and prints removed=true", async () => {
+    const calls: TeamsCommand[] = [];
+    const teamsImpl: TeamsImpl = async (_cfg, cmd) => {
+      calls.push(cmd);
+      return { action: "unsubscribe", removed: true };
+    };
+    const prints: string[] = [];
+    await runCli(
+      ["--teams-unsubscribe", "team-1:chan-1", "--account", "a@example.test"],
+      { env: ENV, loadDotenv: false, print: (m) => prints.push(m), teamsImpl },
+    );
+    expect(calls[0]).toEqual({
+      action: "unsubscribe",
+      account: "a@example.test",
+      teamId: "team-1",
+      channelId: "chan-1",
+    });
+    expect(prints.some((p) => /unsubscribed/i.test(p))).toBe(true);
+  });
+
+  it("--teams-unsubscribe prints no-op message when nothing was removed", async () => {
+    const teamsImpl: TeamsImpl = async () => ({
+      action: "unsubscribe",
+      removed: false,
+    });
+    const prints: string[] = [];
+    await runCli(
+      ["--teams-unsubscribe", "team-1:chan-1", "--account", "a@example.test"],
+      { env: ENV, loadDotenv: false, print: (m) => prints.push(m), teamsImpl },
+    );
+    expect(prints.some((p) => /no subscription removed/i.test(p))).toBe(true);
+  });
+
+  it("rejects --teams-* without --account", async () => {
+    await expect(
+      runCli(["--teams-list"], {
+        env: ENV,
+        loadDotenv: false,
+        print: () => {},
+        teamsImpl: async () => {
+          throw new Error("should not run");
+        },
+      }),
+    ).rejects.toBeInstanceOf(CliUsageError);
+  });
+
+  it("rejects combining two --teams-* flags at once", async () => {
+    await expect(
+      runCli(
+        [
+          "--teams-list",
+          "--teams-discover",
+          "--account",
+          "a@example.test",
+        ],
+        {
+          env: ENV,
+          loadDotenv: false,
+          print: () => {},
+          teamsImpl: async () => {
+            throw new Error("should not run");
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(CliUsageError);
+  });
+
+  it("rejects --teams-subscribe value without ':' separator", async () => {
+    await expect(
+      runCli(
+        ["--teams-subscribe", "no-colon", "--account", "a@example.test"],
+        {
+          env: ENV,
+          loadDotenv: false,
+          print: () => {},
+          teamsImpl: async () => {
+            throw new Error("should not run");
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(CliUsageError);
+  });
+
+  it("rejects empty --teams-subscribe value", async () => {
+    await expect(
+      runCli(
+        ["--teams-subscribe", "   ", "--account", "a@example.test"],
+        {
+          env: ENV,
+          loadDotenv: false,
+          print: () => {},
+          teamsImpl: async () => {
+            throw new Error("should not run");
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(CliUsageError);
   });
 });
 
@@ -2285,5 +2524,317 @@ describe("realViva (default Viva impl wired in cli.ts)", () => {
     });
     expect(prints[0]).toContain("tenant_id");
     expect(prints[1]).toContain("tenant-abc");
+  });
+});
+
+describe("realTeams (default Teams Channels impl wired in cli.ts)", () => {
+  const ACCT_T: Account = {
+    username: "alice@example.test",
+    homeAccountId: "home-a",
+    tenantId: "tenant-a",
+  };
+
+  function makeConfig(dbPath: string): Config {
+    return {
+      msClientId: "client-xyz",
+      bearerToken: "bearer-abc",
+      dbPath,
+      authDir: path.dirname(dbPath),
+      port: 18765,
+      syncIntervalMs: 30_000,
+      bindHost: "127.0.0.1",
+      whatsappDownloadsPath: path.join(path.dirname(dbPath), "wa"),
+      whatsappArchivePath: path.join(path.dirname(dbPath), "wa-archive"),
+      whatsappAccount: "whatsapp@example.invalid",
+      whatsappWatch: false,
+    };
+  }
+
+  function withTmpDb<T>(fn: (cfg: Config) => Promise<T>): Promise<T> {
+    const dir = mkdtempSync(path.join(tmpdir(), "waldo-realteams-"));
+    const dbPath = path.join(dir, "lake.db");
+    const dbInit = new Database(dbPath);
+    try {
+      dbInit.pragma("journal_mode = WAL");
+      applyMigrations(dbInit);
+    } finally {
+      dbInit.close();
+    }
+    const cfg = makeConfig(dbPath);
+    return fn(cfg).finally(() => rmSync(dir, { recursive: true, force: true }));
+  }
+
+  it("realTeams --teams-discover requests TEAMS_CHANNEL_SCOPES and returns channels per team", async () => {
+    await withTmpDb(async (cfg) => {
+      const auth = new FakeAuthClient({
+        accounts: [ACCT_T],
+        tokens: new Map([
+          [
+            ACCT_T.homeAccountId,
+            {
+              token: "tok-tch",
+              expiresOn: new Date("2026-04-30"),
+              account: ACCT_T,
+            },
+          ],
+        ]),
+      });
+      const { FakeTeamsChannelClient } = await import(
+        "./testing/fake-teams-channel-client.js"
+      );
+      const client = new FakeTeamsChannelClient({
+        steps: [
+          {
+            kind: "listJoinedTeamsOk",
+            response: [
+              { id: "team-1", displayName: "Engineering" },
+              { id: "team-2", displayName: "Sales" },
+            ],
+          },
+          {
+            kind: "listChannelsOk",
+            teamId: "team-1",
+            response: [
+              {
+                id: "chan-1",
+                displayName: "General",
+                membershipType: "standard",
+              },
+            ],
+          },
+          {
+            kind: "listChannelsOk",
+            teamId: "team-2",
+            response: [
+              {
+                id: "chan-2",
+                displayName: "Pipeline",
+                membershipType: "private",
+              },
+            ],
+          },
+        ],
+      });
+      const result = await realTeams(
+        cfg,
+        { action: "discover", account: ACCT_T.username },
+        { auth, client, print: () => {} },
+      );
+      expect(result.action).toBe("discover");
+      const channels = (result as Extract<
+        TeamsCliResult,
+        { action: "discover" }
+      >).channels;
+      expect(channels).toHaveLength(2);
+      expect(channels[0]).toEqual({
+        teamId: "team-1",
+        teamName: "Engineering",
+        channelId: "chan-1",
+        channelName: "General",
+        membershipType: "standard",
+      });
+      const tokenCall = auth.calls.find((c) => c.method === "getTokenSilent");
+      expect(tokenCall).toBeDefined();
+      expect(
+        (tokenCall as Extract<typeof tokenCall, { method: "getTokenSilent" }>)
+          ?.scopes,
+      ).toEqual([
+        "Team.ReadBasic.All",
+        "Channel.ReadBasic.All",
+        "ChannelMessage.Read.All",
+      ]);
+    });
+  });
+
+  it("realTeams --teams-discover surfaces consent-required errors as CliUsageError with admin-consent guidance", async () => {
+    await withTmpDb(async (cfg) => {
+      const consentError = new AuthError(
+        "silent-failed",
+        "MSAL silent token acquisition failed",
+        {
+          cause: new Error(
+            "AADSTS65001: The user or administrator has not consented to use the application.",
+          ),
+        },
+      );
+      const auth = new FakeAuthClient({
+        accounts: [ACCT_T],
+        tokens: new Map([[ACCT_T.homeAccountId, consentError]]),
+      });
+      const { FakeTeamsChannelClient } = await import(
+        "./testing/fake-teams-channel-client.js"
+      );
+      const client = new FakeTeamsChannelClient({ steps: [] });
+      await expect(
+        realTeams(
+          cfg,
+          { action: "discover", account: ACCT_T.username },
+          { auth, client, print: () => {} },
+        ),
+      ).rejects.toBeInstanceOf(CliUsageError);
+    });
+  });
+
+  it("realTeams --teams-subscribe inserts a row carrying team/channel names from discover", async () => {
+    await withTmpDb(async (cfg) => {
+      const auth = new FakeAuthClient({
+        accounts: [ACCT_T],
+        tokens: new Map([
+          [
+            ACCT_T.homeAccountId,
+            {
+              token: "tok-tch",
+              expiresOn: new Date("2026-04-30"),
+              account: ACCT_T,
+            },
+          ],
+        ]),
+      });
+      const { FakeTeamsChannelClient } = await import(
+        "./testing/fake-teams-channel-client.js"
+      );
+      const client = new FakeTeamsChannelClient({
+        steps: [
+          {
+            kind: "listJoinedTeamsOk",
+            response: [{ id: "team-1", displayName: "Engineering" }],
+          },
+          {
+            kind: "listChannelsOk",
+            teamId: "team-1",
+            response: [
+              {
+                id: "chan-1",
+                displayName: "General",
+                membershipType: "standard",
+              },
+            ],
+          },
+        ],
+      });
+      const result = await realTeams(
+        cfg,
+        {
+          action: "subscribe",
+          account: ACCT_T.username,
+          teamId: "team-1",
+          channelId: "chan-1",
+        },
+        { auth, client, print: () => {} },
+      );
+      const sub = (result as Extract<TeamsCliResult, { action: "subscribe" }>)
+        .sub;
+      expect(sub.teamId).toBe("team-1");
+      expect(sub.channelId).toBe("chan-1");
+      expect(sub.teamName).toBe("Engineering");
+      expect(sub.channelName).toBe("General");
+      expect(sub.enabled).toBe(true);
+
+      const list = await realTeams(
+        cfg,
+        { action: "list", account: ACCT_T.username },
+        {},
+      );
+      const subs = (list as Extract<TeamsCliResult, { action: "list" }>).subs;
+      expect(subs).toHaveLength(1);
+    });
+  });
+
+  it("realTeams --teams-subscribe throws CliUsageError when channel is not in discover", async () => {
+    await withTmpDb(async (cfg) => {
+      const auth = new FakeAuthClient({
+        accounts: [ACCT_T],
+        tokens: new Map([
+          [
+            ACCT_T.homeAccountId,
+            {
+              token: "tok-tch",
+              expiresOn: new Date("2026-04-30"),
+              account: ACCT_T,
+            },
+          ],
+        ]),
+      });
+      const { FakeTeamsChannelClient } = await import(
+        "./testing/fake-teams-channel-client.js"
+      );
+      const client = new FakeTeamsChannelClient({
+        steps: [
+          {
+            kind: "listJoinedTeamsOk",
+            response: [{ id: "team-1", displayName: "Engineering" }],
+          },
+          {
+            kind: "listChannelsOk",
+            teamId: "team-1",
+            response: [
+              { id: "chan-1", displayName: "General" },
+            ],
+          },
+        ],
+      });
+      await expect(
+        realTeams(
+          cfg,
+          {
+            action: "subscribe",
+            account: ACCT_T.username,
+            teamId: "team-1",
+            channelId: "chan-bogus",
+          },
+          { auth, client, print: () => {} },
+        ),
+      ).rejects.toBeInstanceOf(CliUsageError);
+    });
+  });
+
+  it("realTeams --teams-unsubscribe removes a previously subscribed channel", async () => {
+    await withTmpDb(async (cfg) => {
+      const db = new Database(cfg.dbPath);
+      try {
+        db.pragma("journal_mode = WAL");
+        const { SqliteTeamsChannelSubscriptionStore } = await import(
+          "./store/teams-channel-subscription-store.js"
+        );
+        const store = new SqliteTeamsChannelSubscriptionStore(db);
+        await store.subscribe({
+          account: ACCT_T.username,
+          teamId: "team-1",
+          channelId: "chan-1",
+        });
+      } finally {
+        db.close();
+      }
+      const result = await realTeams(
+        cfg,
+        {
+          action: "unsubscribe",
+          account: ACCT_T.username,
+          teamId: "team-1",
+          channelId: "chan-1",
+        },
+        {},
+      );
+      expect(
+        (result as Extract<TeamsCliResult, { action: "unsubscribe" }>).removed,
+      ).toBe(true);
+    });
+  });
+
+  it("realTeams --teams-discover throws CliUsageError when account is unknown", async () => {
+    await withTmpDb(async (cfg) => {
+      const auth = new FakeAuthClient({ accounts: [] });
+      const { FakeTeamsChannelClient } = await import(
+        "./testing/fake-teams-channel-client.js"
+      );
+      const client = new FakeTeamsChannelClient({ steps: [] });
+      await expect(
+        realTeams(
+          cfg,
+          { action: "discover", account: "ghost@example.test" },
+          { auth, client, print: () => {} },
+        ),
+      ).rejects.toBeInstanceOf(CliUsageError);
+    });
   });
 });

@@ -16,6 +16,8 @@ import type { GraphClient } from "./sources/graph.js";
 import { HttpGraphClient } from "./sources/http-graph-client.js";
 import type { TeamsClient } from "./sources/teams.js";
 import { HttpTeamsClient } from "./sources/http-teams-client.js";
+import type { TeamsChannelClient } from "./sources/teams-channel.js";
+import { HttpTeamsChannelClient } from "./sources/http-teams-channel-client.js";
 import type { VivaClient } from "./sources/viva.js";
 import { HttpYammerClient } from "./sources/http-yammer-client.js";
 import { createFetchWithTimeout } from "./sources/fetch-with-timeout.js";
@@ -25,6 +27,10 @@ import {
   SqliteVivaSubscriptionStore,
   type VivaSubscriptionStore,
 } from "./store/viva-subscription-store.js";
+import {
+  SqliteTeamsChannelSubscriptionStore,
+  type TeamsChannelSubscriptionStore,
+} from "./store/teams-channel-subscription-store.js";
 import {
   SqliteSteeringStore,
   type SteeringStore,
@@ -67,6 +73,8 @@ export interface MainOverrides {
   readonly vivaAuth?: AuthClient;
   readonly graph?: GraphClient;
   readonly teams?: TeamsClient;
+  readonly teamsChannel?: TeamsChannelClient;
+  readonly teamsChannelSubs?: TeamsChannelSubscriptionStore;
   readonly viva?: VivaClient;
   readonly vivaSubs?: VivaSubscriptionStore;
   readonly store?: MessageStore;
@@ -190,12 +198,24 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
     (db !== null
       ? new SqliteVivaSubscriptionStore(db, clock)
       : new SqliteVivaSubscriptionStore(new Database(":memory:"), clock));
+  const teamsChannel: TeamsChannelClient =
+    overrides.teamsChannel ?? new HttpTeamsChannelClient({ fetch: httpFetch });
+  const teamsChannelSubs: TeamsChannelSubscriptionStore =
+    overrides.teamsChannelSubs ??
+    (db !== null
+      ? new SqliteTeamsChannelSubscriptionStore(db, clock)
+      : new SqliteTeamsChannelSubscriptionStore(
+          new Database(":memory:"),
+          clock,
+        ));
 
   const scheduler = new SyncScheduler({
     auth,
     vivaAuth,
     graph,
     teams,
+    teamsChannel,
+    teamsChannelSubs,
     viva,
     vivaSubs,
     store,

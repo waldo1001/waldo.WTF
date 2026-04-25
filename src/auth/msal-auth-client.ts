@@ -10,9 +10,37 @@ import { TokenCacheStore } from "./token-cache-store.js";
 export const DEFAULT_AUTHORITY = "https://login.microsoftonline.com/common";
 export const YAMMER_SCOPE = "https://api.yammer.com/user_impersonation";
 export const SCOPES = ["Mail.Read", "Chat.Read"] as const;
+export const TEAMS_CHANNEL_SCOPES = [
+  "Team.ReadBasic.All",
+  "Channel.ReadBasic.All",
+  "ChannelMessage.Read.All",
+] as const;
 
 export function vivaAuthorityFor(tenantId: string): string {
   return `https://login.microsoftonline.com/${tenantId}/`;
+}
+
+// MSAL surfaces unconsented-tenant rejections as `interaction_required` /
+// `consent_required` / `AADSTS65001` (sometimes wrapped by the cause chain).
+// We walk the cause chain since the AuthClient seam wraps MSAL errors in an
+// AuthError. Used by the channels canary in CLI discover and by the
+// scheduler's per-account skip when a tenant has no admin consent.
+export function isConsentRequiredError(err: unknown): boolean {
+  const seen = new Set<unknown>();
+  let cur: unknown = err;
+  while (cur instanceof Error && !seen.has(cur)) {
+    seen.add(cur);
+    const msg = cur.message.toLowerCase();
+    if (
+      msg.includes("interaction_required") ||
+      msg.includes("consent_required") ||
+      msg.includes("aadsts65001")
+    ) {
+      return true;
+    }
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 // Azure CLI's public first-party client ID. It is pre-consented globally by
