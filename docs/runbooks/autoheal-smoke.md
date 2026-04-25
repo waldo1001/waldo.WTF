@@ -6,8 +6,10 @@ exact failure mode that bypasses Docker's `restart: unless-stopped` and
 that took the production server down twice in April 2026 before A1
 shipped.
 
-> **Last verified**: not yet (initial deploy of slice A1 — TBD on first
-> NAS deploy after this commit lands).
+> **Last verified**: 2026-04-25 — first prod verification after slice A1
+> shipped. Recovery from `docker pause` to fresh `MCP server listening`
+> took ~26s (autoheal detected unhealthy 3s after pause, restart
+> completed at +26s).
 
 ## When to run
 
@@ -77,20 +79,28 @@ Expected — `Status: healthy`, last few entries with
 
 ### 3. Simulate a wedge
 
-`SIGSTOP` to PID 1 inside the container suspends the process without
-exiting it — the kernel's job-control state behaves exactly like a
-wedged event loop from Docker's point of view. `kill -CONT 1` later
-(if needed) resumes the process, but for this test we expect autoheal
-to restart the container before we'd have a chance to.
+`docker pause` freezes every process in the container's cgroup via the
+kernel freezer — equivalent to a wedged event loop from Docker's point
+of view. New `docker exec` calls (which is how Docker runs the
+healthcheck) hang against a paused container and time out.
+
+> **Why not `docker exec waldo-wtf kill -STOP 1`?** Two reasons.
+> First, the runtime image is slim and has no `kill` binary in PATH.
+> Second, even if it did, the kernel filters fatal/stop signals
+> targeting PID 1 of a child PID namespace — `SIGSTOP` to a container's
+> PID 1 is silently dropped. `docker pause` bypasses both problems by
+> using the cgroups freezer directly.
 
 ```sh
-sudo docker exec waldo-wtf kill -STOP 1
+sudo docker pause waldo-wtf
 ```
 
-Note the wall-clock time. The next 30s of healthchecks will fail (the
-suspended process can't respond), and after 3 consecutive failures
-(~90s, including some tolerance for the 30s autoheal poll interval)
-autoheal should restart the container.
+Note the wall-clock time. The next 30s of healthchecks will time out
+(the paused container can't service the `docker exec`), and after 3
+consecutive failures (~90s, plus up to 30s for the autoheal poll
+interval) autoheal should restart the container. In practice we have
+seen the verdict + restart land in ~3-30s because the previous
+healthcheck cycle was already in flight when the pause hit.
 
 ### 4. Wait and verify restart
 
@@ -111,9 +121,12 @@ see `Up Nm (unhealthy)` after 3 minutes, autoheal did not fire — see
 sudo docker logs --tail 50 waldo-autoheal
 ```
 
-Expected — at least one line containing `Container /waldo-wtf is
-unhealthy with 3 tries` followed by `Restart of container /waldo-wtf
-exited with code 0`.
+Expected — at least one line containing `Container /waldo-wtf
+(<short-id>) found to be unhealthy - Restarting container now with 10s
+timeout` (this is the message format for
+`willfarrell/autoheal:latest` as of 2026-04-25; the older docs
+referenced `... unhealthy with 3 tries`, which is a previous version's
+wording).
 
 ### 6. Confirm the app is healthy again
 
@@ -143,20 +156,23 @@ Check, in order:
    containers it doesn't recognise.
 3. **Healthcheck reaching unhealthy**: `sudo docker inspect
    --format '{{json .State.Health}}' waldo-wtf | jq` should show
-   `Status: unhealthy` after ~90s. If still `healthy`, the
-   healthcheck command itself isn't failing — usually means
-   `kill -STOP 1` didn't actually suspend the right process (e.g.
-   running in a non-default init wrapper that intercepts signals).
+   `Status: unhealthy` after ~90s. If still `healthy`, either the
+   pause didn't take (rare — `sudo docker inspect waldo-wtf
+   --format '{{.State.Status}}'` should print `paused`), or the
+   healthcheck command itself isn't running through `docker exec`
+   (verify the compose `healthcheck.test` block hasn't drifted from
+   the `CMD-SHELL` form documented in [docker-compose.yml](../../docker-compose.yml)).
 4. **autoheal poll interval**: with `AUTOHEAL_INTERVAL=30`,
    verdicts are seen within 30s of becoming `unhealthy` — give
    it up to 30s extra before declaring a failure.
 
 ## Cleanup
 
-If for any reason the SIGSTOP didn't trigger a restart and you have a
-zombie suspended process:
+If for any reason the pause didn't trigger an autoheal-driven restart,
+unfreeze the container manually:
 
 ```sh
-sudo docker exec waldo-wtf kill -CONT 1   # may not work if pid 1 is suspended
-sudo docker restart waldo-wtf             # fall-through, always works
+sudo docker unpause waldo-wtf   # resumes the cgroup; app keeps running
+# OR, to recycle from scratch:
+sudo docker restart waldo-wtf   # always works, also unpauses if needed
 ```
