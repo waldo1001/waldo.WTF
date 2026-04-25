@@ -233,3 +233,213 @@ describe("HttpTeamsClient.getChatMessages", () => {
     expect(calls[0]!.headers["Prefer"]).toBe("odata.maxpagesize=10");
   });
 });
+
+describe("HttpTeamsClient transient-5xx retry", () => {
+  function recordSleep(): {
+    sleep: (ms: number) => Promise<void>;
+    sleeps: number[];
+  } {
+    const sleeps: number[] = [];
+    const sleep = async (ms: number) => {
+      sleeps.push(ms);
+    };
+    return { sleep, sleeps };
+  }
+
+  function fixedRandom(value: number): () => number {
+    return () => value;
+  }
+
+  it("retries on 502 and returns success on second attempt", async () => {
+    const payload = { value: [{ id: "chat-1" }] };
+    const { fetch, calls } = scriptFetch([
+      response({ status: 502, body: "bad gateway" }),
+      response({ status: 200, body: JSON.stringify(payload) }),
+    ]);
+    const { sleep, sleeps } = recordSleep();
+    const client = new HttpTeamsClient({
+      fetch,
+      sleep,
+      random: fixedRandom(0.5),
+    });
+    const got = await client.listChats("t");
+    expect(got).toEqual(payload);
+    expect(calls).toHaveLength(2);
+    expect(sleeps).toHaveLength(1);
+    expect(sleeps[0]).toBeGreaterThanOrEqual(250);
+    expect(sleeps[0]).toBeLessThanOrEqual(500);
+  });
+
+  it("retries on 503 then 504 then succeeds on third attempt", async () => {
+    const payload = { value: [] };
+    const { fetch, calls } = scriptFetch([
+      response({ status: 503, body: "unavailable" }),
+      response({ status: 504, body: "timeout" }),
+      response({ status: 200, body: JSON.stringify(payload) }),
+    ]);
+    const { sleep, sleeps } = recordSleep();
+    const client = new HttpTeamsClient({
+      fetch,
+      sleep,
+      random: fixedRandom(0),
+    });
+    const got = await client.listChats("t");
+    expect(got).toEqual(payload);
+    expect(calls).toHaveLength(3);
+    expect(sleeps).toEqual([250, 750]);
+  });
+
+  it("gives up after maxRetries=2 and surfaces the last 5xx body", async () => {
+    const secret = "tok-TEAMS-SECRET-xyz";
+    const { fetch, calls } = scriptFetch([
+      response({ status: 502, body: `boom ${secret}` }),
+      response({ status: 502, body: `boom ${secret}` }),
+      response({ status: 502, body: `final boom ${secret}` }),
+    ]);
+    const { sleep, sleeps } = recordSleep();
+    const client = new HttpTeamsClient({
+      fetch,
+      sleep,
+      random: fixedRandom(0),
+    });
+    try {
+      await client.listChats(secret);
+      expect.fail("expected throw");
+    } catch (caught) {
+      const msg = (caught as Error).message;
+      expect(msg).toContain("HTTP 502");
+      expect(msg).toContain("final boom");
+      expect(msg).toContain("[redacted]");
+      expect(msg).not.toContain(secret);
+    }
+    expect(calls).toHaveLength(3);
+    expect(sleeps).toEqual([250, 750]);
+  });
+
+  it("does not retry on 401", async () => {
+    const { fetch, calls } = scriptFetch([
+      response({ status: 401, body: "no" }),
+    ]);
+    const { sleep, sleeps } = recordSleep();
+    const client = new HttpTeamsClient({
+      fetch,
+      sleep,
+      random: fixedRandom(0),
+    });
+    await expect(client.listChats("t")).rejects.toBeInstanceOf(
+      TokenExpiredError,
+    );
+    expect(calls).toHaveLength(1);
+    expect(sleeps).toEqual([]);
+  });
+
+  it("does not retry on 429", async () => {
+    const { fetch, calls } = scriptFetch([
+      response({ status: 429, body: "", headers: { "Retry-After": "30" } }),
+    ]);
+    const { sleep, sleeps } = recordSleep();
+    const client = new HttpTeamsClient({
+      fetch,
+      sleep,
+      random: fixedRandom(0),
+    });
+    try {
+      await client.listChats("t");
+      expect.fail("expected throw");
+    } catch (caught) {
+      expect(caught).toBeInstanceOf(GraphRateLimitedError);
+      expect((caught as GraphRateLimitedError).retryAfterSeconds).toBe(30);
+    }
+    expect(calls).toHaveLength(1);
+    expect(sleeps).toEqual([]);
+  });
+
+  it("does not retry on 404 or other 4xx", async () => {
+    const { fetch, calls } = scriptFetch([
+      response({ status: 404, body: "not found" }),
+    ]);
+    const { sleep, sleeps } = recordSleep();
+    const client = new HttpTeamsClient({
+      fetch,
+      sleep,
+      random: fixedRandom(0),
+    });
+    await expect(client.listChats("t")).rejects.toThrow(/HTTP 404/);
+    expect(calls).toHaveLength(1);
+    expect(sleeps).toEqual([]);
+  });
+
+  it("does not retry on 500", async () => {
+    const { fetch, calls } = scriptFetch([
+      response({ status: 500, body: "server error" }),
+    ]);
+    const { sleep, sleeps } = recordSleep();
+    const client = new HttpTeamsClient({
+      fetch,
+      sleep,
+      random: fixedRandom(0),
+    });
+    await expect(client.listChats("t")).rejects.toThrow(/HTTP 500/);
+    expect(calls).toHaveLength(1);
+    expect(sleeps).toEqual([]);
+  });
+
+  it("does not retry on 2xx", async () => {
+    const { fetch, calls } = scriptFetch([
+      response({ status: 200, body: JSON.stringify({ value: [] }) }),
+    ]);
+    const { sleep, sleeps } = recordSleep();
+    const client = new HttpTeamsClient({
+      fetch,
+      sleep,
+      random: fixedRandom(0),
+    });
+    await client.listChats("t");
+    expect(calls).toHaveLength(1);
+    expect(sleeps).toEqual([]);
+  });
+
+  it("jitter uses injected random source", async () => {
+    const cases: { random: number; expectedFirstSleep: number }[] = [
+      { random: 0, expectedFirstSleep: 250 },
+      { random: 0.999_999, expectedFirstSleep: 500 },
+    ];
+    for (const c of cases) {
+      const { fetch } = scriptFetch([
+        response({ status: 502, body: "x" }),
+        response({ status: 200, body: JSON.stringify({ value: [] }) }),
+      ]);
+      const { sleep, sleeps } = recordSleep();
+      const client = new HttpTeamsClient({
+        fetch,
+        sleep,
+        random: fixedRandom(c.random),
+      });
+      await client.listChats("t");
+      expect(sleeps[0]).toBeCloseTo(c.expectedFirstSleep, 0);
+    }
+  });
+
+  it("redacts bearer from final error body even after retries", async () => {
+    const secret = "tok-RETRY-PATH-SECRET";
+    const { fetch } = scriptFetch([
+      response({ status: 502, body: `boom1 ${secret}` }),
+      response({ status: 502, body: `boom2 ${secret}` }),
+      response({ status: 502, body: `boom3 ${secret}` }),
+    ]);
+    const { sleep } = recordSleep();
+    const client = new HttpTeamsClient({
+      fetch,
+      sleep,
+      random: fixedRandom(0),
+    });
+    try {
+      await client.listChats(secret);
+      expect.fail("expected throw");
+    } catch (caught) {
+      const msg = (caught as Error).message;
+      expect(msg).not.toContain(secret);
+      expect(msg).toContain("[redacted]");
+    }
+  });
+});
