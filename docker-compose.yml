@@ -52,6 +52,12 @@ services:
       - ./data/auth:/data/auth
       - ./data/whatsapp-inbox:/data/whatsapp-inbox
       - ./data/whatsapp-archive:/data/whatsapp-archive
+    labels:
+      # Tells the willfarrell/autoheal sidecar (see `autoheal` service below)
+      # to watch this container's healthcheck and restart it on 3 consecutive
+      # unhealthy verdicts. `restart: unless-stopped` alone does not fire
+      # when the event loop is wedged but the process hasn't exited.
+      - "autoheal=true"
     healthcheck:
       # /health is unauthenticated and returns {ok:true}. Uses node's built-in
       # fetch so we don't need curl/wget in the image.
@@ -64,3 +70,20 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  autoheal:
+    # willfarrell/autoheal watches every container labeled `autoheal=true` on
+    # this Docker host and restarts any whose healthcheck reports unhealthy
+    # for AUTOHEAL_INTERVAL × default-3-retries. Privileged docker.sock mount
+    # is required so the sidecar can issue restart commands; trust decision
+    # documented in docs/runbooks/autoheal-smoke.md.
+    image: willfarrell/autoheal:latest
+    container_name: waldo-autoheal
+    restart: unless-stopped
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: "autoheal"
+      AUTOHEAL_INTERVAL: "30"
+      AUTOHEAL_START_PERIOD: "60"
+      AUTOHEAL_DEFAULT_STOP_TIMEOUT: "10"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
