@@ -1319,6 +1319,74 @@ describe("runCli", () => {
       ),
     ).rejects.toBeInstanceOf(CliUsageError);
   });
+
+  it("--teams-admin-consent without --account is a CliUsageError", async () => {
+    await expect(
+      runCli(["--teams-admin-consent"], {
+        env: ENV,
+        loadDotenv: false,
+        print: () => {},
+        teamsImpl: async () => {
+          throw new Error("should not run");
+        },
+      }),
+    ).rejects.toBeInstanceOf(CliUsageError);
+  });
+
+  it("--teams-admin-consent --account a passes admin-consent command to teams impl", async () => {
+    const calls: TeamsCommand[] = [];
+    const teamsImpl: TeamsImpl = async (_cfg, cmd) => {
+      calls.push(cmd);
+      return {
+        action: "admin-consent",
+        urls: [
+          {
+            tenantId: "tenant-z",
+            url: "https://login.microsoftonline.com/tenant-z/adminconsent?client_id=client-xyz",
+          },
+        ],
+      };
+    };
+    const prints: string[] = [];
+    const result = await runCli(
+      ["--teams-admin-consent", "--account", "a@example.test"],
+      { env: ENV, loadDotenv: false, print: (m) => prints.push(m), teamsImpl },
+    );
+    expect(calls[0]).toEqual({
+      action: "admin-consent",
+      account: "a@example.test",
+    });
+    expect(result.mode).toBe("teams");
+    const out = prints.join("\n");
+    expect(out).toContain("tenant-z");
+    expect(out).toContain(
+      "https://login.microsoftonline.com/tenant-z/adminconsent?client_id=client-xyz",
+    );
+  });
+
+  it("--teams-admin-consent output is tab-separated with header", async () => {
+    const teamsImpl: TeamsImpl = async () => ({
+      action: "admin-consent",
+      urls: [
+        {
+          tenantId: "tenant-1",
+          url: "https://login.microsoftonline.com/tenant-1/adminconsent?client_id=cid",
+        },
+        {
+          tenantId: "tenant-2",
+          url: "https://login.microsoftonline.com/tenant-2/adminconsent?client_id=cid",
+        },
+      ],
+    });
+    const prints: string[] = [];
+    await runCli(
+      ["--teams-admin-consent", "--account", "a@example.test"],
+      { env: ENV, loadDotenv: false, print: (m) => prints.push(m), teamsImpl },
+    );
+    expect(prints[0]?.split("\t")).toEqual(["tenant_id", "admin_consent_url"]);
+    expect(prints[1]?.split("\t")[0]).toBe("tenant-1");
+    expect(prints[2]?.split("\t")[0]).toBe("tenant-2");
+  });
 });
 
 describe("addAccount", () => {
@@ -3212,6 +3280,82 @@ describe("realTeams (default Teams Channels impl wired in cli.ts)", () => {
           teamsAuthorityFor("tenant-ms"),
         ]),
       );
+    });
+  });
+
+  it("realTeams --teams-admin-consent throws CliUsageError when no cached account matches", async () => {
+    await withTmpDb(async (cfg) => {
+      const auth = new FakeAuthClient({ accounts: [] });
+      await expect(
+        realTeams(
+          cfg,
+          { action: "admin-consent", account: "ghost@example.test" },
+          { auth, print: () => {} },
+        ),
+      ).rejects.toBeInstanceOf(CliUsageError);
+    });
+  });
+
+  it("realTeams --teams-admin-consent prints one admin-consent URL per cached tenant", async () => {
+    await withTmpDb(async (cfg) => {
+      const ACCT_DYNEX: Account = {
+        username: "alice@example.test",
+        homeAccountId: "home-dynex",
+        tenantId: "tenant-dynex",
+      };
+      const ACCT_MS: Account = {
+        username: "alice@example.test",
+        homeAccountId: "home-ms",
+        tenantId: "tenant-ms",
+      };
+      const auth = new FakeAuthClient({
+        accounts: [ACCT_DYNEX, ACCT_MS],
+      });
+      const result = await realTeams(
+        cfg,
+        { action: "admin-consent", account: "alice@example.test" },
+        { auth, print: () => {} },
+      );
+      expect(result.action).toBe("admin-consent");
+      const urls = (result as Extract<
+        TeamsCliResult,
+        { action: "admin-consent" }
+      >).urls;
+      const byTenant = new Map(urls.map((u) => [u.tenantId, u.url] as const));
+      expect(byTenant.get("tenant-dynex")).toBe(
+        "https://login.microsoftonline.com/tenant-dynex/adminconsent?client_id=client-xyz",
+      );
+      expect(byTenant.get("tenant-ms")).toBe(
+        "https://login.microsoftonline.com/tenant-ms/adminconsent?client_id=client-xyz",
+      );
+      expect(urls).toHaveLength(2);
+    });
+  });
+
+  it("realTeams --teams-admin-consent dedupes cached entries that share a tenantId", async () => {
+    await withTmpDb(async (cfg) => {
+      const ACCT_A: Account = {
+        username: "alice@example.test",
+        homeAccountId: "home-a",
+        tenantId: "tenant-shared",
+      };
+      const ACCT_B: Account = {
+        username: "alice@example.test",
+        homeAccountId: "home-b",
+        tenantId: "tenant-shared",
+      };
+      const auth = new FakeAuthClient({ accounts: [ACCT_A, ACCT_B] });
+      const result = await realTeams(
+        cfg,
+        { action: "admin-consent", account: "alice@example.test" },
+        { auth, print: () => {} },
+      );
+      const urls = (result as Extract<
+        TeamsCliResult,
+        { action: "admin-consent" }
+      >).urls;
+      expect(urls).toHaveLength(1);
+      expect(urls[0]?.tenantId).toBe("tenant-shared");
     });
   });
 });

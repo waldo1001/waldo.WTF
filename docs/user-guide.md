@@ -364,6 +364,15 @@ npm run dev -- --account your@email.com \
 # Unsubscribe (rows already in the lake stay; only stops new pulls)
 npm run dev -- --account your@email.com \
   --teams-unsubscribe <teamId>:<channelId>
+
+# Print a tenant-wide admin-consent URL per cached MSAL tenant.
+# Use this when --teams-discover prints "skipped tenant <id>:
+# admin-consent required" for a tenant where you ARE an admin.
+# Open the URL on your workstation, sign in as the tenant admin,
+# click Accept once. The next sync tick will silently mint a
+# channels-scoped token against the existing refresh token — no
+# re-add-account needed.
+npm run dev -- --account your@email.com --teams-admin-consent
 ```
 
 Once subscribed, the next sync tick pulls channel messages via Graph's

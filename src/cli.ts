@@ -154,9 +154,15 @@ export interface DiscoveredChannel {
   readonly membershipType?: "standard" | "private" | "shared";
 }
 
+export interface TeamsAdminConsentUrl {
+  readonly tenantId: string;
+  readonly url: string;
+}
+
 export type TeamsCommand =
   | { readonly action: "list"; readonly account: string }
   | { readonly action: "discover"; readonly account: string }
+  | { readonly action: "admin-consent"; readonly account: string }
   | {
       readonly action: "subscribe";
       readonly account: string;
@@ -179,6 +185,10 @@ export type TeamsCliResult =
   | {
       readonly action: "discover";
       readonly channels: readonly DiscoveredChannel[];
+    }
+  | {
+      readonly action: "admin-consent";
+      readonly urls: readonly TeamsAdminConsentUrl[];
     }
   | { readonly action: "subscribe"; readonly sub: TeamsChannelSubscription }
   | { readonly action: "unsubscribe"; readonly removed: boolean };
@@ -237,6 +247,7 @@ const BOOLEAN_FLAGS = new Set([
   "--viva-discover",
   "--teams-list",
   "--teams-discover",
+  "--teams-admin-consent",
 ]);
 
 const VIVA_VALUE_FLAGS = new Set([
@@ -325,7 +336,7 @@ function parseArgv(argv: readonly string[]): {
       continue;
     }
     throw new CliUsageError(
-      `Unknown flag: ${a}. Usage: waldo-wtf [--add-account | --backfill-bodies | --import-whatsapp | --steer-* | --viva-* | --teams-*]`,
+      `Unknown flag: ${a}. Usage: waldo-wtf [--add-account | --backfill-bodies | --import-whatsapp | --steer-* | --viva-* | --teams-* | --teams-admin-consent]`,
     );
   }
   return { boolean, values };
@@ -607,12 +618,14 @@ function resolveTeamsCommand(parsed: {
 }): TeamsCommand | null {
   const list = parsed.boolean.has("--teams-list");
   const discover = parsed.boolean.has("--teams-discover");
+  const adminConsent = parsed.boolean.has("--teams-admin-consent");
   const subscribe = parsed.values.get("--teams-subscribe");
   const unsubscribe = parsed.values.get("--teams-unsubscribe");
 
   const activeCount =
     (list ? 1 : 0) +
     (discover ? 1 : 0) +
+    (adminConsent ? 1 : 0) +
     (subscribe !== undefined ? 1 : 0) +
     (unsubscribe !== undefined ? 1 : 0);
   if (activeCount === 0) return null;
@@ -629,6 +642,7 @@ function resolveTeamsCommand(parsed: {
 
   if (list) return { action: "list", account };
   if (discover) return { action: "discover", account };
+  if (adminConsent) return { action: "admin-consent", account };
   if (subscribe !== undefined) {
     if (subscribe.trim() === "") {
       throw new CliUsageError("--teams-subscribe pattern must not be empty");
@@ -703,6 +717,18 @@ function reportTeamsResult(result: TeamsCliResult, print: PrintFn): void {
             c.membershipType ?? "-",
           ].join("\t"),
         );
+      }
+      return;
+    case "admin-consent":
+      if (result.urls.length === 0) {
+        print(
+          "no cached tenants for this account — run --add-account first",
+        );
+        return;
+      }
+      print(["tenant_id", "admin_consent_url"].join("\t"));
+      for (const u of result.urls) {
+        print([u.tenantId, u.url].join("\t"));
       }
       return;
     case "subscribe":
@@ -1255,6 +1281,15 @@ export async function realTeams(
           print,
         );
         return { action: "discover", channels };
+      }
+      case "admin-consent": {
+        const auth = deps.auth ?? (await buildDefaultTeamsAuth(config));
+        const accounts = await resolveCliAccounts(auth, command.account);
+        const urls = accounts.map((a) => ({
+          tenantId: a.tenantId,
+          url: `https://login.microsoftonline.com/${a.tenantId}/adminconsent?client_id=${config.msClientId}`,
+        }));
+        return { action: "admin-consent", urls };
       }
       case "subscribe": {
         /* c8 ignore next -- default console.log only in production */
