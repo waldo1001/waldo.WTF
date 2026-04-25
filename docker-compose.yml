@@ -60,12 +60,16 @@ services:
       - "autoheal=true"
     healthcheck:
       # /health is unauthenticated and returns {ok:true}. Uses node's built-in
-      # fetch so we don't need curl/wget in the image.
+      # http (NOT fetch) so we get an explicit per-request timeout: a wedged
+      # event loop can stall fetch() indefinitely, which would burn through
+      # autoheal's retry budget and delay the restart we are trying to
+      # trigger. Every error path here calls process.exit(1) so the check
+      # fails in <3s rather than waiting for the outer 5s docker timeout.
+      # /health responds 200 directly; if a future change adds a redirect,
+      # this script must be revisited (node:http does not follow them).
       test:
-        - "CMD"
-        - "node"
-        - "-e"
-        - "fetch('http://127.0.0.1:8765/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+        - "CMD-SHELL"
+        - "node --eval \"const c=require('http').request({host:'127.0.0.1',port:8765,path:'/health',timeout:3000},r=>process.exit(r.statusCode===200?0:1));c.on('timeout',()=>process.exit(1));c.on('error',()=>process.exit(1));c.end();\""
       interval: 30s
       timeout: 5s
       retries: 3

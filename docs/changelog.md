@@ -14,6 +14,7 @@ skill.
 ## 2026-04-25
 
 - Added `willfarrell/autoheal` sidecar to [docker-compose.yml](../docker-compose.yml) and tagged the `waldo` service with `autoheal=true`. The sidecar watches every container with that label and issues a `docker restart` after 3 consecutive `unhealthy` verdicts (~90s with the existing 30s healthcheck interval × 3 retries). Closes the gap exposed twice in production where the MCP server's TCP listener stayed bound but the event loop was wedged — `restart: unless-stopped` only fires on process exit, never on a stuck loop. Slice A1.1 of [plans/server-hang-autoheal.md](plans/server-hang-autoheal.md); per-slice plan archived at [plans/done/server-hang-autoheal-A1.1-autoheal-sidecar.md](plans/done/server-hang-autoheal-A1.1-autoheal-sidecar.md).
+- Hardened the `waldo` healthcheck in [docker-compose.yml](../docker-compose.yml): swapped `node -e "fetch(...)"` for `node --eval` using `node:http`'s built-in `request({timeout: 3000})` with explicit `process.exit(1)` on timeout/error/non-200. `fetch()` has no per-request timeout and (under the wedge hypothesis) shares the same loop primitives as the wedged app, which would burn through autoheal's verdict cycles. The new check fails in <3s on any failure path, locally verified against an unreachable port. Slice A1.2 of [plans/server-hang-autoheal.md](plans/server-hang-autoheal.md); per-slice plan archived at [plans/done/server-hang-autoheal-A1.2-harden-healthcheck.md](plans/done/server-hang-autoheal-A1.2-harden-healthcheck.md).
 
 ## 2026-04-24
 
