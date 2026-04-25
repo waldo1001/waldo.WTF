@@ -30,7 +30,7 @@ export type DcrResponseBody = ClientInformationResponse | ErrorResponse;
 
 export interface DcrResponse {
   readonly status: number;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- discriminated by `error` key, exhaustive caller-side
+  // discriminated by `error` key, exhaustive caller-side
   readonly body: any;
 }
 

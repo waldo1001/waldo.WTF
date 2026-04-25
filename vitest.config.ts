@@ -17,6 +17,7 @@ export default defineConfig({
         "src/**/*.d.ts",
         "src/testing/**",
         "src/**/__fixtures__/**",
+        "src/**/__lint__/**",
         "src/**/*.test.ts",
         "src/**/__integration__/**",
         "src/**/__contract__/**",

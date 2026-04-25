@@ -596,3 +596,32 @@ describe("createMcpHttpServer + OAuth resource guard", () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe("createMcpHttpServer server timeouts", () => {
+  it("applies default request/headers/keepAlive timeouts when no options provided", () => {
+    const server = createMcpHttpServer({
+      bearerToken: BEARER,
+      store: new InMemoryMessageStore(),
+      steering: new InMemorySteeringStore(),
+      clock: new FakeClock(new Date("2026-04-25T00:00:00Z")),
+    });
+    expect(server.requestTimeout).toBe(60_000);
+    expect(server.headersTimeout).toBe(30_000);
+    expect(server.keepAliveTimeout).toBe(65_000);
+    expect(server.timeout).toBe(0);
+  });
+
+  it("applies caller-overridden timeouts", () => {
+    const server = createMcpHttpServer({
+      bearerToken: BEARER,
+      store: new InMemoryMessageStore(),
+      steering: new InMemorySteeringStore(),
+      clock: new FakeClock(new Date("2026-04-25T00:00:00Z")),
+      timeouts: { requestMs: 1000, headersMs: 500, keepAliveMs: 2000 },
+    });
+    expect(server.requestTimeout).toBe(1000);
+    expect(server.headersTimeout).toBe(500);
+    expect(server.keepAliveTimeout).toBe(2000);
+    expect(server.timeout).toBe(0);
+  });
+});

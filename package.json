@@ -12,15 +12,18 @@
     "test:unit": "vitest run --coverage src",
     "test:integration": "vitest run src/**/__integration__",
     "test:contract": "vitest run src/**/__contract__",
-    "typecheck": "tsc -p tsconfig.test.json"
+    "typecheck": "tsc -p tsconfig.test.json",
+    "lint": "eslint src --ignore-pattern 'src/sources/__lint__/**'"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.8",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "^2.1.0",
+    "eslint": "^10.2.1",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
+    "typescript-eslint": "^8.59.0",
     "vitest": "^2.1.0"
   },
   "dependencies": {

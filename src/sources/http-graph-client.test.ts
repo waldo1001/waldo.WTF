@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DeltaTokenInvalidError,
   GraphRateLimitedError,
   TokenExpiredError,
 } from "./graph.js";
+import { createFetchWithTimeout } from "./fetch-with-timeout.js";
 import {
   HttpGraphClient,
   type FetchLike,
@@ -206,5 +207,37 @@ describe("HttpGraphClient", () => {
         expect((caught as Error).message).not.toContain(secret);
       }
     }
+  });
+});
+
+describe("HttpGraphClient with fetchWithTimeout", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("aborts via fetchWithTimeout default when inner fetch hangs", async () => {
+    const inner: FetchLike = (_url, init) =>
+      new Promise<FetchLikeResponse>((_resolve, reject) => {
+        const sig = init?.signal;
+        sig?.addEventListener(
+          "abort",
+          () => reject(sig.reason),
+          { once: true },
+        );
+      });
+    const wrapped = createFetchWithTimeout({
+      fetch: inner,
+      defaultTimeoutMs: 100,
+    });
+    const client = new HttpGraphClient({ fetch: wrapped });
+
+    const promise = client.getDelta("/me/messages/delta", "tok-secret");
+    promise.catch(() => {});
+
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(promise).rejects.toMatchObject({ name: "TimeoutError" });
   });
 });

@@ -43,6 +43,11 @@ export interface McpHttpServerOptions {
   readonly clock: Clock;
   readonly vivaSubs?: VivaSubscriptionStore;
   readonly oauth?: OAuthHttpOptions;
+  readonly timeouts?: {
+    readonly requestMs?: number;
+    readonly headersMs?: number;
+    readonly keepAliveMs?: number;
+  };
 }
 
 const writeJson = (
@@ -129,7 +134,7 @@ async function checkAuthorization(
 }
 
 export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
-  return createServer((req: IncomingMessage, res: ServerResponse) => {
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     if (req.method === "GET" && req.url === "/health") {
       writeJson(res, 200, { ok: true });
       return;
@@ -306,4 +311,9 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
       await transport.handleRequest(req, res);
     })();
   });
+  server.requestTimeout = opts.timeouts?.requestMs ?? 60_000;
+  server.headersTimeout = opts.timeouts?.headersMs ?? 30_000;
+  server.keepAliveTimeout = opts.timeouts?.keepAliveMs ?? 65_000;
+  server.timeout = 0;
+  return server;
 }

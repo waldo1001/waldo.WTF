@@ -235,7 +235,14 @@ better.
   passed as a value.
 - `require(...)` dynamic imports → ESM only, static imports.
 - `fetch(...)` outside `src/sources/graph-http.ts` and
-  `src/support/http-node.ts`.
+  `src/support/http-node.ts`. **Lint-enforced** (slice A3.4): the
+  ESLint rule `no-restricted-globals` bans bare `fetch` in
+  `src/sources/**` and `src/sync/**`. Every outbound HTTP call must
+  go through an injected `FetchLike`, and the production wiring in
+  [`src/index.ts`](../../src/index.ts) wraps that `FetchLike` with
+  [`createFetchWithTimeout`](../../src/sources/fetch-with-timeout.ts)
+  so no single stuck connection can wedge the event loop. Regression
+  test: [`src/__meta__/lint-bare-fetch.test.ts`](../../src/__meta__/lint-bare-fetch.test.ts).
 - `import("better-sqlite3")` outside `src/store/sqlite.ts`.
 - `import("@azure/msal-node")` outside `src/auth/msal-provider.ts`.
 - Singletons (`let instance: X | undefined`) → always pass the instance

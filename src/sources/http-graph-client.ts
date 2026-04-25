@@ -17,6 +17,7 @@ export type FetchLike = (
   init?: {
     method?: string;
     headers?: Record<string, string>;
+    signal?: AbortSignal;
   },
 ) => Promise<FetchLikeResponse>;
 

@@ -18,6 +18,7 @@ import type { TeamsClient } from "./sources/teams.js";
 import { HttpTeamsClient } from "./sources/http-teams-client.js";
 import type { VivaClient } from "./sources/viva.js";
 import { HttpYammerClient } from "./sources/http-yammer-client.js";
+import { createFetchWithTimeout } from "./sources/fetch-with-timeout.js";
 import { openDatabase } from "./store/open-database.js";
 import { SqliteMessageStore } from "./store/sqlite-message-store.js";
 import {
@@ -93,6 +94,8 @@ const nodeSetTimer: SetTimerFn = (fn, ms): TimerHandle => {
   return { clear: () => clearInterval(h) };
 };
 
+const DEFAULT_HTTP_TIMEOUT_MS = 60_000;
+
 /* c8 ignore next 6 -- default process signal seam, exercised only at runtime */
 const nodeSignals: Signals = {
   on(signal, handler) {
@@ -137,21 +140,16 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
       : new SqliteSteeringStore(new Database(":memory:"), clock));
   const store: MessageStore =
     overrides.store ?? new SqliteMessageStore(db!, steering);
+  const httpFetch = createFetchWithTimeout({
+    fetch: (input, init) => globalThis.fetch(input, init),
+    defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
+  });
   const graph: GraphClient =
-    overrides.graph ??
-    new HttpGraphClient({
-      fetch: (input, init) => globalThis.fetch(input, init),
-    });
+    overrides.graph ?? new HttpGraphClient({ fetch: httpFetch });
   const teams: TeamsClient =
-    overrides.teams ??
-    new HttpTeamsClient({
-      fetch: (input, init) => globalThis.fetch(input, init),
-    });
+    overrides.teams ?? new HttpTeamsClient({ fetch: httpFetch });
   const viva: VivaClient =
-    overrides.viva ??
-    new HttpYammerClient({
-      fetch: (input, init) => globalThis.fetch(input, init),
-    });
+    overrides.viva ?? new HttpYammerClient({ fetch: httpFetch });
   const vivaSubs: VivaSubscriptionStore =
     overrides.vivaSubs ??
     (db !== null
