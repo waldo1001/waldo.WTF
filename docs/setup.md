@@ -162,6 +162,31 @@ NAS, first-run MSAL login inside the container, and repointing Claude
 Desktop to the tailnet host. Do **not** attempt before the local
 `npm test` + `tsx src/cli.ts` flow works end-to-end for one full week.
 
+## 10. Operations & autoheal sidecar
+
+`docker-compose.yml` runs two containers:
+
+- `waldo-wtf` — the MCP server itself.
+- `waldo-autoheal` — the
+  [willfarrell/autoheal](https://github.com/willfarrell/docker-autoheal)
+  sidecar that watches every container labeled `autoheal=true` and
+  restarts those whose Docker healthcheck reports `unhealthy` for
+  several consecutive cycles. The `waldo` service carries that
+  label; the sidecar restarts it ~90s after the event loop wedges.
+
+The sidecar bind-mounts the host docker socket
+(`/var/run/docker.sock`) and is therefore a privileged container.
+The trust decision (why this is acceptable on a single-tenant home
+NAS) is documented in
+[runbooks/autoheal-smoke.md](runbooks/autoheal-smoke.md). Read it
+once and then forget it; the runbook also contains the manual smoke
+procedure to verify the safety net is still on.
+
+If you ever want to opt out of the sidecar (e.g. one-shot manual
+debugging where you'd rather a wedge stay wedged so you can dig in),
+either remove the `autoheal=true` label from the `waldo` service or
+`docker compose stop waldo-autoheal`.
+
 ---
 
 ## Troubleshooting

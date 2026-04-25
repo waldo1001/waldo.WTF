@@ -25,6 +25,8 @@ or maintain waldo.WTF. Keep this file short — link out, don't inline.
   keeping the codebase legible to humans and future Claude sessions.
 - [Coverage policy](tdd/coverage-policy.md) — 90% thresholds, exclusions,
   enforcement.
+- [Runbooks](runbooks/README.md) — manual operational procedures
+  (autoheal smoke test, etc).
 
 ## Project background
 
