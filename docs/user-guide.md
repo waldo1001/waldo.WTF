@@ -340,18 +340,26 @@ independently of personal chats.
 # List Teams channel subscriptions for an account
 npm run dev -- --account your@email.com --teams-list
 
-# Discover: enumerate every team + channel the account can read.
+# Discover: enumerate every team + channel the account can read,
+# fanned out across every cached MSAL tenant for that username.
 # On first use, prompts a device-code flow if the new scopes
 # (Team.ReadBasic.All, Channel.ReadBasic.All, ChannelMessage.Read.All)
 # need consent. Tenants that require admin consent for
-# ChannelMessage.Read.All print a one-line "admin-consent required"
-# message and the rest of the work continues.
+# ChannelMessage.Read.All print one "skipped tenant <id>: admin-consent
+# required" line and the rest of the tenants still resolve. Output
+# columns: tenant_id, team_id, channel_id, team_name, channel_name.
 npm run dev -- --account your@email.com --teams-discover
 
-# Subscribe to one channel — pick the (teamId, channelId) pair from
-# --teams-discover and pass them colon-separated.
+# Subscribe to one channel. Two-segment form works when the (teamId,
+# channelId) pair is unambiguous across cached tenants:
 npm run dev -- --account your@email.com \
   --teams-subscribe <teamId>:<channelId>
+
+# Three-segment form (recommended for users with multiple cached
+# tenants under the same UPN) makes the tenant explicit. The
+# tenant_id comes from the first column of --teams-discover output:
+npm run dev -- --account your@email.com \
+  --teams-subscribe <tenantId>:<teamId>:<channelId>
 
 # Unsubscribe (rows already in the lake stay; only stops new pulls)
 npm run dev -- --account your@email.com \

@@ -273,6 +273,34 @@ export function runTeamsChannelSubscriptionStoreContract(
       ]);
     });
 
+    it("subscribe persists tenantId and reads it back; absent tenantId stays undefined", async () => {
+      const store = await factory();
+      const withTenant = await store.subscribe({
+        account: "a@example.test",
+        tenantId: "tenant-aaa",
+        teamId: "team-1",
+        channelId: "chan-1",
+      });
+      expect(withTenant.tenantId).toBe("tenant-aaa");
+      const withoutTenant = await store.subscribe({
+        account: "a@example.test",
+        teamId: "team-1",
+        channelId: "chan-2",
+      });
+      expect(withoutTenant.tenantId).toBeUndefined();
+
+      const rows = await store.listForAccount("a@example.test");
+      const byChannel = new Map(rows.map((r) => [r.channelId, r] as const));
+      expect(byChannel.get("chan-1")?.tenantId).toBe("tenant-aaa");
+      expect(byChannel.get("chan-2")?.tenantId).toBeUndefined();
+
+      const enabled = await store.listEnabledForAccount("a@example.test");
+      const enabledByChannel = new Map(
+        enabled.map((r) => [r.channelId, r] as const),
+      );
+      expect(enabledByChannel.get("chan-1")?.tenantId).toBe("tenant-aaa");
+    });
+
     it("listEnabledForAccount returns only enabled rows", async () => {
       const store = await factory();
       await store.subscribe({

@@ -34,6 +34,7 @@ export class InMemoryTeamsChannelSubscriptionStore
     }
     const sub: TeamsChannelSubscription = {
       account: input.account,
+      ...(input.tenantId !== undefined && { tenantId: input.tenantId }),
       teamId: input.teamId,
       ...(input.teamName !== undefined && { teamName: input.teamName }),
       channelId: input.channelId,

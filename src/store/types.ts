@@ -144,6 +144,7 @@ export interface AddVivaSubscriptionInput {
 
 export interface TeamsChannelSubscription {
   readonly account: string;
+  readonly tenantId?: string;
   readonly teamId: string;
   readonly teamName?: string;
   readonly channelId: string;
@@ -155,6 +156,7 @@ export interface TeamsChannelSubscription {
 
 export interface AddTeamsChannelSubscriptionInput {
   readonly account: string;
+  readonly tenantId?: string;
   readonly teamId: string;
   readonly teamName?: string;
   readonly channelId: string;

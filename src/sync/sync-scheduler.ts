@@ -184,12 +184,9 @@ export class SyncScheduler {
             );
           if (enabled.length > 0) {
             try {
-              const tok = await this.deps.auth.getTokenSilent(account, {
-                scopes: TEAMS_CHANNEL_SCOPES,
-              });
               const r = await syncTeamsChannels({
                 account,
-                token: tok.token,
+                auth: this.deps.auth,
                 client: this.deps.teamsChannel,
                 store: this.deps.store,
                 subs: this.deps.teamsChannelSubs,

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { syncTeamsChannels } from "./sync-teams-channels.js";
+import { teamsAuthorityFor } from "../auth/msal-auth-client.js";
+import { FakeAuthClient } from "../testing/fake-auth-client.js";
 import { FakeTeamsChannelClient } from "../testing/fake-teams-channel-client.js";
 import { InMemoryMessageStore } from "../testing/in-memory-message-store.js";
 import { InMemoryTeamsChannelSubscriptionStore } from "../testing/in-memory-teams-channel-subscription-store.js";
@@ -10,7 +12,7 @@ import {
   type TeamsChannelMessage,
   type TeamsChannelMessagesPage,
 } from "../sources/teams-channel.js";
-import type { Account } from "../auth/types.js";
+import { AuthError, type AccessToken, type Account } from "../auth/types.js";
 
 const account: Account = {
   username: "alice@example.invalid",
@@ -19,6 +21,22 @@ const account: Account = {
 };
 
 const TOKEN = "tch-tok";
+
+function singleTenantAuth(token: string = TOKEN): FakeAuthClient {
+  return new FakeAuthClient({
+    accounts: [account],
+    tokens: new Map<string, AccessToken | Error>([
+      [
+        `${account.homeAccountId}|${teamsAuthorityFor(account.tenantId)}`,
+        {
+          token,
+          expiresOn: new Date("2026-04-30"),
+          account,
+        },
+      ],
+    ]),
+  });
+}
 
 interface MakeMsgOverrides {
   id?: string;
@@ -105,7 +123,7 @@ describe("syncTeamsChannels", () => {
 
     await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -146,7 +164,7 @@ describe("syncTeamsChannels", () => {
     });
     await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -188,7 +206,7 @@ describe("syncTeamsChannels", () => {
     });
     const res = await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -233,7 +251,7 @@ describe("syncTeamsChannels", () => {
     });
     await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -270,7 +288,7 @@ describe("syncTeamsChannels", () => {
     });
     const res = await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -303,7 +321,7 @@ describe("syncTeamsChannels", () => {
     });
     await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -339,7 +357,7 @@ describe("syncTeamsChannels", () => {
     });
     await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -371,7 +389,7 @@ describe("syncTeamsChannels", () => {
     });
     await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -406,7 +424,7 @@ describe("syncTeamsChannels", () => {
     });
     await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -446,7 +464,7 @@ describe("syncTeamsChannels", () => {
     });
     await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -503,7 +521,7 @@ describe("syncTeamsChannels", () => {
     });
     await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -534,7 +552,7 @@ describe("syncTeamsChannels", () => {
     });
     await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -562,7 +580,7 @@ describe("syncTeamsChannels", () => {
     });
     await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -589,7 +607,7 @@ describe("syncTeamsChannels", () => {
     });
     await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -620,7 +638,7 @@ describe("syncTeamsChannels", () => {
     });
     const res = await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -650,7 +668,7 @@ describe("syncTeamsChannels", () => {
     });
     await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -671,7 +689,7 @@ describe("syncTeamsChannels", () => {
     await expect(
       syncTeamsChannels({
         account,
-        token: TOKEN,
+        auth: singleTenantAuth(),
         client,
         store,
         subs,
@@ -691,7 +709,7 @@ describe("syncTeamsChannels", () => {
     await expect(
       syncTeamsChannels({
         account,
-        token: TOKEN,
+        auth: singleTenantAuth(),
         client,
         store,
         subs,
@@ -717,7 +735,7 @@ describe("syncTeamsChannels", () => {
     });
     const res = await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -760,7 +778,7 @@ describe("syncTeamsChannels", () => {
     };
     await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -792,7 +810,7 @@ describe("syncTeamsChannels", () => {
     const client = new FakeTeamsChannelClient({ steps: [] });
     const res = await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -819,7 +837,7 @@ describe("syncTeamsChannels", () => {
     });
     await syncTeamsChannels({
       account,
-      token: TOKEN,
+      auth: singleTenantAuth(),
       client,
       store,
       subs,
@@ -828,5 +846,154 @@ describe("syncTeamsChannels", () => {
     expect(
       client.calls.filter((c) => c.method === "getChannelMessagesDelta"),
     ).toHaveLength(1);
+  });
+
+  it("syncTeamsChannels fans out across tenants and isolates per-tenant token failures", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryTeamsChannelSubscriptionStore();
+    await subs.subscribe({
+      account: account.username,
+      tenantId: "tenant-A",
+      teamId: "team-A1",
+      channelId: "chan-A1",
+    });
+    await subs.subscribe({
+      account: account.username,
+      tenantId: "tenant-A",
+      teamId: "team-A2",
+      channelId: "chan-A2",
+    });
+    await subs.subscribe({
+      account: account.username,
+      tenantId: "tenant-B",
+      teamId: "team-B1",
+      channelId: "chan-B1",
+    });
+
+    const consentError = new AuthError(
+      "silent-failed",
+      "MSAL silent token acquisition failed",
+      { cause: new Error("AADSTS65001: consent required") },
+    );
+    const auth = new FakeAuthClient({
+      accounts: [account],
+      tokens: new Map<string, AccessToken | Error>([
+        [
+          `${account.homeAccountId}|${teamsAuthorityFor("tenant-A")}`,
+          {
+            token: "tok-A",
+            expiresOn: new Date("2026-04-30"),
+            account,
+          },
+        ],
+        [
+          `${account.homeAccountId}|${teamsAuthorityFor("tenant-B")}`,
+          consentError,
+        ],
+      ]),
+    });
+
+    const clock = new FakeClock(new Date("2026-04-21T12:00:00Z"));
+    const client = new FakeTeamsChannelClient({
+      steps: [
+        {
+          kind: "getChannelMessagesDeltaOk",
+          response: page([], { deltaLink: "d-A1" }),
+        },
+        {
+          kind: "getChannelMessagesDeltaOk",
+          response: page([], { deltaLink: "d-A2" }),
+        },
+      ],
+    });
+
+    const result = await syncTeamsChannels({
+      account,
+      auth,
+      client,
+      store,
+      subs,
+      clock,
+    });
+
+    const silent = auth.calls.filter((c) => c.method === "getTokenSilent");
+    const authorities = new Set(
+      silent
+        .map(
+          (c) =>
+            (c as Extract<typeof silent[number], { method: "getTokenSilent" }>)
+              .authority,
+        )
+        .filter((a): a is string => a !== undefined),
+    );
+    expect(authorities).toEqual(
+      new Set([
+        teamsAuthorityFor("tenant-A"),
+        teamsAuthorityFor("tenant-B"),
+      ]),
+    );
+
+    const successSubs = result.perSubscription.filter(
+      (p) => p.error === undefined,
+    );
+    expect(successSubs.map((s) => s.channelId).sort()).toEqual([
+      "chan-A1",
+      "chan-A2",
+    ]);
+    const failed = result.perSubscription.filter(
+      (p) => p.error !== undefined,
+    );
+    expect(failed.map((s) => s.channelId)).toEqual(["chan-B1"]);
+  });
+
+  it("syncTeamsChannels falls back to account.tenantId when subscription tenantId is missing", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryTeamsChannelSubscriptionStore();
+    // legacy subscription — no tenantId set
+    await subs.subscribe({
+      account: account.username,
+      teamId: "team-legacy",
+      channelId: "chan-legacy",
+    });
+
+    const auth = new FakeAuthClient({
+      accounts: [account],
+      tokens: new Map<string, AccessToken | Error>([
+        [
+          `${account.homeAccountId}|${teamsAuthorityFor(account.tenantId)}`,
+          {
+            token: "tok-home",
+            expiresOn: new Date("2026-04-30"),
+            account,
+          },
+        ],
+      ]),
+    });
+
+    const clock = new FakeClock(new Date("2026-04-21T12:00:00Z"));
+    const client = new FakeTeamsChannelClient({
+      steps: [
+        {
+          kind: "getChannelMessagesDeltaOk",
+          response: page([], { deltaLink: "d-legacy" }),
+        },
+      ],
+    });
+
+    await syncTeamsChannels({
+      account,
+      auth,
+      client,
+      store,
+      subs,
+      clock,
+    });
+
+    const silent = auth.calls.filter((c) => c.method === "getTokenSilent");
+    const call = silent[0] as Extract<
+      typeof silent[number],
+      { method: "getTokenSilent" }
+    >;
+    expect(call.authority).toBe(teamsAuthorityFor(account.tenantId));
   });
 });

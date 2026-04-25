@@ -4,6 +4,7 @@ import { loadConfig, type Config } from "./config.js";
 import {
   isConsentRequiredError,
   MsalAuthClient,
+  teamsAuthorityFor,
   TEAMS_CHANNEL_SCOPES,
   vivaAuthorityFor,
   YAMMER_PUBLIC_CLIENT_ID,
@@ -145,6 +146,7 @@ export type VivaImpl = (
 ) => Promise<VivaCliResult>;
 
 export interface DiscoveredChannel {
+  readonly tenantId: string;
   readonly teamId: string;
   readonly teamName: string;
   readonly channelId: string;
@@ -158,6 +160,7 @@ export type TeamsCommand =
   | {
       readonly action: "subscribe";
       readonly account: string;
+      readonly tenantId?: string;
       readonly teamId: string;
       readonly channelId: string;
     }
@@ -250,7 +253,7 @@ const ADD_ACCOUNT_VALUE_FLAGS = new Set(["--tenant"]);
 
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export { vivaAuthorityFor };
+export { teamsAuthorityFor, vivaAuthorityFor };
 
 const STEER_TOGGLE_ACTIONS: Readonly<
   Record<string, { readonly action: "setEnabled" | "remove"; readonly enabled?: boolean }>
@@ -578,14 +581,24 @@ function reportVivaResult(result: VivaCliResult, print: PrintFn): void {
 function parseTeamChannelKey(
   raw: string,
   flag: string,
-): { teamId: string; channelId: string } {
-  const idx = raw.indexOf(":");
-  if (idx <= 0 || idx === raw.length - 1) {
+): { tenantId?: string; teamId: string; channelId: string } {
+  const parts = raw.split(":");
+  if (
+    (parts.length !== 2 && parts.length !== 3) ||
+    parts.some((p) => p === "")
+  ) {
     throw new CliUsageError(
-      `${flag} expects <teamId>:<channelId>, got "${raw}"`,
+      `${flag} expects <teamId>:<channelId> or <tenantId>:<teamId>:<channelId>, got "${raw}"`,
     );
   }
-  return { teamId: raw.slice(0, idx), channelId: raw.slice(idx + 1) };
+  if (parts.length === 3) {
+    return {
+      tenantId: parts[0]!,
+      teamId: parts[1]!,
+      channelId: parts[2]!,
+    };
+  }
+  return { teamId: parts[0]!, channelId: parts[1]! };
 }
 
 function resolveTeamsCommand(parsed: {
@@ -620,11 +633,17 @@ function resolveTeamsCommand(parsed: {
     if (subscribe.trim() === "") {
       throw new CliUsageError("--teams-subscribe pattern must not be empty");
     }
-    const { teamId, channelId } = parseTeamChannelKey(
+    const { tenantId, teamId, channelId } = parseTeamChannelKey(
       subscribe,
       "--teams-subscribe",
     );
-    return { action: "subscribe", account, teamId, channelId };
+    return {
+      action: "subscribe",
+      account,
+      ...(tenantId !== undefined && { tenantId }),
+      teamId,
+      channelId,
+    };
   }
   /* c8 ignore next 4 -- unsubscribe is the only remaining branch */
   if (unsubscribe === undefined) return null;
@@ -664,11 +683,19 @@ function reportTeamsResult(result: TeamsCliResult, print: PrintFn): void {
         return;
       }
       print(
-        ["team_id", "team_name", "channel_id", "channel_name", "membership"].join("\t"),
+        [
+          "tenant_id",
+          "team_id",
+          "team_name",
+          "channel_id",
+          "channel_name",
+          "membership",
+        ].join("\t"),
       );
       for (const c of result.channels) {
         print(
           [
+            c.tenantId,
             c.teamId,
             c.teamName,
             c.channelId,
@@ -1086,54 +1113,46 @@ async function buildDefaultTeamsChannelClient(): Promise<TeamsChannelClient> {
   });
 }
 
-async function resolveCliAccount(
+async function resolveCliAccounts(
   auth: AuthClient,
   username: string,
-): Promise<Account> {
+): Promise<readonly Account[]> {
   const target = username.toLowerCase();
   const accounts = await auth.listAccounts();
-  const match = accounts.find((a) => a.username.toLowerCase() === target);
-  if (!match) {
+  const matches = accounts.filter(
+    (a) => a.username.toLowerCase() === target,
+  );
+  if (matches.length === 0) {
     throw new CliUsageError(
       `unknown account: ${username} — run --add-account first, or check --account spelling`,
     );
   }
-  return match;
+  // Dedupe accounts that share a tenantId — one fan-out per distinct tenant.
+  const seen = new Set<string>();
+  const unique: Account[] = [];
+  for (const a of matches) {
+    if (seen.has(a.tenantId)) continue;
+    seen.add(a.tenantId);
+    unique.push(a);
+  }
+  return unique;
 }
 
-async function discoverTeamsChannels(
+async function discoverTeamsChannelsForAccount(
   auth: AuthClient,
   client: TeamsChannelClient,
   account: Account,
   print: PrintFn,
 ): Promise<readonly DiscoveredChannel[]> {
-  let token: AccessToken;
-  try {
-    token = await auth.getTokenSilent(account, {
-      scopes: TEAMS_CHANNEL_SCOPES,
-    });
-  } catch (err) {
-    if (isConsentRequiredError(err)) {
-      throw new CliUsageError(
-        `Teams channel scopes are not consented for tenant ${account.tenantId}. ` +
-          `Ask a tenant admin to grant admin consent for: ${TEAMS_CHANNEL_SCOPES.join(", ")}.`,
-      );
-    }
-    if (!(err instanceof AuthError) || err.kind !== "silent-failed") throw err;
-    print(
-      "Teams channel scopes not yet consented — starting device-code login...",
-    );
-    await auth.loginWithDeviceCode(print, { scopes: TEAMS_CHANNEL_SCOPES });
-    token = await auth.getTokenSilent(account, {
-      scopes: TEAMS_CHANNEL_SCOPES,
-    });
-  }
-
+  const token = await auth.getTokenSilent(account, {
+    scopes: TEAMS_CHANNEL_SCOPES,
+    authority: teamsAuthorityFor(account.tenantId),
+  });
   const teams: TeamsJoinedTeam[] = [];
   for await (const t of client.listJoinedTeams(token.token)) {
     teams.push(t);
   }
-  print(`Found ${teams.length} joined team(s)`);
+  print(`Found ${teams.length} joined team(s) in tenant ${account.tenantId}`);
 
   const out: DiscoveredChannel[] = [];
   for (const t of teams) {
@@ -1143,6 +1162,7 @@ async function discoverTeamsChannels(
     }
     for (const c of channels) {
       out.push({
+        tenantId: account.tenantId,
         teamId: t.id,
         teamName: t.displayName,
         channelId: c.id,
@@ -1151,6 +1171,34 @@ async function discoverTeamsChannels(
           membershipType: c.membershipType,
         }),
       });
+    }
+  }
+  return out;
+}
+
+async function discoverTeamsChannelsAcrossTenants(
+  auth: AuthClient,
+  client: TeamsChannelClient,
+  accounts: readonly Account[],
+  print: PrintFn,
+): Promise<readonly DiscoveredChannel[]> {
+  const out: DiscoveredChannel[] = [];
+  for (const account of accounts) {
+    try {
+      const channels = await discoverTeamsChannelsForAccount(
+        auth,
+        client,
+        account,
+        print,
+      );
+      out.push(...channels);
+    } catch (err) {
+      const reason = isConsentRequiredError(err)
+        ? "admin-consent required"
+        : err instanceof Error
+          ? err.message
+          : String(err);
+      print(`skipped tenant ${account.tenantId}: ${reason}`);
     }
   }
   return out;
@@ -1197,13 +1245,13 @@ export async function realTeams(
         /* c8 ignore next -- default console.log only in production */
         const print: PrintFn = deps.print ?? ((m) => console.log(m));
         const auth = deps.auth ?? (await buildDefaultTeamsAuth(config));
-        const account = await resolveCliAccount(auth, command.account);
+        const accounts = await resolveCliAccounts(auth, command.account);
         const client =
           deps.client ?? (await buildDefaultTeamsChannelClient());
-        const channels = await discoverTeamsChannels(
+        const channels = await discoverTeamsChannelsAcrossTenants(
           auth,
           client,
-          account,
+          accounts,
           print,
         );
         return { action: "discover", channels };
@@ -1212,29 +1260,44 @@ export async function realTeams(
         /* c8 ignore next -- default console.log only in production */
         const print: PrintFn = deps.print ?? ((m) => console.log(m));
         const auth = deps.auth ?? (await buildDefaultTeamsAuth(config));
-        const account = await resolveCliAccount(auth, command.account);
+        const accounts = await resolveCliAccounts(auth, command.account);
         const client =
           deps.client ?? (await buildDefaultTeamsChannelClient());
-        const channels = await discoverTeamsChannels(
+        const channels = await discoverTeamsChannelsAcrossTenants(
           auth,
           client,
-          account,
+          accounts,
           print,
         );
         const teamIdLc = command.teamId.toLowerCase();
         const channelIdLc = command.channelId.toLowerCase();
-        const match = channels.find(
+        const candidates = channels.filter(
           (c) =>
             c.teamId.toLowerCase() === teamIdLc &&
             c.channelId.toLowerCase() === channelIdLc,
         );
-        if (!match) {
+        const tenantFilter = command.tenantId?.toLowerCase();
+        const filtered =
+          tenantFilter === undefined
+            ? candidates
+            : candidates.filter(
+                (c) => c.tenantId.toLowerCase() === tenantFilter,
+              );
+        if (filtered.length === 0) {
           throw new CliUsageError(
             `unknown channel: ${command.teamId}:${command.channelId} — run --teams-discover --account ${command.account} to list available channels`,
           );
         }
+        if (filtered.length > 1) {
+          const tenants = filtered.map((c) => c.tenantId).join(", ");
+          throw new CliUsageError(
+            `ambiguous channel: ${command.teamId}:${command.channelId} exists in multiple tenants (${tenants}). Re-run --teams-subscribe <tenantId>:<teamId>:<channelId> to disambiguate.`,
+          );
+        }
+        const match = filtered[0]!;
         const sub = await store!.subscribe({
           account: command.account,
+          tenantId: match.tenantId,
           teamId: match.teamId,
           teamName: match.teamName,
           channelId: match.channelId,

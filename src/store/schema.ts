@@ -1,6 +1,6 @@
 import type { Database } from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 14;
+export const CURRENT_SCHEMA_VERSION = 15;
 
 const MIGRATION_1 = `
 CREATE TABLE IF NOT EXISTS messages (
@@ -247,6 +247,21 @@ CREATE INDEX IF NOT EXISTS idx_tcs_account_enabled
   ON teams_channel_subscriptions(account, enabled);
 `;
 
+// v15 threads the Entra tenant id through Teams channel subscriptions so the
+// sync loop can acquire a per-tenant Teams token when the user has cached MSAL
+// accounts in multiple tenants. NULL = legacy row created before this slice
+// (treated as the running account's home tenant at sync time).
+function migrateV15(db: Database): void {
+  const cols = db
+    .prepare("PRAGMA table_info(teams_channel_subscriptions)")
+    .all() as { name: string }[];
+  if (!cols.some((c) => c.name === "tenant_id")) {
+    db.exec(
+      "ALTER TABLE teams_channel_subscriptions ADD COLUMN tenant_id TEXT",
+    );
+  }
+}
+
 export function applyMigrations(db: Database): void {
   const current = (
     db.prepare("PRAGMA user_version").get() as { user_version: number }
@@ -296,6 +311,9 @@ export function applyMigrations(db: Database): void {
     }
     if (current < 14) {
       db.exec(MIGRATION_14);
+    }
+    if (current < 15) {
+      migrateV15(db);
     }
     db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
   });

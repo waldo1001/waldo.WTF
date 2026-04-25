@@ -8,12 +8,19 @@ import {
 import { FakeAuthClient } from "../testing/fake-auth-client.js";
 import { FakeGraphClient } from "../testing/fake-graph-client.js";
 import { FakeTeamsClient } from "../testing/fake-teams-client.js";
+import { FakeTeamsChannelClient } from "../testing/fake-teams-channel-client.js";
 import { FakeVivaClient } from "../testing/fake-viva-client.js";
 import { InMemoryMessageStore } from "../testing/in-memory-message-store.js";
+import { InMemoryTeamsChannelSubscriptionStore } from "../testing/in-memory-teams-channel-subscription-store.js";
 import { InMemoryVivaSubscriptionStore } from "../testing/in-memory-viva-subscription-store.js";
 import { FakeClock } from "../testing/fake-clock.js";
 import { GraphRateLimitedError, TokenExpiredError } from "../sources/viva.js";
-import { vivaAuthorityFor, YAMMER_SCOPE } from "../auth/msal-auth-client.js";
+import {
+  TEAMS_CHANNEL_SCOPES,
+  teamsAuthorityFor,
+  vivaAuthorityFor,
+  YAMMER_SCOPE,
+} from "../auth/msal-auth-client.js";
 import type { Account, AccessToken } from "../auth/types.js";
 import type { GraphDeltaResponse } from "../sources/graph.js";
 
@@ -1066,5 +1073,207 @@ describe("SyncScheduler", () => {
     expect(yammerCalls).toHaveLength(1);
     const vivaRow = store.syncLog.find((e) => e.source === "viva-engage");
     expect(vivaRow?.status).toBe("ok");
+  });
+
+  it("with teamsChannel dep but no enabled subs: skips teams-channel entirely (no calls, no row)", async () => {
+    const a1 = acc("alice");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
+    });
+    const teamsChannel = new FakeTeamsChannelClient({ steps: [] });
+    const teamsChannelSubs = new InMemoryTeamsChannelSubscriptionStore();
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      teamsChannel,
+      teamsChannelSubs,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+
+    expect(teamsChannel.calls).toHaveLength(0);
+    expect(store.syncLog).toHaveLength(2);
+    expect(store.syncLog.every((e) => e.source === "outlook")).toBe(true);
+  });
+
+  it("with teamsChannel dep + enabled sub: teams-channel ok row is appended", async () => {
+    const a1 = acc("alice");
+    const homeAuthority = teamsAuthorityFor(a1.tenantId);
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
+    });
+    const teamsChannel = new FakeTeamsChannelClient({
+      steps: [
+        {
+          kind: "getChannelMessagesDeltaOk",
+          response: { value: [], "@odata.deltaLink": "tc-delta" },
+        },
+      ],
+    });
+    const teamsChannelSubs = new InMemoryTeamsChannelSubscriptionStore();
+    await teamsChannelSubs.subscribe({
+      account: a1.username,
+      tenantId: a1.tenantId,
+      teamId: "team-1",
+      channelId: "channel-1",
+    });
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([
+        [`${a1.homeAccountId}|${homeAuthority}`, tok(a1)],
+      ]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      teamsChannel,
+      teamsChannelSubs,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+
+    expect(store.syncLog).toHaveLength(3);
+    const tcRow = store.syncLog.find((e) => e.source === "teams-channel");
+    expect(tcRow?.status).toBe("ok");
+    expect(
+      teamsChannel.calls.some((c) => c.method === "getChannelMessagesDelta"),
+    ).toBe(true);
+    const scopedCalls = auth.calls.filter(
+      (c) =>
+        c.method === "getTokenSilent" &&
+        c.scopes !== undefined &&
+        TEAMS_CHANNEL_SCOPES.every((s) => c.scopes!.includes(s)),
+    );
+    expect(scopedCalls).toHaveLength(1);
+  });
+
+  it("teams-channel hardstop (GraphRateLimited) is recorded as error row, doesn't crash tick", async () => {
+    const a1 = acc("alice");
+    const homeAuthority = teamsAuthorityFor(a1.tenantId);
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
+    });
+    const teamsChannel = new FakeTeamsChannelClient({
+      steps: [{ kind: "error", error: new GraphRateLimitedError(30) }],
+    });
+    const teamsChannelSubs = new InMemoryTeamsChannelSubscriptionStore();
+    await teamsChannelSubs.subscribe({
+      account: a1.username,
+      tenantId: a1.tenantId,
+      teamId: "team-1",
+      channelId: "channel-1",
+    });
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([
+        [`${a1.homeAccountId}|${homeAuthority}`, tok(a1)],
+      ]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      teamsChannel,
+      teamsChannelSubs,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+
+    const tcRow = store.syncLog.find((e) => e.source === "teams-channel");
+    expect(tcRow?.status).toBe("error");
+    expect(tcRow?.errorMessage).toBeDefined();
+  });
+
+  it("teams-channel consent rejection bubbling out of syncTeamsChannels is logged with admin-grant hint", async () => {
+    // Defensive: if a hardstop carrying a consent-required signal bubbles out
+    // of syncTeamsChannels (e.g. an AADSTS65001-tagged TokenExpiredError),
+    // the scheduler still surfaces an actionable admin-grant hint instead
+    // of a raw stack trace.
+    const a1 = acc("alice");
+    const homeAuthority = teamsAuthorityFor(a1.tenantId);
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
+    });
+    const teamsChannel = new FakeTeamsChannelClient({
+      // The fake won't be called — token acquisition fails first as a hardstop.
+      steps: [],
+    });
+    const teamsChannelSubs = new InMemoryTeamsChannelSubscriptionStore();
+    await teamsChannelSubs.subscribe({
+      account: a1.username,
+      tenantId: a1.tenantId,
+      teamId: "team-1",
+      channelId: "channel-1",
+    });
+    // TokenExpiredError is a hardstop → syncTeamsChannels rethrows out of the
+    // per-subscription loop → scheduler catch fires → isConsentRequiredError
+    // detects AADSTS65001 in the message and rewrites it.
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([
+        [
+          `${a1.homeAccountId}|${homeAuthority}`,
+          new TokenExpiredError(
+            "AADSTS65001: admin consent required for ChannelMessage.Read.All",
+          ),
+        ],
+      ]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      teamsChannel,
+      teamsChannelSubs,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+
+    const tcRow = store.syncLog.find((e) => e.source === "teams-channel");
+    expect(tcRow?.status).toBe("error");
+    expect(tcRow?.errorMessage).toContain("Teams channel scopes not consented");
+    expect(tcRow?.errorMessage).toContain(a1.tenantId);
   });
 });

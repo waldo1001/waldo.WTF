@@ -9,6 +9,7 @@ import {
   CliUsageError,
   realTeams,
   realViva,
+  teamsAuthorityFor,
   vivaAuthorityFor,
 } from "./cli.js";
 import type {
@@ -33,7 +34,7 @@ import { FakeAuthClient } from "./testing/fake-auth-client.js";
 import { FakeVivaClient } from "./testing/fake-viva-client.js";
 import { SqliteVivaSubscriptionStore } from "./store/viva-subscription-store.js";
 import { applyMigrations } from "./store/schema.js";
-import { AuthError, type Account } from "./auth/types.js";
+import { AuthError, type AccessToken, type Account } from "./auth/types.js";
 import { SqliteSteeringStore } from "./store/steering-store.js";
 import type { AddSteeringRuleInput, SteeringRule } from "./store/types.js";
 import { FakeClock } from "./testing/fake-clock.js";
@@ -1111,6 +1112,7 @@ describe("runCli", () => {
       action: "discover",
       channels: [
         {
+          tenantId: "tenant-z",
           teamId: "team-9",
           teamName: "Sales",
           channelId: "chan-9",
@@ -1129,6 +1131,31 @@ describe("runCli", () => {
     expect(out).toContain("team-9");
     expect(out).toContain("chan-9");
     expect(out).toContain("Pipeline");
+  });
+
+  it("reportTeamsResult discover output prints tenant_id as first column", async () => {
+    const teamsImpl: TeamsImpl = async () => ({
+      action: "discover",
+      channels: [
+        {
+          tenantId: "tenant-zzz",
+          teamId: "team-1",
+          teamName: "Engineering",
+          channelId: "chan-1",
+          channelName: "General",
+          membershipType: "standard",
+        },
+      ],
+    });
+    const prints: string[] = [];
+    await runCli(["--teams-discover", "--account", "a@example.test"], {
+      env: ENV,
+      loadDotenv: false,
+      print: (m) => prints.push(m),
+      teamsImpl,
+    });
+    expect(prints[0]?.split("\t")[0]).toBe("tenant_id");
+    expect(prints[1]?.split("\t")[0]).toBe("tenant-zzz");
   });
 
   it("--teams-discover prints empty-state when no channels", async () => {
@@ -2627,6 +2654,7 @@ describe("realTeams (default Teams Channels impl wired in cli.ts)", () => {
       >).channels;
       expect(channels).toHaveLength(2);
       expect(channels[0]).toEqual({
+        tenantId: "tenant-a",
         teamId: "team-1",
         teamName: "Engineering",
         channelId: "chan-1",
@@ -2646,8 +2674,18 @@ describe("realTeams (default Teams Channels impl wired in cli.ts)", () => {
     });
   });
 
-  it("realTeams --teams-discover surfaces consent-required errors as CliUsageError with admin-consent guidance", async () => {
+  it("realTeams --teams-discover isolates per-tenant consent-required errors and surfaces them as skip lines", async () => {
     await withTmpDb(async (cfg) => {
+      const ACCT_GOOD: Account = {
+        username: "alice@example.test",
+        homeAccountId: "home-good",
+        tenantId: "tenant-good",
+      };
+      const ACCT_BAD: Account = {
+        username: "alice@example.test",
+        homeAccountId: "home-bad",
+        tenantId: "tenant-bad",
+      };
       const consentError = new AuthError(
         "silent-failed",
         "MSAL silent token acquisition failed",
@@ -2658,20 +2696,272 @@ describe("realTeams (default Teams Channels impl wired in cli.ts)", () => {
         },
       );
       const auth = new FakeAuthClient({
-        accounts: [ACCT_T],
-        tokens: new Map([[ACCT_T.homeAccountId, consentError]]),
+        accounts: [ACCT_GOOD, ACCT_BAD],
+        tokens: new Map<string, AccessToken | Error>([
+          [
+            `${ACCT_GOOD.homeAccountId}|${teamsAuthorityFor(ACCT_GOOD.tenantId)}`,
+            {
+              token: "tok-good",
+              expiresOn: new Date("2026-04-30"),
+              account: ACCT_GOOD,
+            },
+          ],
+          [
+            `${ACCT_BAD.homeAccountId}|${teamsAuthorityFor(ACCT_BAD.tenantId)}`,
+            consentError,
+          ],
+        ]),
+      });
+      const { FakeTeamsChannelClient } = await import(
+        "./testing/fake-teams-channel-client.js"
+      );
+      const client = new FakeTeamsChannelClient({
+        steps: [
+          {
+            kind: "listJoinedTeamsOk",
+            response: [{ id: "team-g", displayName: "Good Eng" }],
+          },
+          {
+            kind: "listChannelsOk",
+            teamId: "team-g",
+            response: [{ id: "chan-g", displayName: "General" }],
+          },
+        ],
+      });
+      const prints: string[] = [];
+      const result = await realTeams(
+        cfg,
+        { action: "discover", account: "alice@example.test" },
+        { auth, client, print: (m) => prints.push(m) },
+      );
+      const channels = (result as Extract<
+        TeamsCliResult,
+        { action: "discover" }
+      >).channels;
+      expect(channels.map((c) => c.channelId)).toEqual(["chan-g"]);
+      expect(channels[0]?.tenantId).toBe("tenant-good");
+      expect(prints).toContain(
+        `skipped tenant tenant-bad: admin-consent required`,
+      );
+    });
+  });
+
+  it("realTeams --teams-subscribe with tenantId:teamId:channelId resolves the right tenant and persists tenantId", async () => {
+    await withTmpDb(async (cfg) => {
+      const ACCT_X: Account = {
+        username: "alice@example.test",
+        homeAccountId: "home-x",
+        tenantId: "tenant-x",
+      };
+      const ACCT_Y: Account = {
+        username: "alice@example.test",
+        homeAccountId: "home-y",
+        tenantId: "tenant-y",
+      };
+      const auth = new FakeAuthClient({
+        accounts: [ACCT_X, ACCT_Y],
+        tokens: new Map<string, AccessToken | Error>([
+          [
+            `${ACCT_X.homeAccountId}|${teamsAuthorityFor(ACCT_X.tenantId)}`,
+            {
+              token: "tok-x",
+              expiresOn: new Date("2026-04-30"),
+              account: ACCT_X,
+            },
+          ],
+          [
+            `${ACCT_Y.homeAccountId}|${teamsAuthorityFor(ACCT_Y.tenantId)}`,
+            {
+              token: "tok-y",
+              expiresOn: new Date("2026-04-30"),
+              account: ACCT_Y,
+            },
+          ],
+        ]),
+      });
+      const { FakeTeamsChannelClient } = await import(
+        "./testing/fake-teams-channel-client.js"
+      );
+      const client = new FakeTeamsChannelClient({
+        steps: [
+          {
+            kind: "listJoinedTeamsOk",
+            response: [{ id: "team-shared", displayName: "Shared X" }],
+          },
+          {
+            kind: "listChannelsOk",
+            teamId: "team-shared",
+            response: [
+              { id: "chan-shared", displayName: "General X" },
+            ],
+          },
+          {
+            kind: "listJoinedTeamsOk",
+            response: [{ id: "team-shared", displayName: "Shared Y" }],
+          },
+          {
+            kind: "listChannelsOk",
+            teamId: "team-shared",
+            response: [
+              { id: "chan-shared", displayName: "General Y" },
+            ],
+          },
+        ],
+      });
+      const result = await realTeams(
+        cfg,
+        {
+          action: "subscribe",
+          account: "alice@example.test",
+          tenantId: "tenant-y",
+          teamId: "team-shared",
+          channelId: "chan-shared",
+        },
+        { auth, client, print: () => {} },
+      );
+      const sub = (result as Extract<TeamsCliResult, { action: "subscribe" }>)
+        .sub;
+      expect(sub.tenantId).toBe("tenant-y");
+      expect(sub.teamId).toBe("team-shared");
+      expect(sub.channelId).toBe("chan-shared");
+    });
+  });
+
+  it("realTeams --teams-subscribe ambiguous teamId:channelId across tenants throws CliUsageError naming candidates", async () => {
+    await withTmpDb(async (cfg) => {
+      const ACCT_X: Account = {
+        username: "alice@example.test",
+        homeAccountId: "home-x",
+        tenantId: "tenant-x",
+      };
+      const ACCT_Y: Account = {
+        username: "alice@example.test",
+        homeAccountId: "home-y",
+        tenantId: "tenant-y",
+      };
+      const auth = new FakeAuthClient({
+        accounts: [ACCT_X, ACCT_Y],
+        tokens: new Map<string, AccessToken | Error>([
+          [
+            `${ACCT_X.homeAccountId}|${teamsAuthorityFor(ACCT_X.tenantId)}`,
+            {
+              token: "tok-x",
+              expiresOn: new Date("2026-04-30"),
+              account: ACCT_X,
+            },
+          ],
+          [
+            `${ACCT_Y.homeAccountId}|${teamsAuthorityFor(ACCT_Y.tenantId)}`,
+            {
+              token: "tok-y",
+              expiresOn: new Date("2026-04-30"),
+              account: ACCT_Y,
+            },
+          ],
+        ]),
+      });
+      const { FakeTeamsChannelClient } = await import(
+        "./testing/fake-teams-channel-client.js"
+      );
+      const client = new FakeTeamsChannelClient({
+        steps: [
+          {
+            kind: "listJoinedTeamsOk",
+            response: [{ id: "team-shared", displayName: "Shared X" }],
+          },
+          {
+            kind: "listChannelsOk",
+            teamId: "team-shared",
+            response: [{ id: "chan-shared", displayName: "General X" }],
+          },
+          {
+            kind: "listJoinedTeamsOk",
+            response: [{ id: "team-shared", displayName: "Shared Y" }],
+          },
+          {
+            kind: "listChannelsOk",
+            teamId: "team-shared",
+            response: [{ id: "chan-shared", displayName: "General Y" }],
+          },
+        ],
+      });
+      let caught: unknown;
+      try {
+        await realTeams(
+          cfg,
+          {
+            action: "subscribe",
+            account: "alice@example.test",
+            teamId: "team-shared",
+            channelId: "chan-shared",
+          },
+          { auth, client, print: () => {} },
+        );
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(CliUsageError);
+      const msg = (caught as Error).message;
+      expect(msg).toContain("tenant-x");
+      expect(msg).toContain("tenant-y");
+    });
+  });
+
+  it("realTeams --teams-discover with every tenant failing returns no channels and prints one skip line per tenant", async () => {
+    await withTmpDb(async (cfg) => {
+      const ACCT_X: Account = {
+        username: "alice@example.test",
+        homeAccountId: "home-x",
+        tenantId: "tenant-x",
+      };
+      const ACCT_Y: Account = {
+        username: "alice@example.test",
+        homeAccountId: "home-y",
+        tenantId: "tenant-y",
+      };
+      const consentError = new AuthError(
+        "silent-failed",
+        "MSAL silent token acquisition failed",
+        {
+          cause: new Error("AADSTS65001: consent required"),
+        },
+      );
+      const auth = new FakeAuthClient({
+        accounts: [ACCT_X, ACCT_Y],
+        tokens: new Map<string, AccessToken | Error>([
+          [
+            `${ACCT_X.homeAccountId}|${teamsAuthorityFor(ACCT_X.tenantId)}`,
+            consentError,
+          ],
+          [
+            `${ACCT_Y.homeAccountId}|${teamsAuthorityFor(ACCT_Y.tenantId)}`,
+            consentError,
+          ],
+        ]),
       });
       const { FakeTeamsChannelClient } = await import(
         "./testing/fake-teams-channel-client.js"
       );
       const client = new FakeTeamsChannelClient({ steps: [] });
-      await expect(
-        realTeams(
-          cfg,
-          { action: "discover", account: ACCT_T.username },
-          { auth, client, print: () => {} },
-        ),
-      ).rejects.toBeInstanceOf(CliUsageError);
+      const prints: string[] = [];
+      const result = await realTeams(
+        cfg,
+        { action: "discover", account: "alice@example.test" },
+        { auth, client, print: (m) => prints.push(m) },
+      );
+      const channels = (result as Extract<
+        TeamsCliResult,
+        { action: "discover" }
+      >).channels;
+      expect(channels).toEqual([]);
+      const skipLines = prints.filter((p) => p.startsWith("skipped tenant "));
+      expect(skipLines).toHaveLength(2);
+      expect(skipLines).toContain(
+        "skipped tenant tenant-x: admin-consent required",
+      );
+      expect(skipLines).toContain(
+        "skipped tenant tenant-y: admin-consent required",
+      );
     });
   });
 
@@ -2835,6 +3125,93 @@ describe("realTeams (default Teams Channels impl wired in cli.ts)", () => {
           { auth, client, print: () => {} },
         ),
       ).rejects.toBeInstanceOf(CliUsageError);
+    });
+  });
+
+  it("realTeams --teams-discover fans out across cached tenants and tags channels with tenantId", async () => {
+    await withTmpDb(async (cfg) => {
+      const ACCT_DYNEX: Account = {
+        username: "alice@example.test",
+        homeAccountId: "home-dynex",
+        tenantId: "tenant-dynex",
+      };
+      const ACCT_MS: Account = {
+        username: "alice@example.test",
+        homeAccountId: "home-ms",
+        tenantId: "tenant-ms",
+      };
+      const auth = new FakeAuthClient({
+        accounts: [ACCT_DYNEX, ACCT_MS],
+        tokens: new Map<string, AccessToken | Error>([
+          [
+            `${ACCT_DYNEX.homeAccountId}|${teamsAuthorityFor(ACCT_DYNEX.tenantId)}`,
+            {
+              token: "tok-dynex",
+              expiresOn: new Date("2026-04-30"),
+              account: ACCT_DYNEX,
+            },
+          ],
+          [
+            `${ACCT_MS.homeAccountId}|${teamsAuthorityFor(ACCT_MS.tenantId)}`,
+            {
+              token: "tok-ms",
+              expiresOn: new Date("2026-04-30"),
+              account: ACCT_MS,
+            },
+          ],
+        ]),
+      });
+      const { FakeTeamsChannelClient } = await import(
+        "./testing/fake-teams-channel-client.js"
+      );
+      const client = new FakeTeamsChannelClient({
+        steps: [
+          {
+            kind: "listJoinedTeamsOk",
+            response: [{ id: "team-d", displayName: "Dynex Eng" }],
+          },
+          {
+            kind: "listChannelsOk",
+            teamId: "team-d",
+            response: [{ id: "chan-d", displayName: "General" }],
+          },
+          {
+            kind: "listJoinedTeamsOk",
+            response: [{ id: "team-m", displayName: "MS Eng" }],
+          },
+          {
+            kind: "listChannelsOk",
+            teamId: "team-m",
+            response: [{ id: "chan-m", displayName: "All Hands" }],
+          },
+        ],
+      });
+      const result = await realTeams(
+        cfg,
+        { action: "discover", account: "alice@example.test" },
+        { auth, client, print: () => {} },
+      );
+      const channels = (result as Extract<
+        TeamsCliResult,
+        { action: "discover" }
+      >).channels;
+      const byChan = new Map(channels.map((c) => [c.channelId, c] as const));
+      expect(byChan.get("chan-d")?.tenantId).toBe("tenant-dynex");
+      expect(byChan.get("chan-m")?.tenantId).toBe("tenant-ms");
+      const silent = auth.calls.filter((c) => c.method === "getTokenSilent");
+      const authorities = silent
+        .map(
+          (c) =>
+            (c as Extract<typeof silent[number], { method: "getTokenSilent" }>)
+              .authority,
+        )
+        .filter((a): a is string => a !== undefined);
+      expect(new Set(authorities)).toEqual(
+        new Set([
+          teamsAuthorityFor("tenant-dynex"),
+          teamsAuthorityFor("tenant-ms"),
+        ]),
+      );
     });
   });
 });

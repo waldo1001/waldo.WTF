@@ -1,4 +1,9 @@
-import type { Account } from "../auth/types.js";
+import type { AuthClient } from "../auth/auth-client.js";
+import { type AccessToken, type Account } from "../auth/types.js";
+import {
+  TEAMS_CHANNEL_SCOPES,
+  teamsAuthorityFor,
+} from "../auth/msal-auth-client.js";
 import type { Clock } from "../clock.js";
 import type { Logger } from "../logger.js";
 import type { MessageStore } from "../store/message-store.js";
@@ -18,7 +23,7 @@ import {
 
 export interface SyncTeamsChannelsDeps {
   readonly account: Account;
-  readonly token: string;
+  readonly auth: AuthClient;
   readonly client: TeamsChannelClient;
   readonly store: MessageStore;
   readonly subs: TeamsChannelSubscriptionStore;
@@ -284,20 +289,52 @@ async function syncOneSubscription(deps: {
 export async function syncTeamsChannels(
   deps: SyncTeamsChannelsDeps,
 ): Promise<SyncTeamsChannelsResult> {
-  const { account, token, client, store, subs, clock, logger, backfillDays } =
+  const { account, auth, client, store, subs, clock, logger, backfillDays } =
     deps;
   const enabled = await subs.listEnabledForAccount(account.username);
   if (enabled.length === 0) {
     return { added: 0, removed: 0, perSubscription: [] };
   }
 
+  const tokenCache = new Map<string, AccessToken | Error>();
+  const getTokenForTenant = async (
+    tenantId: string,
+  ): Promise<AccessToken | Error> => {
+    const cached = tokenCache.get(tenantId);
+    if (cached !== undefined) return cached;
+    try {
+      const tok = await auth.getTokenSilent(account, {
+        scopes: TEAMS_CHANNEL_SCOPES,
+        authority: teamsAuthorityFor(tenantId),
+      });
+      tokenCache.set(tenantId, tok);
+      return tok;
+    } catch (err) {
+      if (isHardStop(err)) throw err;
+      const e = err instanceof Error ? err : new Error(String(err));
+      tokenCache.set(tenantId, e);
+      return e;
+    }
+  };
+
   let added = 0;
   const perSubscription: SyncTeamsChannelsSubResult[] = [];
   for (const sub of enabled) {
+    const tenantId = sub.tenantId ?? account.tenantId;
+    const tokResult = await getTokenForTenant(tenantId);
+    if (tokResult instanceof Error) {
+      perSubscription.push({
+        teamId: sub.teamId,
+        channelId: sub.channelId,
+        added: 0,
+        error: tokResult.message,
+      });
+      continue;
+    }
     try {
       const callDeps: Parameters<typeof syncOneSubscription>[0] = {
         client,
-        token,
+        token: tokResult.token,
         sub,
         store,
         account,

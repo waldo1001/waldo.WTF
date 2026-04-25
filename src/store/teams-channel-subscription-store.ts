@@ -54,6 +54,7 @@ export function validateSubscribeInput(
 
 interface TeamsChannelSubscriptionRow {
   account: string;
+  tenant_id: string | null;
   team_id: string;
   team_name: string | null;
   channel_id: string;
@@ -66,6 +67,7 @@ interface TeamsChannelSubscriptionRow {
 function rowToSub(r: TeamsChannelSubscriptionRow): TeamsChannelSubscription {
   return {
     account: r.account,
+    ...(r.tenant_id !== null && { tenantId: r.tenant_id }),
     teamId: r.team_id,
     ...(r.team_name !== null && { teamName: r.team_name }),
     channelId: r.channel_id,
@@ -82,7 +84,15 @@ export class SqliteTeamsChannelSubscriptionStore
   implements TeamsChannelSubscriptionStore
 {
   private readonly insertStmt: Statement<
-    [string, string, string | null, string, string | null, number]
+    [
+      string,
+      string | null,
+      string,
+      string | null,
+      string,
+      string | null,
+      number,
+    ]
   >;
   private readonly getStmt: Statement<[string, string, string]>;
   private readonly listAccountStmt: Statement<[string]>;
@@ -99,31 +109,31 @@ export class SqliteTeamsChannelSubscriptionStore
     applyMigrations(db);
     this.insertStmt = db.prepare(`
       INSERT INTO teams_channel_subscriptions
-        (account, team_id, team_name, channel_id, channel_name, enabled, subscribed_at)
-      VALUES (?, ?, ?, ?, ?, 1, ?)
+        (account, tenant_id, team_id, team_name, channel_id, channel_name, enabled, subscribed_at)
+      VALUES (?, ?, ?, ?, ?, ?, 1, ?)
     `);
     this.getStmt = db.prepare(`
-      SELECT account, team_id, team_name, channel_id, channel_name,
+      SELECT account, tenant_id, team_id, team_name, channel_id, channel_name,
              enabled, subscribed_at, last_cursor_at
       FROM teams_channel_subscriptions
       WHERE account = ? AND team_id = ? AND channel_id = ?
     `);
     this.listAccountStmt = db.prepare(`
-      SELECT account, team_id, team_name, channel_id, channel_name,
+      SELECT account, tenant_id, team_id, team_name, channel_id, channel_name,
              enabled, subscribed_at, last_cursor_at
       FROM teams_channel_subscriptions
       WHERE account = ?
       ORDER BY subscribed_at ASC, team_id ASC, channel_id ASC
     `);
     this.listEnabledStmt = db.prepare(`
-      SELECT account, team_id, team_name, channel_id, channel_name,
+      SELECT account, tenant_id, team_id, team_name, channel_id, channel_name,
              enabled, subscribed_at, last_cursor_at
       FROM teams_channel_subscriptions
       WHERE account = ? AND enabled = 1
       ORDER BY subscribed_at ASC, team_id ASC, channel_id ASC
     `);
     this.listAllStmt = db.prepare(`
-      SELECT account, team_id, team_name, channel_id, channel_name,
+      SELECT account, tenant_id, team_id, team_name, channel_id, channel_name,
              enabled, subscribed_at, last_cursor_at
       FROM teams_channel_subscriptions
       ORDER BY account ASC, team_id ASC, channel_id ASC
@@ -147,6 +157,7 @@ export class SqliteTeamsChannelSubscriptionStore
     try {
       this.insertStmt.run(
         input.account,
+        input.tenantId ?? null,
         input.teamId,
         input.teamName ?? null,
         input.channelId,

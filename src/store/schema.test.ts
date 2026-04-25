@@ -23,7 +23,7 @@ describe("schema / applyMigrations", () => {
     expect(userVersion(db)).toBe(0);
     applyMigrations(db);
     expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
-    expect(CURRENT_SCHEMA_VERSION).toBe(14);
+    expect(CURRENT_SCHEMA_VERSION).toBe(15);
   });
 
   it("creates all four tables and expected indices", () => {
@@ -1033,6 +1033,80 @@ describe("schema / viva_subscriptions (migration 12)", () => {
   });
 
   it("is idempotent at v12 (current schema)", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    applyMigrations(db);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+});
+
+describe("schema / teams_channel_subscriptions tenant_id (migration 15)", () => {
+  function hasColumn(
+    db: Database.Database,
+    table: string,
+    column: string,
+  ): boolean {
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all() as {
+      name: string;
+    }[];
+    return rows.some((r) => r.name === column);
+  }
+
+  it("migration 15 adds tenant_id column to teams_channel_subscriptions defaulting to NULL for existing rows", () => {
+    // Stand up a v14-shaped db: run applyMigrations to create the v14
+    // tables (which DON'T have tenant_id), seed a legacy row, then
+    // rewind user_version to 14 so the next applyMigrations call has to
+    // run v15 in isolation. Legacy row's other columns must survive and
+    // tenant_id must come back NULL.
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    db.prepare(
+      `INSERT INTO teams_channel_subscriptions
+         (account, team_id, team_name, channel_id, channel_name, enabled, subscribed_at, last_cursor_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "eric@example.invalid",
+      "team-legacy",
+      "Legacy Team",
+      "chan-legacy",
+      "Legacy Channel",
+      1,
+      1_700_000_000_000,
+      null,
+    );
+    db.exec("PRAGMA user_version = 14");
+
+    applyMigrations(db);
+
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+    expect(CURRENT_SCHEMA_VERSION).toBe(15);
+    expect(hasColumn(db, "teams_channel_subscriptions", "tenant_id")).toBe(
+      true,
+    );
+    const row = db
+      .prepare(
+        `SELECT account, team_id, team_name, channel_id, channel_name,
+                enabled, subscribed_at, tenant_id
+         FROM teams_channel_subscriptions
+         WHERE account = ? AND team_id = ? AND channel_id = ?`,
+      )
+      .get("eric@example.invalid", "team-legacy", "chan-legacy") as {
+      account: string;
+      team_id: string;
+      team_name: string;
+      channel_id: string;
+      channel_name: string;
+      enabled: number;
+      subscribed_at: number;
+      tenant_id: string | null;
+    };
+    expect(row.tenant_id).toBeNull();
+    expect(row.team_name).toBe("Legacy Team");
+    expect(row.channel_name).toBe("Legacy Channel");
+    expect(row.enabled).toBe(1);
+  });
+
+  it("is idempotent at v15", () => {
     const db = new Database(":memory:");
     applyMigrations(db);
     applyMigrations(db);

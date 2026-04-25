@@ -20,6 +20,10 @@ export function vivaAuthorityFor(tenantId: string): string {
   return `https://login.microsoftonline.com/${tenantId}/`;
 }
 
+export function teamsAuthorityFor(tenantId: string): string {
+  return `https://login.microsoftonline.com/${tenantId}/`;
+}
+
 // MSAL surfaces unconsented-tenant rejections as `interaction_required` /
 // `consent_required` / `AADSTS65001` (sometimes wrapped by the cause chain).
 // We walk the cause chain since the AuthClient seam wraps MSAL errors in an

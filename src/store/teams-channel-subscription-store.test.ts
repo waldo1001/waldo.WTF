@@ -57,6 +57,7 @@ describe("teams_channel_subscriptions schema migration v14", () => {
           "subscribed_at",
           "team_id",
           "team_name",
+          "tenant_id",
         ].sort(),
       );
     } finally {
