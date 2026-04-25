@@ -1288,6 +1288,91 @@ describe("runCli", () => {
     ).rejects.toBeInstanceOf(CliUsageError);
   });
 
+  it("--teams-subscribe accepts real channel id with embedded colon (3-part form)", async () => {
+    const calls: TeamsCommand[] = [];
+    const sub: TeamsChannelSubscription = {
+      account: "a@example.test",
+      tenantId: "ff451c7f-142b-409f-9382-67e0f65e6286",
+      teamId: "a670b5f2-2f34-4253-a068-89d150b7f67c",
+      channelId: "19:3994378dd93042b48786617fe6a3c959@thread.tacv2",
+      enabled: true,
+      subscribedAt: new Date("2026-04-25T20:00:00Z"),
+    };
+    const teamsImpl: TeamsImpl = async (_cfg, cmd) => {
+      calls.push(cmd);
+      return { action: "subscribe", sub };
+    };
+    await runCli(
+      [
+        "--teams-subscribe",
+        "ff451c7f-142b-409f-9382-67e0f65e6286:a670b5f2-2f34-4253-a068-89d150b7f67c:19:3994378dd93042b48786617fe6a3c959@thread.tacv2",
+        "--account",
+        "a@example.test",
+      ],
+      { env: ENV, loadDotenv: false, print: () => {}, teamsImpl },
+    );
+    expect(calls[0]).toEqual({
+      action: "subscribe",
+      account: "a@example.test",
+      tenantId: "ff451c7f-142b-409f-9382-67e0f65e6286",
+      teamId: "a670b5f2-2f34-4253-a068-89d150b7f67c",
+      channelId: "19:3994378dd93042b48786617fe6a3c959@thread.tacv2",
+    });
+  });
+
+  it("--teams-subscribe accepts real channel id with embedded colon (2-part form)", async () => {
+    const calls: TeamsCommand[] = [];
+    const sub: TeamsChannelSubscription = {
+      account: "a@example.test",
+      teamId: "a670b5f2-2f34-4253-a068-89d150b7f67c",
+      channelId: "19:3994378dd93042b48786617fe6a3c959@thread.tacv2",
+      enabled: true,
+      subscribedAt: new Date("2026-04-25T20:00:00Z"),
+    };
+    const teamsImpl: TeamsImpl = async (_cfg, cmd) => {
+      calls.push(cmd);
+      return { action: "subscribe", sub };
+    };
+    await runCli(
+      [
+        "--teams-subscribe",
+        "a670b5f2-2f34-4253-a068-89d150b7f67c:19:3994378dd93042b48786617fe6a3c959@thread.tacv2",
+        "--account",
+        "a@example.test",
+      ],
+      { env: ENV, loadDotenv: false, print: () => {}, teamsImpl },
+    );
+    expect(calls[0]).toEqual({
+      action: "subscribe",
+      account: "a@example.test",
+      teamId: "a670b5f2-2f34-4253-a068-89d150b7f67c",
+      channelId: "19:3994378dd93042b48786617fe6a3c959@thread.tacv2",
+    });
+  });
+
+  it("--teams-unsubscribe accepts real channel id with embedded colon", async () => {
+    const calls: TeamsCommand[] = [];
+    const teamsImpl: TeamsImpl = async (_cfg, cmd) => {
+      calls.push(cmd);
+      return { action: "unsubscribe", removed: true };
+    };
+    await runCli(
+      [
+        "--teams-unsubscribe",
+        "a670b5f2-2f34-4253-a068-89d150b7f67c:19:3994378dd93042b48786617fe6a3c959@thread.tacv2",
+        "--account",
+        "a@example.test",
+      ],
+      { env: ENV, loadDotenv: false, print: () => {}, teamsImpl },
+    );
+    expect(calls[0]).toEqual({
+      action: "unsubscribe",
+      account: "a@example.test",
+      teamId: "a670b5f2-2f34-4253-a068-89d150b7f67c",
+      channelId: "19:3994378dd93042b48786617fe6a3c959@thread.tacv2",
+    });
+  });
+
   it("rejects --teams-subscribe value without ':' separator", async () => {
     await expect(
       runCli(

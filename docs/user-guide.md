@@ -351,15 +351,17 @@ npm run dev -- --account your@email.com --teams-list
 npm run dev -- --account your@email.com --teams-discover
 
 # Subscribe to one channel. Two-segment form works when the (teamId,
-# channelId) pair is unambiguous across cached tenants:
+# channelId) pair is unambiguous across cached tenants. Real Graph
+# channel IDs always start with "19:" and contain colons and "@" —
+# paste them as-is, no escaping needed:
 npm run dev -- --account your@email.com \
-  --teams-subscribe <teamId>:<channelId>
+  --teams-subscribe <teamId>:19:<channelHash>@thread.tacv2
 
 # Three-segment form (recommended for users with multiple cached
 # tenants under the same UPN) makes the tenant explicit. The
 # tenant_id comes from the first column of --teams-discover output:
 npm run dev -- --account your@email.com \
-  --teams-subscribe <tenantId>:<teamId>:<channelId>
+  --teams-subscribe <tenantId>:<teamId>:19:<channelHash>@thread.tacv2
 
 # Unsubscribe (rows already in the lake stay; only stops new pulls)
 npm run dev -- --account your@email.com \

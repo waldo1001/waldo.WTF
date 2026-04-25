@@ -593,14 +593,36 @@ function parseTeamChannelKey(
   raw: string,
   flag: string,
 ): { tenantId?: string; teamId: string; channelId: string } {
+  const usage = `${flag} expects <teamId>:<channelId> or <tenantId>:<teamId>:<channelId>, got "${raw}"`;
+
+  // Real Microsoft Graph channel IDs always start with "19:" and may
+  // therefore contain a colon themselves. Detect that boundary first and
+  // treat everything from "19:" onward as a single channelId.
+  const realIdx = raw.indexOf(":19:");
+  if (realIdx > 0) {
+    const left = raw.slice(0, realIdx);
+    const channelId = raw.slice(realIdx + 1);
+    const leftParts = left.split(":");
+    if (leftParts.some((p) => p === "")) throw new CliUsageError(usage);
+    if (leftParts.length === 1) {
+      return { teamId: leftParts[0]!, channelId };
+    }
+    if (leftParts.length === 2) {
+      return {
+        tenantId: leftParts[0]!,
+        teamId: leftParts[1]!,
+        channelId,
+      };
+    }
+    throw new CliUsageError(usage);
+  }
+
   const parts = raw.split(":");
   if (
     (parts.length !== 2 && parts.length !== 3) ||
     parts.some((p) => p === "")
   ) {
-    throw new CliUsageError(
-      `${flag} expects <teamId>:<channelId> or <tenantId>:<teamId>:<channelId>, got "${raw}"`,
-    );
+    throw new CliUsageError(usage);
   }
   if (parts.length === 3) {
     return {
