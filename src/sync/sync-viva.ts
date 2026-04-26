@@ -91,58 +91,37 @@ function postToMessage(
   };
 }
 
-const MAX_PAGES_PER_WALK = 50;
+// Yammer REST has no delta API. Instead of stale cursor pagination,
+// each cycle re-fetches the most recently active threads and walks
+// post pages backward until createdDateTime crosses this window.
+// 24h is generous enough to bridge overnight outages and timezone
+// spread across federated networks.
+const VIVA_SYNC_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-async function listThreadsForCommunity(
-  viva: VivaClient,
-  token: string,
-  communityId: string,
-  sinceDate: Date | undefined,
-): Promise<readonly VivaThread[]> {
-  const out: VivaThread[] = [];
-  let olderThan: string | undefined;
-  for (let page = 0; page < MAX_PAGES_PER_WALK; page++) {
-    const result = await viva.listThreads(token, communityId, { olderThan });
-    if (result.value.length === 0) break;
-    for (const t of result.value) out.push(t);
-    if (sinceDate !== undefined) {
-      const oldest = result.value.reduce((min, t) => {
-        const ts = t.lastPostedDateTime ?? "";
-        return ts < (min.lastPostedDateTime ?? "") ? t : min;
-      }, result.value[0]!);
-      if (
-        oldest.lastPostedDateTime !== undefined &&
-        new Date(oldest.lastPostedDateTime).getTime() <= sinceDate.getTime()
-      ) {
-        break;
-      }
-    }
-    if (result.olderThanCursor === undefined) break;
-    olderThan = result.olderThanCursor;
-  }
-  return out;
-}
+const MAX_POST_PAGES_PER_THREAD = 50;
 
-async function listPostsForThread(
+async function fetchPostsSince(
   viva: VivaClient,
   token: string,
   threadId: string,
-  sinceDate?: Date | undefined,
+  cutoff: Date,
 ): Promise<readonly VivaPost[]> {
+  const cutoffMs = cutoff.getTime();
   const out: VivaPost[] = [];
   let olderThan: string | undefined;
-  for (let page = 0; page < MAX_PAGES_PER_WALK; page++) {
-    const result = await viva.listPosts(token, threadId, { olderThan });
+  for (let page = 0; page < MAX_POST_PAGES_PER_THREAD; page++) {
+    const opts = olderThan !== undefined ? { olderThan } : {};
+    const result = await viva.listPosts(token, threadId, opts);
     if (result.value.length === 0) break;
-    for (const p of result.value) out.push(p);
-    if (sinceDate !== undefined) {
-      const oldest = result.value.reduce((min, p) =>
-        p.createdDateTime < min.createdDateTime ? p : min,
-      );
-      if (new Date(oldest.createdDateTime).getTime() <= sinceDate.getTime()) {
-        break;
+    let crossed = false;
+    for (const p of result.value) {
+      if (new Date(p.createdDateTime).getTime() < cutoffMs) {
+        crossed = true;
+        continue;
       }
+      out.push(p);
     }
+    if (crossed) break;
     if (result.olderThanCursor === undefined) break;
     olderThan = result.olderThanCursor;
   }
@@ -154,34 +133,23 @@ async function syncOneCommunity(deps: {
   token: string;
   sub: VivaSubscription;
   store: MessageStore;
-  subs: VivaSubscriptionStore;
   clock: Clock;
-}): Promise<{ added: number; newCursor: Date | undefined }> {
+}): Promise<{ added: number }> {
   const { viva, token, sub, store, clock } = deps;
-  const threads = await listThreadsForCommunity(
-    viva,
-    token,
-    sub.communityId,
-    sub.lastCursorAt,
-  );
+  const now = clock.now();
+  const cutoff = new Date(now.getTime() - VIVA_SYNC_WINDOW_MS);
+
+  const page = await viva.listThreads(token, sub.communityId, {});
 
   let added = 0;
-  let highWater: Date | undefined = sub.lastCursorAt;
-  const importedAt = clock.now();
-  for (const thread of threads) {
-    const posts = await listPostsForThread(viva, token, thread.id, sub.lastCursorAt);
+  for (const thread of page.value) {
+    const posts = await fetchPostsSince(viva, token, thread.id, cutoff);
     if (posts.length === 0) continue;
-    const messages = posts.map((p) => postToMessage(p, sub, thread, importedAt));
+    const messages = posts.map((p) => postToMessage(p, sub, thread, now));
     const r = await store.upsertMessages(messages);
-    added += r.added + r.updated;
-    for (const p of posts) {
-      const ts = new Date(p.createdDateTime);
-      if (highWater === undefined || ts.getTime() > highWater.getTime()) {
-        highWater = ts;
-      }
-    }
+    added += r.added;
   }
-  return { added, newCursor: highWater };
+  return { added };
 }
 
 export async function syncViva(deps: SyncVivaDeps): Promise<SyncVivaResult> {
@@ -234,18 +202,11 @@ export async function syncViva(deps: SyncVivaDeps): Promise<SyncVivaResult> {
 
   let added = 0;
   const perCommunity: SyncVivaCommunityResult[] = [];
-  const recordSuccess = async (
+  const recordSuccess = (
     sub: VivaSubscription,
-    res: { added: number; newCursor: Date | undefined },
-  ): Promise<void> => {
+    res: { added: number },
+  ): void => {
     added += res.added;
-    if (
-      res.newCursor !== undefined &&
-      (sub.lastCursorAt === undefined ||
-        res.newCursor.getTime() > sub.lastCursorAt.getTime())
-    ) {
-      await subs.setCursor(account.username, sub.communityId, res.newCursor);
-    }
     perCommunity.push({ communityId: sub.communityId, added: res.added });
   };
   for (const sub of enabled) {
@@ -265,10 +226,9 @@ export async function syncViva(deps: SyncVivaDeps): Promise<SyncVivaResult> {
         token: tokResult.token,
         sub,
         store,
-        subs,
         clock,
       });
-      await recordSuccess(sub, res);
+      recordSuccess(sub, res);
     } catch (err) {
       if (err instanceof TokenExpiredError) {
         const fresh = await forceRefreshTokenForTenant(tenantId);
@@ -286,10 +246,9 @@ export async function syncViva(deps: SyncVivaDeps): Promise<SyncVivaResult> {
             token: fresh.token,
             sub,
             store,
-            subs,
             clock,
           });
-          await recordSuccess(sub, retryRes);
+          recordSuccess(sub, retryRes);
         } catch (retryErr) {
           // 429 still aborts the whole pass (Retry-After contract).
           // A second 401 is treated as a genuine per-community failure.
