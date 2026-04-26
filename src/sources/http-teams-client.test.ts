@@ -453,6 +453,19 @@ describe("HttpTeamsClient with fetchWithTimeout", () => {
     vi.useRealTimers();
   });
 
+  it("default sleep arrow waits via real setTimeout when not injected", async () => {
+    const { fetch } = scriptFetch([
+      response({ status: 502, body: "transient" }),
+      response({ status: 200, body: JSON.stringify({ value: [] }) }),
+    ]);
+    const client = new HttpTeamsClient({ fetch, random: () => 0 });
+
+    const promise = client.listChats("tok-1");
+    promise.catch(() => {});
+    await vi.advanceTimersByTimeAsync(250);
+    await expect(promise).resolves.toEqual({ value: [] });
+  });
+
   it("aborts via fetchWithTimeout default when inner fetch hangs", async () => {
     const inner: FetchLike = (_url, init) =>
       new Promise<FetchLikeResponse>((_resolve, reject) => {

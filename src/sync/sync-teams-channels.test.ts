@@ -946,6 +946,248 @@ describe("syncTeamsChannels", () => {
     expect(failed.map((s) => s.channelId)).toEqual(["chan-B1"]);
   });
 
+  it("html body produces bodyHtml and stripped-text thread name", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryTeamsChannelSubscriptionStore();
+    await seedSub(subs);
+    const clock = new FakeClock(new Date("2026-04-21T12:00:00Z"));
+    const root = makeMsg({
+      id: "html-1",
+      body: {
+        contentType: "html",
+        content: "<p>Hello <b>HTML</b> world</p>",
+      },
+    });
+    const client = new FakeTeamsChannelClient({
+      steps: [
+        {
+          kind: "getChannelMessagesDeltaOk",
+          response: page([root], { deltaLink: "d" }),
+        },
+      ],
+    });
+    await syncTeamsChannels({
+      account,
+      auth: singleTenantAuth(),
+      client,
+      store,
+      subs,
+      clock,
+    });
+    const upserted = store.calls.flatMap((c) =>
+      c.method === "upsertMessages" ? c.messages : [],
+    );
+    const row = upserted.find((m) => m.nativeId === "html-1");
+    expect(row?.bodyHtml).toBe("<p>Hello <b>HTML</b> world</p>");
+    expect(row?.body).toBeUndefined();
+    expect(row?.threadName).toBe("Hello HTML world");
+  });
+
+  it("rootSnippet is truncated to 40 chars for long bodies", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryTeamsChannelSubscriptionStore();
+    await seedSub(subs);
+    const clock = new FakeClock(new Date("2026-04-21T12:00:00Z"));
+    const longContent = "abcdefghij".repeat(8); // 80 chars
+    const root = makeMsg({
+      id: "long-1",
+      body: { contentType: "text", content: longContent },
+    });
+    const client = new FakeTeamsChannelClient({
+      steps: [
+        {
+          kind: "getChannelMessagesDeltaOk",
+          response: page([root], { deltaLink: "d" }),
+        },
+      ],
+    });
+    await syncTeamsChannels({
+      account,
+      auth: singleTenantAuth(),
+      client,
+      store,
+      subs,
+      clock,
+    });
+    const upserted = store.calls.flatMap((c) =>
+      c.method === "upsertMessages" ? c.messages : [],
+    );
+    const row = upserted.find((m) => m.nativeId === "long-1");
+    expect(row?.threadName).toBe(longContent.slice(0, 40));
+    expect(row?.threadName?.length).toBe(40);
+  });
+
+  it("threadName is undefined when sub names are absent and body is empty", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryTeamsChannelSubscriptionStore();
+    await seedSub(subs);
+    const clock = new FakeClock(new Date("2026-04-21T12:00:00Z"));
+    const root = {
+      id: "no-name-1",
+      createdDateTime: "2026-04-21T08:00:00Z",
+      messageType: "message",
+      from: { user: { id: "u-1", displayName: "Alice" } },
+    } as TeamsChannelMessage;
+    const client = new FakeTeamsChannelClient({
+      steps: [
+        {
+          kind: "getChannelMessagesDeltaOk",
+          response: page([root], { deltaLink: "d" }),
+        },
+      ],
+    });
+    await syncTeamsChannels({
+      account,
+      auth: singleTenantAuth(),
+      client,
+      store,
+      subs,
+      clock,
+    });
+    const upserted = store.calls.flatMap((c) =>
+      c.method === "upsertMessages" ? c.messages : [],
+    );
+    const row = upserted.find((m) => m.nativeId === "no-name-1");
+    expect(row?.threadName).toBeUndefined();
+  });
+
+  it("skips system-event replies (messageType !== 'message')", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryTeamsChannelSubscriptionStore();
+    await seedSub(subs);
+    const clock = new FakeClock(new Date("2026-04-21T12:00:00Z"));
+    const root = makeMsg({
+      id: "root-with-sys",
+      replies: [
+        makeMsg({ id: "rep-keep", replyToId: "root-with-sys" }),
+        makeMsg({
+          id: "rep-sys",
+          replyToId: "root-with-sys",
+          messageType: "systemEventMessage",
+        }),
+      ],
+    });
+    const client = new FakeTeamsChannelClient({
+      steps: [
+        {
+          kind: "getChannelMessagesDeltaOk",
+          response: page([root], { deltaLink: "d" }),
+        },
+      ],
+    });
+    await syncTeamsChannels({
+      account,
+      auth: singleTenantAuth(),
+      client,
+      store,
+      subs,
+      clock,
+    });
+    const upserted = store.calls.flatMap((c) =>
+      c.method === "upsertMessages" ? c.messages : [],
+    );
+    expect(upserted.map((m) => m.nativeId).sort()).toEqual([
+      "rep-keep",
+      "root-with-sys",
+    ]);
+  });
+
+  it("prefers displayName when UPN missing; drops mentions with no identity", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryTeamsChannelSubscriptionStore();
+    await seedSub(subs);
+    const clock = new FakeClock(new Date("2026-04-21T12:00:00Z"));
+    const client = new FakeTeamsChannelClient({
+      steps: [
+        {
+          kind: "getChannelMessagesDeltaOk",
+          response: page(
+            [
+              makeMsg({
+                id: "m-mix",
+                mentions: [
+                  // displayName-only — no UPN
+                  {
+                    id: 0,
+                    mentionText: "ignored when displayName wins",
+                    mentioned: { user: { displayName: "Bob Builder" } },
+                  },
+                  // empty UPN string — falls through to displayName
+                  {
+                    id: 1,
+                    mentioned: {
+                      user: { userPrincipalName: "", displayName: "Empty UPN" },
+                    },
+                  },
+                  // empty displayName — falls through to mentionText
+                  {
+                    id: 2,
+                    mentionText: "fallback-text",
+                    mentioned: { user: { displayName: "" } },
+                  },
+                  // no resolvable identity at all — dropped
+                  { id: 3, mentioned: { user: {} } },
+                  // empty mentionText with no user — dropped
+                  { id: 4, mentionText: "", mentioned: {} },
+                ],
+              }),
+            ],
+            { deltaLink: "d" },
+          ),
+        },
+      ],
+    });
+    await syncTeamsChannels({
+      account,
+      auth: singleTenantAuth(),
+      client,
+      store,
+      subs,
+      clock,
+    });
+    const upserted = store.calls.flatMap((c) =>
+      c.method === "upsertMessages" ? c.messages : [],
+    );
+    const row = upserted.find((m) => m.nativeId === "m-mix");
+    expect(row?.mentions).toEqual([
+      "Bob Builder",
+      "Empty UPN",
+      "fallback-text",
+    ]);
+  });
+
+  it("thread name is truncated to 200 chars", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryTeamsChannelSubscriptionStore();
+    await seedSub(subs, {
+      teamName: "T".repeat(150),
+      channelName: "C".repeat(150),
+    });
+    const clock = new FakeClock(new Date("2026-04-21T12:00:00Z"));
+    const client = new FakeTeamsChannelClient({
+      steps: [
+        {
+          kind: "getChannelMessagesDeltaOk",
+          response: page([makeMsg({ id: "long-tn" })], { deltaLink: "d" }),
+        },
+      ],
+    });
+    await syncTeamsChannels({
+      account,
+      auth: singleTenantAuth(),
+      client,
+      store,
+      subs,
+      clock,
+    });
+    const upserted = store.calls.flatMap((c) =>
+      c.method === "upsertMessages" ? c.messages : [],
+    );
+    const row = upserted.find((m) => m.nativeId === "long-tn");
+    expect(row?.threadName?.length).toBe(200);
+    expect(row?.threadName?.startsWith("T".repeat(150))).toBe(true);
+  });
+
   it("syncTeamsChannels falls back to account.tenantId when subscription tenantId is missing", async () => {
     const store = new InMemoryMessageStore();
     const subs = new InMemoryTeamsChannelSubscriptionStore();
