@@ -9,6 +9,7 @@ import type { Clock } from "../clock.js";
 import type { MessageStore } from "../store/message-store.js";
 import type { SteeringStore } from "../store/steering-store.js";
 import type { VivaSubscriptionStore } from "../store/viva-subscription-store.js";
+import { redactSecretsFromError } from "./tools/remediation-prompts.js";
 import {
   ADD_STEERING_RULE_TOOL,
   handleAddSteeringRule,
@@ -179,7 +180,10 @@ export function createMcpServer(deps: McpServerDeps): Server {
           ? `${err.message}\n${err.stack ?? ""}`
           : String(err);
       console.error(`[mcp tool handler] ${name} failed: ${detail}`);
-      throw new McpError(ErrorCode.InternalError, "internal error");
+      const cls = err instanceof Error ? err.name : "NonErrorThrow";
+      const fullMsg = err instanceof Error ? err.message : String(err);
+      const safeLine = redactSecretsFromError(fullMsg.split("\n")[0]!);
+      throw new McpError(ErrorCode.InternalError, `${cls}: ${safeLine}`);
     }
   });
 

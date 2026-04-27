@@ -11,6 +11,10 @@ skill.
 
 ---
 
+## 2026-04-27
+
+- MCP tool errors now surface a redacted error class + first message line instead of the opaque `"internal error"` string. Changed [../src/mcp/mcp-server.ts](../src/mcp/mcp-server.ts) catch-all so `McpError(InternalError, …)` carries `<ErrorClass>: <first-line redacted message>` (e.g. `"SqliteError: database is locked"`); full stack still goes to stderr only via the existing `console.error` path. Bearer tokens and long base64-like blobs in the surfaced line are run through `redactSecretsFromError` so credentials never leak to the client. Closes the "transient flake reads as identical to a real bug" gap that ate diagnostic time on `diagnose_sync_health` this morning. 3 new tests in [../src/mcp/mcp-server.test.ts](../src/mcp/mcp-server.test.ts) cover Error-subclass class+first-line surfacing, bearer/long-secret redaction, and non-Error string throws. Plan archived: [plans/done/mcp-error-detail-surfacing.md](plans/done/mcp-error-detail-surfacing.md).
+
 ## 2026-04-26
 
 - Restored per-file 90% coverage thresholds on [../src/sources/http-teams-client.ts](../src/sources/http-teams-client.ts) (functions 83.33% → 100%) and [../src/sync/sync-teams-channels.ts](../src/sync/sync-teams-channels.ts) (branches 85.41% → 98.19%) — both regressed when commit `5aaa064` added multi-tenant fan-out without exercising the default `sleep` arrow, the html body path, the `mentionToString` displayName/mentionText fallback ladder, the system-event reply filter, the empty-body / no-team-name `threadName` fallback, the 40-char snippet truncation, or the 200-char thread-name truncation. 7 new tests, no production change. `npm test` exits 0 again — unblocks `/deploy-nas` for the VIVA fix in `9314d0b`. Plan archived: [plans/done/fix-coverage-teams-channel-sync.md](plans/done/fix-coverage-teams-channel-sync.md).

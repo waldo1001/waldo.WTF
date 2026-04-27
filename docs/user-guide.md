@@ -750,6 +750,7 @@ to `waldo-nas.<tailnet>.ts.net:8765`.
 | `--viva-discover` shows "no viva communities" despite having communities | Yammer API returned suggested groups (empty for guests in external networks) | Fixed in 2026-04-23 deploy — upgrade and re-run `--viva-discover` |
 | `--teams-discover` prints `admin-consent required` and returns no channels | Tenant has not consented `ChannelMessage.Read.All` for the app | Ask tenant admin to grant consent, or use a different account; other sources keep working |
 | `sync_log` shows `admin-consent-required` rows for a teams-channel account every tick | Same as above — scheduler degrades cleanly per-account | Either grant the consent or `--teams-unsubscribe` the affected channels to silence the rows |
+| MCP tool error surfaces `<ErrorClass>: <message>` (e.g. `SqliteError: database is locked`) | The handler threw; the message is the first line of the underlying exception, secrets-redacted | Treat the class as the diagnosis; full stack is in NAS container stderr (`docker logs <ctr>`) — grep for `[mcp tool handler]` |
 
 ## 10. What NOT to do
 

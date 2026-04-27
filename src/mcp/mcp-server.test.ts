@@ -261,6 +261,142 @@ describe("createMcpServer (SDK, in-memory transport)", () => {
     }
   });
 
+  it("InternalError message includes the original error class and first message line", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const throwing = new InMemoryMessageStore();
+      class WidgetError extends Error {
+        constructor(msg: string) {
+          super(msg);
+          this.name = "WidgetError";
+        }
+      }
+      throwing.getRecentMessages = async () => {
+        throw new WidgetError("first line of trouble\nsecond line ignored");
+      };
+      const server = createMcpServer({
+        store: throwing,
+        steering: new InMemorySteeringStore(clock),
+        clock,
+      });
+      const [ct, st] = InMemoryTransport.createLinkedPair();
+      const c = new Client(
+        { name: "c", version: "0.0.0" },
+        { capabilities: {} },
+      );
+      await Promise.all([server.connect(st), c.connect(ct)]);
+      await expect(
+        c.callTool({
+          name: "get_recent_activity",
+          arguments: { hours: 1 },
+        }),
+      ).rejects.toMatchObject({
+        code: ErrorCode.InternalError,
+        message: expect.stringContaining("WidgetError"),
+      });
+      await expect(
+        c.callTool({
+          name: "get_recent_activity",
+          arguments: { hours: 1 },
+        }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining("first line of trouble"),
+      });
+      await expect(
+        c.callTool({
+          name: "get_recent_activity",
+          arguments: { hours: 1 },
+        }),
+      ).rejects.toMatchObject({
+        message: expect.not.stringContaining("second line ignored"),
+      });
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("InternalError message redacts bearer tokens and long secrets", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const throwing = new InMemoryMessageStore();
+      throwing.getRecentMessages = async () => {
+        throw new Error(
+          "auth failed: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9abcdefghijklmnop",
+        );
+      };
+      const server = createMcpServer({
+        store: throwing,
+        steering: new InMemorySteeringStore(clock),
+        clock,
+      });
+      const [ct, st] = InMemoryTransport.createLinkedPair();
+      const c = new Client(
+        { name: "c", version: "0.0.0" },
+        { capabilities: {} },
+      );
+      await Promise.all([server.connect(st), c.connect(ct)]);
+      await expect(
+        c.callTool({
+          name: "get_recent_activity",
+          arguments: { hours: 1 },
+        }),
+      ).rejects.toMatchObject({
+        code: ErrorCode.InternalError,
+        message: expect.stringContaining("[REDACTED]"),
+      });
+      await expect(
+        c.callTool({
+          name: "get_recent_activity",
+          arguments: { hours: 1 },
+        }),
+      ).rejects.toMatchObject({
+        message: expect.not.stringContaining("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9"),
+      });
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("InternalError message handles non-Error throws (string)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const throwing = new InMemoryMessageStore();
+      throwing.getRecentMessages = async () => {
+        throw "oops on line one\nstacktraceish line two";
+      };
+      const server = createMcpServer({
+        store: throwing,
+        steering: new InMemorySteeringStore(clock),
+        clock,
+      });
+      const [ct, st] = InMemoryTransport.createLinkedPair();
+      const c = new Client(
+        { name: "c", version: "0.0.0" },
+        { capabilities: {} },
+      );
+      await Promise.all([server.connect(st), c.connect(ct)]);
+      await expect(
+        c.callTool({
+          name: "get_recent_activity",
+          arguments: { hours: 1 },
+        }),
+      ).rejects.toMatchObject({
+        code: ErrorCode.InternalError,
+        message: expect.stringContaining("oops on line one"),
+      });
+      await expect(
+        c.callTool({
+          name: "get_recent_activity",
+          arguments: { hours: 1 },
+        }),
+      ).rejects.toMatchObject({
+        message: expect.not.stringContaining("stacktraceish line two"),
+      });
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
   it("logs non-Error throws (string/number) with the tool name", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
