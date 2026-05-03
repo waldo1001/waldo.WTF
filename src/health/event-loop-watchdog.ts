@@ -7,6 +7,12 @@ export interface EventLoopWatchdogOptions {
   readonly logger: Logger;
   readonly intervalMs: number;
   readonly maxLagMs: number;
+  // Any single tick whose lag exceeds this threshold fires onWedge
+  // immediately, instead of needing 3 consecutive over-budget ticks.
+  // Catches single-block wedges (e.g. a 90 s synchronous DB query) that
+  // the consecutive-tick logic is invisible to — once the loop unblocks,
+  // the lag counter resets to 0 and the wedge is forgotten.
+  readonly singleBlockMs: number;
   readonly onWedge: () => void;
   readonly setTimer?: SetTimerFn;
 }
@@ -26,7 +32,7 @@ const CONSECUTIVE_THRESHOLD = 3;
 export function startEventLoopWatchdog(
   opts: EventLoopWatchdogOptions,
 ): EventLoopWatchdogHandle {
-  const { clock, logger, intervalMs, maxLagMs, onWedge } = opts;
+  const { clock, logger, intervalMs, maxLagMs, singleBlockMs, onWedge } = opts;
   const setTimer = opts.setTimer ?? defaultSetTimer;
 
   let consecutive = 0;
@@ -39,6 +45,15 @@ export function startEventLoopWatchdog(
       /* c8 ignore next -- defensive guard against real-Node clearTimeout/in-flight callback race */
       if (stopped) return;
       const actualMs = clock.now().getTime() - scheduledAt;
+      const lagMs = actualMs - intervalMs;
+      if (lagMs > singleBlockMs) {
+        stopped = true;
+        logger.error(
+          `event_loop_watchdog_single_block lagMs=${lagMs} thresholdMs=${singleBlockMs} actualMs=${actualMs}`,
+        );
+        onWedge();
+        return;
+      }
       if (actualMs > intervalMs + maxLagMs) {
         consecutive += 1;
         if (consecutive >= CONSECUTIVE_THRESHOLD) {

@@ -294,6 +294,7 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
       logger,
       intervalMs: WATCHDOG_EVENT_LOOP_INTERVAL_MS,
       maxLagMs: WATCHDOG_EVENT_LOOP_MAX_LAG_MS,
+      singleBlockMs: config.watchdogSingleBlockMs,
       onWedge,
     });
     selfProbe = startSelfProbe({

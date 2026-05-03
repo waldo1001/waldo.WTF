@@ -103,6 +103,16 @@ BEARER_TOKEN=generate-a-long-random-hex-string
 # Docker's restart policy + autoheal sidecar can recover. Set to "1" to
 # disable for interactive runs (e.g. --add-account) or local debugging.
 # WALDO_WATCHDOG_DISABLED=1
+
+# Optional — single-block threshold for the event-loop watchdog (ms).
+# If any single tick of the loop is delayed by more than this, the
+# process exits immediately instead of waiting for 3 consecutive
+# over-budget ticks (the default consecutive-lag rule misses single
+# long-blocking events like a runaway synchronous DB query). Default
+# 30000 (30 s). Set lower if you want faster restart on long syncs;
+# raise above 30000 only if you have a known-good operation that
+# legitimately blocks the loop for that long.
+# WALDO_WATCHDOG_SINGLE_BLOCK_MS=30000
 ```
 
 `loadConfig` throws `ConfigError` listing every missing required key on

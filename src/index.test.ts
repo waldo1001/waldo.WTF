@@ -251,9 +251,34 @@ describe("main", () => {
     expect(startSelfProbe).toHaveBeenCalledTimes(1);
     expect(elwCalls[0]!.intervalMs).toBe(5_000);
     expect(elwCalls[0]!.maxLagMs).toBe(1_000);
+    expect(elwCalls[0]!.singleBlockMs).toBe(30_000);
     expect(spCalls[0]!.intervalMs).toBe(30_000);
     expect(spCalls[0]!.timeoutMs).toBe(5_000);
     expect(spCalls[0]!.failuresBeforeWedge).toBe(3);
+    await result.shutdown();
+  });
+
+  it("passes WALDO_WATCHDOG_SINGLE_BLOCK_MS through to startEventLoopWatchdog", async () => {
+    const h = makeHarness();
+    const overrides = makeOverrides();
+    const elwCalls: EventLoopWatchdogOptions[] = [];
+    const startEventLoopWatchdog = vi.fn((opts: EventLoopWatchdogOptions) => {
+      elwCalls.push(opts);
+      return { stop: vi.fn() };
+    });
+    const startSelfProbe = vi.fn(() => ({ stop: vi.fn() }));
+    const result = await main({
+      env: { ...makeEnv(), WALDO_WATCHDOG_SINGLE_BLOCK_MS: "60000" },
+      loadDotenv: false,
+      overrides: {
+        ...overrides,
+        setTimer: h.setTimer,
+        logger: h.logger,
+        startEventLoopWatchdog,
+        startSelfProbe,
+      },
+    });
+    expect(elwCalls[0]!.singleBlockMs).toBe(60_000);
     await result.shutdown();
   });
 

@@ -37,6 +37,7 @@ describe("loadConfig", () => {
       whatsappAccount: DEFAULT_WHATSAPP_ACCOUNT,
       whatsappWatch: false,
       watchdogDisabled: false,
+      watchdogSingleBlockMs: 30_000,
     });
   });
 
@@ -208,6 +209,35 @@ describe("loadConfig", () => {
       loadConfig({ ...validEnv(), WALDO_WATCHDOG_DISABLED: "1" })
         .watchdogDisabled,
     ).toBe(true);
+  });
+
+  it("watchdogSingleBlockMs defaults to 30000 when WALDO_WATCHDOG_SINGLE_BLOCK_MS is unset", () => {
+    expect(loadConfig(validEnv()).watchdogSingleBlockMs).toBe(30_000);
+  });
+
+  it("watchdogSingleBlockMs reads WALDO_WATCHDOG_SINGLE_BLOCK_MS as a positive integer", () => {
+    expect(
+      loadConfig({ ...validEnv(), WALDO_WATCHDOG_SINGLE_BLOCK_MS: "60000" })
+        .watchdogSingleBlockMs,
+    ).toBe(60_000);
+  });
+
+  it("throws ConfigError when WALDO_WATCHDOG_SINGLE_BLOCK_MS is zero", () => {
+    expect(() =>
+      loadConfig({ ...validEnv(), WALDO_WATCHDOG_SINGLE_BLOCK_MS: "0" }),
+    ).toThrow(ConfigError);
+  });
+
+  it("throws ConfigError when WALDO_WATCHDOG_SINGLE_BLOCK_MS is negative", () => {
+    expect(() =>
+      loadConfig({ ...validEnv(), WALDO_WATCHDOG_SINGLE_BLOCK_MS: "-5" }),
+    ).toThrow(ConfigError);
+  });
+
+  it("throws ConfigError when WALDO_WATCHDOG_SINGLE_BLOCK_MS is non-numeric", () => {
+    expect(() =>
+      loadConfig({ ...validEnv(), WALDO_WATCHDOG_SINGLE_BLOCK_MS: "abc" }),
+    ).toThrow(ConfigError);
   });
 
   it("watchdogDisabled stays false for any value other than '1'", () => {

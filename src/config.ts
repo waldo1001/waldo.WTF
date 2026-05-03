@@ -6,6 +6,7 @@ export const DEFAULT_BIND_HOST = "127.0.0.1";
 export const DEFAULT_WHATSAPP_DOWNLOADS_PATH = `${process.env.HOME ?? "."}/Downloads`;
 export const DEFAULT_WHATSAPP_ARCHIVE_PATH = `${process.env.HOME ?? "."}/WhatsAppArchive`;
 export const DEFAULT_WHATSAPP_ACCOUNT = "whatsapp-local";
+export const DEFAULT_WATCHDOG_SINGLE_BLOCK_MS = 30_000;
 
 export type Config = Readonly<{
   msClientId: string;
@@ -21,6 +22,7 @@ export type Config = Readonly<{
   whatsappAccount: string;
   whatsappWatch: boolean;
   watchdogDisabled: boolean;
+  watchdogSingleBlockMs: number;
 }>;
 
 export class ConfigError extends Error {
@@ -63,6 +65,13 @@ export function loadConfig(env: Env): Config {
     ? parsePositiveInt(env.WALDO_BACKFILL_DAYS, "WALDO_BACKFILL_DAYS")
     : undefined;
 
+  const watchdogSingleBlockMs = present(env.WALDO_WATCHDOG_SINGLE_BLOCK_MS)
+    ? parsePositiveInt(
+        env.WALDO_WATCHDOG_SINGLE_BLOCK_MS,
+        "WALDO_WATCHDOG_SINGLE_BLOCK_MS",
+      )
+    : DEFAULT_WATCHDOG_SINGLE_BLOCK_MS;
+
   return {
     msClientId: env.MS_CLIENT_ID as string,
     bearerToken: env.BEARER_TOKEN as string,
@@ -82,6 +91,7 @@ export function loadConfig(env: Env): Config {
       : DEFAULT_WHATSAPP_ACCOUNT,
     whatsappWatch: env.WALDO_WHATSAPP_WATCH === "true",
     watchdogDisabled: env.WALDO_WATCHDOG_DISABLED === "1",
+    watchdogSingleBlockMs,
     ...(backfillDays !== undefined ? { backfillDays } : {}),
   };
 }

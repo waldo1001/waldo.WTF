@@ -42,6 +42,7 @@ describe("startEventLoopWatchdog", () => {
       logger: { info: vi.fn(), error: vi.fn() },
       intervalMs: 5_000,
       maxLagMs: 1_000,
+      singleBlockMs: 30_000,
       onWedge,
       setTimer,
     });
@@ -51,6 +52,27 @@ describe("startEventLoopWatchdog", () => {
       const next = pending.shift()!;
       next.fire();
     }
+
+    expect(onWedge).toHaveBeenCalledTimes(1);
+  });
+
+  it("fires onWedge after a single tick that exceeds singleBlockMs", () => {
+    const clock = new FakeClock(new Date("2026-04-25T12:00:00Z"));
+    const onWedge = vi.fn();
+    const { setTimer, pending } = makeManualTimer();
+
+    startEventLoopWatchdog({
+      clock,
+      logger: { info: vi.fn(), error: vi.fn() },
+      intervalMs: 5_000,
+      maxLagMs: 1_000,
+      singleBlockMs: 30_000,
+      onWedge,
+      setTimer,
+    });
+
+    clock.advance(5_000 + 35_000);
+    pending.shift()!.fire();
 
     expect(onWedge).toHaveBeenCalledTimes(1);
   });
@@ -156,6 +178,7 @@ describe("startEventLoopWatchdog", () => {
       logger: { info: baseLogger.info, error },
       intervalMs: 5_000,
       maxLagMs: 1_000,
+      singleBlockMs: 30_000,
       onWedge,
       setTimer,
     });
@@ -167,5 +190,31 @@ describe("startEventLoopWatchdog", () => {
 
     expect(error).toHaveBeenCalledTimes(1);
     expect(error.mock.calls[0]![0]).toContain("event_loop_watchdog_wedged");
+  });
+
+  it("logs event_loop_watchdog_single_block when triggered by a single-block lag", () => {
+    const clock = new FakeClock(new Date("2026-04-25T12:00:00Z"));
+    const onWedge = vi.fn();
+    const error = vi.fn();
+    const { setTimer, pending } = makeManualTimer();
+
+    startEventLoopWatchdog({
+      clock,
+      logger: { info: baseLogger.info, error },
+      intervalMs: 5_000,
+      maxLagMs: 1_000,
+      singleBlockMs: 30_000,
+      onWedge,
+      setTimer,
+    });
+
+    clock.advance(5_000 + 35_000);
+    pending.shift()!.fire();
+
+    expect(onWedge).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error.mock.calls[0]![0]).toContain("event_loop_watchdog_single_block");
+    expect(error.mock.calls[0]![0]).toContain("lagMs=35000");
+    expect(error.mock.calls[0]![0]).toContain("thresholdMs=30000");
   });
 });
