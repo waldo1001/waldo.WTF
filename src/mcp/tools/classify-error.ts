@@ -15,11 +15,10 @@ export function classifyError(raw: string): FindingCategory {
 
   if (
     msg.includes("TokenExpiredError") ||
-    lower.includes("401 unauthorized") ||
-    /(^|[^\d])401([^\d]|$)/.test(lower) ||
-    lower.includes("yammer 401") ||
-    lower.includes("graph 401") ||
-    lower.includes("http 401")
+    /\b401\s+(unauthorized|forbidden)\b/.test(lower) ||
+    /\b(http|graph|yammer|msal)\s+401\b/.test(lower) ||
+    /\bstatus[:= ]\s*401\b/.test(lower) ||
+    /^401\b/.test(lower)
   ) {
     return "auth";
   }
@@ -38,8 +37,10 @@ export function classifyError(raw: string): FindingCategory {
   if (
     msg.includes("DeltaTokenInvalidError") ||
     lower.includes("resync required") ||
-    lower.includes("410 gone") ||
-    /(^|[^\d])410([^\d]|$)/.test(lower)
+    /\b410\s+gone\b/.test(lower) ||
+    /\b(http|graph|yammer|msal)\s+410\b/.test(lower) ||
+    /\bstatus[:= ]\s*410\b/.test(lower) ||
+    /^410\b/.test(lower)
   ) {
     return "delta-invalid";
   }

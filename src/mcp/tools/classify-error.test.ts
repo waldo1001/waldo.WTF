@@ -47,6 +47,40 @@ describe("classifyError", () => {
     expect(classifyError("ENETDOWN")).toBe("unknown-error");
     expect(classifyError("ECONNRESET")).toBe("unknown-error");
   });
+
+  it("does not classify benign 401 substrings as auth", () => {
+    expect(classifyError("took 401ms")).toBe("unknown-error");
+    expect(classifyError("req_id=401")).toBe("unknown-error");
+    expect(classifyError("port 4010 in use")).toBe("unknown-error");
+    expect(classifyError("ETIMEDOUT after 4010ms")).toBe("unknown-error");
+    expect(classifyError("checkpoint at offset 401")).toBe("unknown-error");
+  });
+
+  it("does not classify benign 410 substrings as delta-invalid", () => {
+    expect(classifyError("took 410ms")).toBe("unknown-error");
+    expect(classifyError("graph 4101: foo")).toBe("unknown-error");
+    expect(classifyError("port 4101 in use")).toBe("unknown-error");
+    expect(classifyError("offset 410 of 999")).toBe("unknown-error");
+  });
+
+  it("still classifies HTTP-anchored 401 patterns as auth", () => {
+    expect(classifyError("401 Unauthorized")).toBe("auth");
+    expect(classifyError("HTTP 401")).toBe("auth");
+    expect(classifyError("Graph 401: token expired")).toBe("auth");
+    expect(classifyError("yammer 401")).toBe("auth");
+    expect(classifyError("status: 401")).toBe("auth");
+    expect(classifyError("status=401")).toBe("auth");
+    expect(classifyError("MSAL 401: refresh failed")).toBe("auth");
+    expect(classifyError("401 Forbidden")).toBe("auth");
+  });
+
+  it("still classifies HTTP-anchored 410 patterns as delta-invalid", () => {
+    expect(classifyError("410 Gone")).toBe("delta-invalid");
+    expect(classifyError("HTTP 410 Gone")).toBe("delta-invalid");
+    expect(classifyError("Graph 410: cursor expired")).toBe("delta-invalid");
+    expect(classifyError("status: 410")).toBe("delta-invalid");
+    expect(classifyError("status=410")).toBe("delta-invalid");
+  });
 });
 
 describe("extractRetryAfterSeconds", () => {
