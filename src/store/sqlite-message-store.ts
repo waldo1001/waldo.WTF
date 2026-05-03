@@ -294,9 +294,9 @@ export class SqliteMessageStore implements MessageStore {
 
   async getThread(opts: GetThreadOptions): Promise<readonly Message[]> {
     const limit = opts.limit ?? DEFAULT_GET_THREAD_LIMIT;
-    const rows = this.db
-      .prepare(
-        `
+    const sql =
+      opts.fromStart === true
+        ? `
       SELECT id, source, account, native_id,
              thread_id, thread_name, sender_name, sender_email,
              sent_at, imported_at, is_read, body, body_html, raw_json,
@@ -305,8 +305,23 @@ export class SqliteMessageStore implements MessageStore {
       WHERE thread_id = ?
       ORDER BY sent_at ASC, id ASC
       LIMIT ?
-    `,
+    `
+        : `
+      SELECT id, source, account, native_id,
+             thread_id, thread_name, sender_name, sender_email,
+             sent_at, imported_at, is_read, body, body_html, raw_json,
+             chat_type, reply_to_id, mentions_json, from_me
+      FROM (
+        SELECT *
+        FROM messages
+        WHERE thread_id = ?
+        ORDER BY sent_at DESC, id DESC
+        LIMIT ?
       )
+      ORDER BY sent_at ASC, id ASC
+    `;
+    const rows = this.db
+      .prepare(sql)
       .all(opts.threadId, limit) as MessageRow[];
     return rows.map(fromRow);
   }

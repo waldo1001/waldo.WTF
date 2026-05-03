@@ -66,6 +66,45 @@ describe("handleGetThread", () => {
     ).rejects.toBeInstanceOf(InvalidParamsError);
   });
 
+  it("validates from_start as a boolean only", async () => {
+    const store = new InMemoryMessageStore();
+    await expect(
+      handleGetThread(store, clock, {
+        thread_id: "chat-1",
+        from_start: "true" as unknown as boolean,
+      }),
+    ).rejects.toBeInstanceOf(InvalidParamsError);
+    await expect(
+      handleGetThread(store, clock, {
+        thread_id: "chat-1",
+        from_start: 1 as unknown as boolean,
+      }),
+    ).rejects.toBeInstanceOf(InvalidParamsError);
+  });
+
+  it("plumbs fromStart=undefined to the store when from_start is omitted (new default = latest N)", async () => {
+    const store = new InMemoryMessageStore();
+    await handleGetThread(store, clock, { thread_id: "chat-1" });
+    const call = store.calls.find((c) => c.method === "getThread");
+    expect(call?.method).toBe("getThread");
+    if (call?.method === "getThread") {
+      expect(call.opts.fromStart).toBeUndefined();
+    }
+  });
+
+  it("plumbs fromStart=true to the store when from_start: true is passed", async () => {
+    const store = new InMemoryMessageStore();
+    await handleGetThread(store, clock, {
+      thread_id: "chat-1",
+      from_start: true,
+    });
+    const call = store.calls.find((c) => c.method === "getThread");
+    expect(call?.method).toBe("getThread");
+    if (call?.method === "getThread") {
+      expect(call.opts.fromStart).toBe(true);
+    }
+  });
+
   it("returns empty for an unknown thread id", async () => {
     const store = new InMemoryMessageStore();
     const result = await handleGetThread(store, clock, {
@@ -185,7 +224,7 @@ describe("handleGetThread", () => {
     expect(result.messages.every((m) => m.threadId === "chat-1")).toBe(true);
   });
 
-  it("orders messages oldest→newest and respects explicit limit", async () => {
+  it("default returns the LATEST messages within the limit, ordered chronologically", async () => {
     const store = new InMemoryMessageStore({
       seed: {
         messages: [
@@ -213,6 +252,39 @@ describe("handleGetThread", () => {
     const result = await handleGetThread(store, clock, {
       thread_id: "chat-1",
       limit: 2,
+    });
+    expect(result.messages.map((m) => m.snippet)).toEqual(["second", "third"]);
+  });
+
+  it("from_start: true returns the FIRST messages within the limit (regression)", async () => {
+    const store = new InMemoryMessageStore({
+      seed: {
+        messages: [
+          mk({
+            id: "teams:a@example.test:3",
+            threadId: "chat-1",
+            sentAt: new Date("2026-04-13T12:00:00Z"),
+            body: "third",
+          }),
+          mk({
+            id: "teams:a@example.test:1",
+            threadId: "chat-1",
+            sentAt: new Date("2026-04-13T10:00:00Z"),
+            body: "first",
+          }),
+          mk({
+            id: "teams:a@example.test:2",
+            threadId: "chat-1",
+            sentAt: new Date("2026-04-13T11:00:00Z"),
+            body: "second",
+          }),
+        ],
+      },
+    });
+    const result = await handleGetThread(store, clock, {
+      thread_id: "chat-1",
+      limit: 2,
+      from_start: true,
     });
     expect(result.messages.map((m) => m.snippet)).toEqual(["first", "second"]);
   });

@@ -14,6 +14,7 @@ export interface GetThreadParams {
   readonly thread_id: string;
   readonly limit?: number;
   readonly include_body?: boolean;
+  readonly from_start?: boolean;
 }
 
 export interface ProjectedThreadMessage {
@@ -43,7 +44,11 @@ export interface GetThreadResult {
 export const GET_THREAD_TOOL = {
   name: "get_thread",
   description: [
-    "Return every message in a conversation (Teams chat) ordered oldest→newest. Pass the `threadId` field from a prior `search` / `get_recent_activity` result. Read-only.",
+    "Return messages from a conversation (Teams chat / WhatsApp / Outlook thread) ordered oldest→newest within the returned slice. Pass the `threadId` field from a prior `search` / `get_recent_activity` / `list_threads` result. Read-only.",
+    "",
+    "**By default this returns the LATEST N messages of the thread, not the first N.** This is what you want for almost every prompt — \"summarize today's discussion in X\", \"what did Y say recently\", \"catch me up on the conversation\". A long thread (e.g. 1000+ messages) without this default would silently return only the start of the conversation, which is misleading.",
+    "",
+    "Pass `from_start: true` ONLY when the user explicitly asks how a long conversation began (\"how did this thread start\", \"what was the original message\"). For everything else, omit the parameter and rely on the default.",
     "",
     'Prefer this over search when the user references a specific person or conversation by name ("did my wife send me...", "what did Gunter say about..."). A thread dump of ~50-200 messages is cheap and avoids the tokenization/language pitfalls of full-text search. Use search to find threads; use get_thread to read them.',
     "",
@@ -68,6 +73,11 @@ export const GET_THREAD_TOOL = {
         type: "boolean",
         description:
           "If true, project the plain-text body of each message (head-truncated per message; later messages may be omitted if the per-call budget is exhausted). Default false.",
+      },
+      from_start: {
+        type: "boolean",
+        description:
+          "If true, return the FIRST `limit` messages of the thread (oldest-first, the original start of the conversation). Default false: return the LATEST `limit` messages, ordered chronologically within the slice. Pass true only when the user explicitly asks how a long conversation began.",
       },
     },
     required: ["thread_id"],
@@ -101,9 +111,16 @@ export async function handleGetThread(
   ) {
     throw new InvalidParamsError("include_body must be a boolean");
   }
+  if (
+    params.from_start !== undefined &&
+    typeof params.from_start !== "boolean"
+  ) {
+    throw new InvalidParamsError("from_start must be a boolean");
+  }
   const rows = await store.getThread({
     threadId,
     ...(limit !== undefined && { limit }),
+    ...(params.from_start === true && { fromStart: true }),
   });
   const includeBody = params.include_body === true;
   let remaining = MAX_TOTAL_BODY_CHARS;

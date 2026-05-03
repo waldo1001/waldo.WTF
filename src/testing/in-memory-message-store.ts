@@ -312,7 +312,10 @@ export class InMemoryMessageStore implements MessageStore {
       const t = a.sentAt.getTime() - b.sentAt.getTime();
       return t !== 0 ? t : a.id.localeCompare(b.id);
     });
-    return rows.slice(0, limit);
+    if (opts.fromStart === true) {
+      return rows.slice(0, limit);
+    }
+    return rows.slice(Math.max(0, rows.length - limit));
   }
 
   async listThreadSummaries(

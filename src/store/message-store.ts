@@ -48,6 +48,12 @@ export interface SearchMessagesResult {
 export interface GetThreadOptions {
   readonly threadId: string;
   readonly limit?: number;
+  // Default false → return the LATEST `limit` messages of the thread,
+  // sorted chronologically (asc) within the returned slice.
+  // True → return the FIRST `limit` messages, oldest-first (the original
+  // start of the conversation). Use only when the caller explicitly
+  // wants the beginning of a long thread.
+  readonly fromStart?: boolean;
 }
 
 export interface ListThreadSummariesOptions {

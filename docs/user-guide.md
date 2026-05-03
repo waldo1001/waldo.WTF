@@ -75,15 +75,28 @@ Typical prompts:
 - *"Find emails from Defrancq about the pricing proposal."* →
   `sender_name: "defrancq"`, `query: "pricing"`.
 
-### `get_thread(thread_id, limit?, include_body?)`
+### `get_thread(thread_id, limit?, include_body?, from_start?)`
 
-Pull a full conversation given a `thread_id` returned by one of the
-other tools. Used to get back-and-forth context. Resolves by the
-stored `thread_id` column (oldest→newest, `limit` default 200, max
-500). Covers both **Teams chats** (keyed on `chat.id`) and **Outlook
-conversations** (keyed on Graph's `conversationId`). Outlook rows
-synced before the slice-3 follow-up have `thread_id = NULL` until
-their next delta touch; clear the delta token for a forced resync.
+Pull a conversation given a `thread_id` returned by one of the other
+tools. Used to get back-and-forth context. Resolves by the stored
+`thread_id` column (`limit` default 200, max 500). Covers **Teams
+chats** (keyed on `chat.id`), **Outlook conversations** (keyed on
+Graph's `conversationId`), and **WhatsApp chats** (keyed on the
+normalized chat name). Outlook rows synced before the slice-3
+follow-up have `thread_id = NULL` until their next delta touch; clear
+the delta token for a forced resync.
+
+**Default returns the LATEST `limit` messages**, ordered
+chronologically (oldest→newest) within the returned slice. This is
+what almost every prompt wants ("summarize today's discussion in X",
+"what did Y say recently", "catch me up"). For long threads (>500
+messages), the older messages beyond the slice are simply not
+returned — there's no pagination today.
+
+Pass `from_start: true` only when the user explicitly asks how a long
+conversation began ("how did this thread start", "what was the
+original message"). With `from_start: true` you get the first `limit`
+messages (the original behavior up to 2026-05-03).
 
 Pass `include_body: true` when the user wants the message text itself
 (e.g. *"what did it say"*, *"summarize"*). Same truncation and budget
