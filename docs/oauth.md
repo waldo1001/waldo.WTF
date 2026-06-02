@@ -104,7 +104,7 @@ Expected response:
 {
   "access_token": "...",
   "token_type": "Bearer",
-  "expires_in": 3600,
+  "expires_in": 86400,
   "refresh_token": "...",
   "scope": "mcp"
 }
@@ -125,7 +125,7 @@ curl -s -X POST https://waldo-nas.your-tailnet.ts.net/oauth/token \
   -d "refresh_token=<refresh_token>" | jq .
 ```
 
-Refresh tokens rotate on use: the old refresh token is invalidated, a fresh pair is returned.
+Refresh is **non-rotating**: the same refresh token is reused, a fresh access token is minted (the previous access token stops validating), and the refresh token's 30-day expiry slides forward. The refresh token therefore stays valid for retries — a lost refresh response no longer bricks the client. An unknown or already-expired refresh token returns `400 invalid_grant` and leaves stored state untouched.
 
 ---
 
@@ -143,7 +143,7 @@ Refresh tokens rotate on use: the old refresh token is invalidated, a fresh pair
 
 Set a new `WALDO_ADMIN_PASSWORD` in `.env` (or the container environment) and restart the server.
 
-- The password is hashed at startup (scrypt N=16384); old tokens remain valid until they expire (access: 1 h, refresh: 30 days).
+- The password is hashed at startup (scrypt N=16384); old tokens remain valid until they expire (access: 24 h, refresh: 30 days).
 - Existing clients do not need to re-register — they just re-authorize next time their access token expires.
 - If you want to force all clients to re-authorize immediately, see §5.
 

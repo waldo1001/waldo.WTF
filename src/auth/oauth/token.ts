@@ -3,7 +3,7 @@ import type { AuthStore } from "./auth-store.js";
 import type { RandomIdSource } from "./ids.js";
 import { verifyPkceS256 } from "./pkce.js";
 
-const ACCESS_TOKEN_TTL_MS = 3600 * 1000;
+const ACCESS_TOKEN_TTL_MS = 24 * 3600 * 1000;
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 3600 * 1000;
 
 export interface TokenRequest {
@@ -92,25 +92,23 @@ async function handleRefreshToken(
   }
 
   const now = req.clock.now();
-  const pair = await req.store.consumeRefreshToken(refreshToken, now);
-  if (!pair) {
-    return errorResponse(400, "invalid_grant", "refresh token is invalid or expired");
-  }
-
   const newAccess = req.ids.next();
-  const newRefresh = req.ids.next();
   const accessExpiresAt = new Date(now.getTime() + ACCESS_TOKEN_TTL_MS);
   const refreshExpiresAt = new Date(now.getTime() + REFRESH_TOKEN_TTL_MS);
 
-  await req.store.saveTokenPair({
-    accessToken: newAccess,
-    refreshToken: newRefresh,
-    clientId: pair.clientId,
-    scope: pair.scope,
+  // Non-rotating refresh: reuse the same refresh token, mint a fresh access
+  // token, slide the refresh expiry. A lost response can be retried safely
+  // because the presented refresh token stays valid.
+  const pair = await req.store.refreshAccessToken(
+    refreshToken,
+    now,
+    newAccess,
     accessExpiresAt,
     refreshExpiresAt,
-    createdAt: now,
-  });
+  );
+  if (!pair) {
+    return errorResponse(400, "invalid_grant", "refresh token is invalid or expired");
+  }
 
   return {
     status: 200,
@@ -118,7 +116,7 @@ async function handleRefreshToken(
       access_token: newAccess,
       token_type: "Bearer",
       expires_in: Math.floor(ACCESS_TOKEN_TTL_MS / 1000),
-      refresh_token: newRefresh,
+      refresh_token: refreshToken,
       scope: pair.scope,
     },
   };

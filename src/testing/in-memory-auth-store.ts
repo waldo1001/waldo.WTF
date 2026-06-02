@@ -96,17 +96,29 @@ export class InMemoryAuthStore implements AuthStore {
     return cloneTokenPair(pair);
   }
 
-  async consumeRefreshToken(
+  async refreshAccessToken(
     refreshToken: string,
     now: Date,
+    newAccessToken: string,
+    accessExpiresAt: Date,
+    refreshExpiresAt: Date,
   ): Promise<OAuthTokenPair | undefined> {
     const accessToken = this.tokensByRefresh.get(refreshToken);
-    if (!accessToken) return undefined;
+    if (accessToken === undefined) return undefined;
     const pair = this.tokensByAccess.get(accessToken);
-    if (!pair) return undefined;
+    // Non-destructive: unknown or expired refresh leaves the row untouched.
+    if (!pair || pair.refreshExpiresAt.getTime() <= now.getTime()) {
+      return undefined;
+    }
+    const updated: OAuthTokenPair = {
+      ...pair,
+      accessToken: newAccessToken,
+      accessExpiresAt: new Date(accessExpiresAt.getTime()),
+      refreshExpiresAt: new Date(refreshExpiresAt.getTime()),
+    };
     this.tokensByAccess.delete(accessToken);
-    this.tokensByRefresh.delete(refreshToken);
-    if (pair.refreshExpiresAt.getTime() <= now.getTime()) return undefined;
-    return cloneTokenPair(pair);
+    this.tokensByAccess.set(newAccessToken, updated);
+    this.tokensByRefresh.set(refreshToken, newAccessToken);
+    return cloneTokenPair(updated);
   }
 }

@@ -42,7 +42,7 @@ describe("handleTokenRequest – authorization_code grant", () => {
     });
   });
 
-  it("issues access + refresh tokens on valid code", async () => {
+  it("issues an access token with a 24h TTL on a valid code", async () => {
     const res = await handleTokenRequest({
       store,
       ids: seqIds,
@@ -58,8 +58,17 @@ describe("handleTokenRequest – authorization_code grant", () => {
     expect(res.status).toBe(200);
     expect(res.body.access_token).toBe("token-1");
     expect(res.body.token_type).toBe("Bearer");
-    expect(res.body.expires_in).toBe(3600);
+    expect(res.body.expires_in).toBe(86400);
     expect(res.body.refresh_token).toBe("token-2");
+
+    // access token expires 24h after issuance
+    const stored = await store.getAccessToken(
+      "token-1",
+      new Date(NOW.getTime() + 24 * 3600 * 1000 - 1),
+    );
+    expect(stored?.accessExpiresAt).toEqual(
+      new Date(NOW.getTime() + 24 * 3600 * 1000),
+    );
   });
 
   it("fails PKCE check → 400 invalid_grant", async () => {
@@ -199,7 +208,7 @@ describe("handleTokenRequest – refresh_token grant", () => {
     });
   });
 
-  it("rotates tokens on valid refresh_token", async () => {
+  it("refresh issues a new access token and keeps the same refresh token", async () => {
     const res = await handleTokenRequest({
       store,
       ids: seqIds,
@@ -211,13 +220,16 @@ describe("handleTokenRequest – refresh_token grant", () => {
       },
     });
     expect(res.status).toBe(200);
-    expect(res.body.access_token).toBeDefined();
-    expect(res.body.refresh_token).toBeDefined();
-    expect(res.body.refresh_token).not.toBe("token-2");
+    expect(res.body.expires_in).toBe(86400);
+    // new access token, minted fresh...
+    expect(res.body.access_token).toBe("token-3");
+    expect(res.body.access_token).not.toBe("token-1");
+    // ...but the refresh token is reused, not rotated
+    expect(res.body.refresh_token).toBe("token-2");
   });
 
-  it("old refresh token is invalid after rotation", async () => {
-    await handleTokenRequest({
+  it("the same refresh token still works after a refresh (non-bricking)", async () => {
+    const first = await handleTokenRequest({
       store,
       ids: seqIds,
       clock,
@@ -227,7 +239,8 @@ describe("handleTokenRequest – refresh_token grant", () => {
         client_id: "client-1",
       },
     });
-    const reuse = await handleTokenRequest({
+    expect(first.status).toBe(200);
+    const second = await handleTokenRequest({
       store,
       ids: seqIds,
       clock,
@@ -237,8 +250,30 @@ describe("handleTokenRequest – refresh_token grant", () => {
         client_id: "client-1",
       },
     });
-    expect(reuse.status).toBe(400);
-    expect(reuse.body.error).toBe("invalid_grant");
+    expect(second.status).toBe(200);
+    expect(second.body.refresh_token).toBe("token-2");
+    // each refresh mints a distinct new access token
+    expect(second.body.access_token).not.toBe(first.body.access_token);
+  });
+
+  it("old access token stops validating after a refresh", async () => {
+    const res = await handleTokenRequest({
+      store,
+      ids: seqIds,
+      clock,
+      body: {
+        grant_type: "refresh_token",
+        refresh_token: "token-2",
+        client_id: "client-1",
+      },
+    });
+    // token-1 was the access token from the authorization_code grant
+    expect(await store.getAccessToken("token-1", NOW)).toBeUndefined();
+    const fresh = await store.getAccessToken(
+      String(res.body.access_token),
+      NOW,
+    );
+    expect(fresh?.accessToken).toBe(res.body.access_token);
   });
 
   it("unknown refresh_token → 400 invalid_grant", async () => {

@@ -84,9 +84,12 @@ export class SqliteAuthStore implements AuthStore {
     [string, string, string, string, number, number, number]
   >;
   private readonly getAccessTokenStmt: Statement<[string]>;
-  private readonly getAndDeleteRefreshStmt: (
+  private readonly refreshTx: (
     refreshToken: string,
     nowMs: number,
+    newAccessToken: string,
+    accessExpiresAtMs: number,
+    refreshExpiresAtMs: number,
   ) => OAuthTokenPair | undefined;
 
   constructor(db: Database) {
@@ -130,19 +133,36 @@ export class SqliteAuthStore implements AuthStore {
     const selectByRefresh = db.prepare<[string]>(
       "SELECT access_token, refresh_token, client_id, scope, access_expires_at, refresh_expires_at, created_at FROM oauth_access_tokens WHERE refresh_token = ?",
     );
-    const deleteByAccess = db.prepare<[string]>(
-      "DELETE FROM oauth_access_tokens WHERE access_token = ?",
+    const updateAccess = db.prepare<[string, number, number, string]>(
+      "UPDATE oauth_access_tokens SET access_token = ?, access_expires_at = ?, refresh_expires_at = ? WHERE refresh_token = ?",
     );
-    const consumeRefreshTx = db.transaction(
-      (refreshToken: string, nowMs: number): OAuthTokenPair | undefined => {
+    const refreshTx = db.transaction(
+      (
+        refreshToken: string,
+        nowMs: number,
+        newAccessToken: string,
+        accessExpiresAtMs: number,
+        refreshExpiresAtMs: number,
+      ): OAuthTokenPair | undefined => {
         const row = selectByRefresh.get(refreshToken) as TokenRow | undefined;
-        if (!row) return undefined;
-        deleteByAccess.run(row.access_token);
-        if (row.refresh_expires_at <= nowMs) return undefined;
-        return rowToTokenPair(row);
+        // Non-destructive: unknown or expired refresh leaves the row untouched.
+        if (!row || row.refresh_expires_at <= nowMs) return undefined;
+        updateAccess.run(
+          newAccessToken,
+          accessExpiresAtMs,
+          refreshExpiresAtMs,
+          refreshToken,
+        );
+        return rowToTokenPair({
+          ...row,
+          access_token: newAccessToken,
+          access_expires_at: accessExpiresAtMs,
+          refresh_expires_at: refreshExpiresAtMs,
+        });
       },
     );
-    this.getAndDeleteRefreshStmt = (rt, nowMs) => consumeRefreshTx(rt, nowMs);
+    this.refreshTx = (rt, nowMs, newAccess, accessExp, refreshExp) =>
+      refreshTx(rt, nowMs, newAccess, accessExp, refreshExp);
   }
 
   async registerClient(reg: OAuthClientRegistration): Promise<void> {
@@ -216,10 +236,19 @@ export class SqliteAuthStore implements AuthStore {
     return rowToTokenPair(row);
   }
 
-  async consumeRefreshToken(
+  async refreshAccessToken(
     refreshToken: string,
     now: Date,
+    newAccessToken: string,
+    accessExpiresAt: Date,
+    refreshExpiresAt: Date,
   ): Promise<OAuthTokenPair | undefined> {
-    return this.getAndDeleteRefreshStmt(refreshToken, now.getTime());
+    return this.refreshTx(
+      refreshToken,
+      now.getTime(),
+      newAccessToken,
+      accessExpiresAt.getTime(),
+      refreshExpiresAt.getTime(),
+    );
   }
 }

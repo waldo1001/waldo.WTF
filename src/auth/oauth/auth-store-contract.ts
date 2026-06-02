@@ -195,32 +195,99 @@ export function runAuthStoreContract(
       expect(got).toBeUndefined();
     });
 
-    it("consumeRefreshToken returns the token pair and deletes it", async () => {
+    const HOUR_MS = 3600 * 1000;
+    const DAY_MS = 24 * HOUR_MS;
+    const REFRESH_NOW = new Date(TOKEN_NOW.getTime() + HOUR_MS);
+    const NEW_ACCESS_EXPIRES = new Date(REFRESH_NOW.getTime() + DAY_MS);
+    const NEW_REFRESH_EXPIRES = new Date(REFRESH_NOW.getTime() + 30 * DAY_MS);
+
+    it("refreshAccessToken updates the access token, keeps the refresh token, and slides both expiries", async () => {
       const store = await factory();
       await store.registerClient(reg({ clientId: "abc123" }));
       await store.saveTokenPair(tokenPair());
-      const got = await store.consumeRefreshToken("rt-1", TOKEN_NOW);
+      const got = await store.refreshAccessToken(
+        "rt-1",
+        REFRESH_NOW,
+        "at-2",
+        NEW_ACCESS_EXPIRES,
+        NEW_REFRESH_EXPIRES,
+      );
       expect(got).toBeDefined();
+      expect(got?.accessToken).toBe("at-2");
       expect(got?.refreshToken).toBe("rt-1");
-      const second = await store.consumeRefreshToken("rt-1", TOKEN_NOW);
-      expect(second).toBeUndefined();
+      expect(got?.accessExpiresAt).toEqual(NEW_ACCESS_EXPIRES);
+      expect(got?.refreshExpiresAt).toEqual(NEW_REFRESH_EXPIRES);
+      expect(got?.scope).toBe("mcp");
     });
 
-    it("consumeRefreshToken returns undefined for unknown token", async () => {
+    it("refreshAccessToken invalidates the previous access token and validates the new one", async () => {
       const store = await factory();
-      const got = await store.consumeRefreshToken("no-such", TOKEN_NOW);
+      await store.registerClient(reg({ clientId: "abc123" }));
+      await store.saveTokenPair(tokenPair());
+      await store.refreshAccessToken(
+        "rt-1",
+        REFRESH_NOW,
+        "at-2",
+        NEW_ACCESS_EXPIRES,
+        NEW_REFRESH_EXPIRES,
+      );
+      expect(await store.getAccessToken("at-1", REFRESH_NOW)).toBeUndefined();
+      const fresh = await store.getAccessToken("at-2", REFRESH_NOW);
+      expect(fresh?.accessToken).toBe("at-2");
+    });
+
+    it("refreshAccessToken keeps the same refresh token usable again (non-bricking)", async () => {
+      const store = await factory();
+      await store.registerClient(reg({ clientId: "abc123" }));
+      await store.saveTokenPair(tokenPair());
+      await store.refreshAccessToken(
+        "rt-1",
+        REFRESH_NOW,
+        "at-2",
+        NEW_ACCESS_EXPIRES,
+        NEW_REFRESH_EXPIRES,
+      );
+      const again = await store.refreshAccessToken(
+        "rt-1",
+        REFRESH_NOW,
+        "at-3",
+        NEW_ACCESS_EXPIRES,
+        NEW_REFRESH_EXPIRES,
+      );
+      expect(again?.accessToken).toBe("at-3");
+      expect(again?.refreshToken).toBe("rt-1");
+    });
+
+    it("refreshAccessToken returns undefined for an unknown refresh token", async () => {
+      const store = await factory();
+      const got = await store.refreshAccessToken(
+        "no-such",
+        REFRESH_NOW,
+        "at-2",
+        NEW_ACCESS_EXPIRES,
+        NEW_REFRESH_EXPIRES,
+      );
       expect(got).toBeUndefined();
     });
 
-    it("consumeRefreshToken returns undefined for expired token", async () => {
+    it("refreshAccessToken returns undefined for an expired refresh token and leaves the row intact", async () => {
       const store = await factory();
       await store.registerClient(reg({ clientId: "abc123" }));
+      // refresh already expired, but access token still valid
       await store.saveTokenPair(
         tokenPair({ refreshExpiresAt: new Date(TOKEN_NOW.getTime() - 1) }),
       );
-      const afterExpiry = new Date(TOKEN_NOW.getTime() + 1);
-      const got = await store.consumeRefreshToken("rt-1", afterExpiry);
+      const got = await store.refreshAccessToken(
+        "rt-1",
+        TOKEN_NOW,
+        "at-2",
+        NEW_ACCESS_EXPIRES,
+        NEW_REFRESH_EXPIRES,
+      );
       expect(got).toBeUndefined();
+      // the original access token row is untouched (not deleted/mutated)
+      const original = await store.getAccessToken("at-1", TOKEN_NOW);
+      expect(original?.accessToken).toBe("at-1");
     });
 
     it("registerClient round-trips multiple redirect URIs", async () => {

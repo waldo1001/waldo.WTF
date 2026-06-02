@@ -58,8 +58,19 @@ export interface AuthStore {
     accessToken: string,
     now: Date,
   ): Promise<OAuthTokenPair | undefined>;
-  consumeRefreshToken(
+  /**
+   * Non-rotating refresh: if `refreshToken` exists and has not passed its
+   * refresh expiry at `now`, replace its access token with `newAccessToken`
+   * (the old access token stops validating), slide `accessExpiresAt` and
+   * `refreshExpiresAt`, and keep the SAME refresh token. Returns the updated
+   * pair, or `undefined` for an unknown/expired refresh token (leaving the
+   * stored row untouched in that case).
+   */
+  refreshAccessToken(
     refreshToken: string,
     now: Date,
+    newAccessToken: string,
+    accessExpiresAt: Date,
+    refreshExpiresAt: Date,
   ): Promise<OAuthTokenPair | undefined>;
 }
