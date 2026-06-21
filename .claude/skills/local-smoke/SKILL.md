@@ -1,6 +1,6 @@
 ---
 name: local-smoke
-description: Fast pre-deploy sanity check against a throwaway SQLite DB and a non-default port. Exercises the CLI (add/list/toggle/remove + validation errors) and boots the MCP HTTP server long enough to confirm it listens and `tools/list` returns the full tool surface. Use before `/deploy-nas` to catch boot-time regressions that `npm test` doesn't. Never touches real lake data.
+description: Fast pre-deploy sanity check against a throwaway SQLite DB and a non-default port. Exercises the CLI (add/list/toggle/remove + validation errors) and boots the MCP HTTP server long enough to confirm it listens and `tools/list` returns the full tool surface. Use before `/deploy-local` to catch boot-time regressions that `npm test` doesn't. Never touches real lake data.
 ---
 
 # /local-smoke — waldo.WTF pre-deploy smoke test
@@ -14,7 +14,7 @@ state so it cannot corrupt the real lake.
 
 ## When to run
 
-- **Always** before `/deploy-nas`, after tests are green.
+- **Always** before `/deploy-local`, after tests are green.
 - On demand when the user asks to "smoke test" or "dry-run" locally.
 - After editing [src/index.ts](../../../src/index.ts), [src/cli.ts](../../../src/cli.ts),
   [src/config.ts](../../../src/config.ts), or any `src/mcp/http-server*` file.
@@ -162,6 +162,6 @@ Post one short summary in chat:
 ```
 
 On FAILURE: report the step that failed, the expected-vs-actual, and —
-critically — **do not continue to `/deploy-nas`**. Smoke failures are
+critically — **do not continue to `/deploy-local`**. Smoke failures are
 boot-path or wiring regressions, and they always reach production if
 you ship past them.

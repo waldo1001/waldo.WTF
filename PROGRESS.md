@@ -359,6 +359,27 @@ Plan: [docs/plans/done/oauth-mcp-auth-slice-5-live-smoke.md](docs/plans/done/oau
 
 ---
 
+## Infrastructure
+
+- [x] **Migrated production NAS+Docker → Mac mini native** ✅ (2026-06-21) — moved the
+  running deployment off the Synology DS223 Docker container onto `waldomacmini1`
+  running natively (no Docker), keeping the existing 1.37 GB / 65,567-message lake
+  (copied + `integrity_check`-gated, schema v15, zero re-sync) and the MSAL token cache
+  (5 accounts re-synced, 0 errors — cache is portable). Now a launchd LaunchDaemon
+  (`com.waldo.wtf.server`, `KeepAlive` + in-process watchdog replace the autoheal
+  sidecar); exposed via Tailscale Serve TLS at `https://waldomacmini1.tailb07704.ts.net`
+  (OAuth + static-bearer both live). WhatsApp push repointed (`bin/wtf-whatsapp-push`
+  now `WTF_PUSH_*`, legacy `WTF_NAS_*` still honored). NAS demoted to backup-only:
+  frozen pre-migration snapshot at `/volume1/docker/waldo-wtf/` (compose neutralized) +
+  nightly hot-snapshot backup to `/volume1/backup/waldo-wtf/` (`com.waldo.wtf.backup`).
+  Docker artifacts removed; `/deploy-nas` → `/deploy-local`. Runbook:
+  [docs/deploy-macmini.md](docs/deploy-macmini.md). Added
+  `NODE_OPTIONS=--dns-result-order=ipv4first` (this network's IPv6 path to some M365
+  endpoints stalls large responses). Follow-up: add a per-request HTTP timeout to the
+  Graph client (a hung endpoint currently blocks the first sync tick until TCP timeout).
+
+---
+
 ## Open questions (from brief §10)
 
 - [ ] Will all 4 Microsoft accounts give `Mail.Read` without admin consent? (dynex.be ✅)

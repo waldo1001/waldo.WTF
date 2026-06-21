@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  waldo.WTF — native macOS LaunchDaemon (replaces the Docker container + autoheal sidecar)
+
+  Install (root):
+    sudo cp deploy/com.waldo.wtf.server.plist /Library/LaunchDaemons/com.waldo.wtf.server.plist
+    sudo chown root:wheel /Library/LaunchDaemons/com.waldo.wtf.server.plist
+    sudo chmod 644       /Library/LaunchDaemons/com.waldo.wtf.server.plist
+    sudo launchctl bootstrap system /Library/LaunchDaemons/com.waldo.wtf.server.plist
+    sudo launchctl enable  system/com.waldo.wtf.server
+    sudo launchctl kickstart -k system/com.waldo.wtf.server
+
+  Reload after edits:
+    sudo launchctl bootout system/com.waldo.wtf.server
+    sudo launchctl bootstrap system /Library/LaunchDaemons/com.waldo.wtf.server.plist
+    sudo launchctl kickstart -k system/com.waldo.wtf.server
+
+  Inspect:    sudo launchctl print system/com.waldo.wtf.server
+  Logs:       /Users/waldo/waldo-wtf/logs/server.{out,err}.log
+
+  NO SECRETS LIVE HERE. Config + MS_CLIENT_ID/BEARER_TOKEN are loaded by dotenv from
+  /Users/waldo/waldo-wtf/.env (chmod 600), because WorkingDirectory is the data root.
+  KeepAlive restarts on crash AND on the in-process event-loop watchdog's process.exit
+  (the autoheal replacement). ThrottleInterval backs off crash loops.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.waldo.wtf.server</string>
+
+    <key>UserName</key>
+    <string>waldo</string>
+    <key>GroupName</key>
+    <string>staff</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/opt/node@22/bin/node</string>
+        <string>/Users/waldo/Sourcecode/waldo.wtf/node_modules/.bin/tsx</string>
+        <string>/Users/waldo/Sourcecode/waldo.wtf/src/cli.ts</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/waldo/waldo-wtf</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/opt/node@22/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/waldo</string>
+        <!-- This network's IPv6 path to Microsoft 365 endpoints is a PMTU black hole:
+             small responses pass but large Graph delta payloads wedge an established
+             IPv6 socket. macOS prefers AAAA, so Node connects over IPv6 and hangs the
+             sync. The NAS (Docker/Linux, IPv4) never hit this. Force IPv4-first so
+             outbound Graph/MSAL traffic uses the healthy IPv4 path. -->
+        <key>NODE_OPTIONS</key>
+        <string>--dns-result-order=ipv4first</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/waldo/waldo-wtf/logs/server.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/waldo/waldo-wtf/logs/server.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

@@ -1,10 +1,14 @@
 # Migration registry
 
 One-shot data migrations that run against the production waldo.WTF lake
-on the Synology. The `/deploy-nas --migrate <name>` skill reads recipes
-from this directory — every file has the schema documented in
-[../plans/done/deploy-nas-skill.md](../plans/done/deploy-nas-skill.md) so the skill
-can drive any of them the same way.
+on the **Mac mini** (`waldomacmini1`, native, no Docker). The
+`/deploy-local --migrate <name>` skill reads recipes from this directory
+and drives them as native one-shots (stop daemon → `tsx src/cli.ts --<flag>`
+→ restart); see [../deploy-macmini.md](../deploy-macmini.md).
+
+> Recipe command blocks below were written for the retired Docker-on-Synology
+> deploy (`docker compose run --rm waldo --<flag>`). The migration *logic* and
+> CLI flags are unchanged; substitute the native invocation from `/deploy-local`.
 
 Adding a new migration: drop a new `<name>.md` here following the same
 shape as an existing recipe, then add a row below. Do not rename or

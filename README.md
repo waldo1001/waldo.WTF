@@ -48,16 +48,17 @@ multi-account) and an HTTP MCP server
 (bearer-token auth, read-only tools: `get_recent_activity`, `search`,
 `get_thread`, `list_accounts`, `list_threads`, `get_sync_status`, plus
 four steering tools that write only to the local `steering_rules`
-table). Runs locally during development, on a Synology NAS behind
-Tailscale in production. Claude does all the summarizing — tools return
-raw rows, Claude reasons over them.
+table). Runs locally during development; in production it runs **natively
+on a Mac mini** (`waldomacmini1`, no Docker) behind Tailscale, with the NAS
+demoted to a nightly backup target. Claude does all the summarizing — tools
+return raw rows, Claude reasons over them.
 
 Full architecture and decision rationale: [project brief §3–4](waldo.WTF-project-brief.md).
 
 ## Status
 
 Weekends 3–8 complete. All five message sources are live and syncing on
-the NAS: Outlook (mail + sent), Teams chats (1:1 + group), Teams channels
+the Mac mini (migrated off the NAS+Docker on 2026-06-21): Outlook (mail + sent), Teams chats (1:1 + group), Teams channels
 (opt-in per channel), Viva Engage (Yammer REST, including external/guest
 networks), and WhatsApp (manual export watcher). Full MCP surface operational — six read tools plus four
 steering tools — behind both static-bearer (Claude Desktop) and OAuth
@@ -130,7 +131,7 @@ updated whenever:
 - the **scope** changes (new source, new tool, new deployment target,
   new non-goal)
 - the **status** materially changes (weekend complete, new milestone,
-  deployment moved from Mac → NAS)
+  deployment moved Mac → NAS → Mac mini native)
 - the **architecture** changes (new seam, removed component, new
   runtime dependency)
 - a **new top-level document** is added under `/docs` or the repo root

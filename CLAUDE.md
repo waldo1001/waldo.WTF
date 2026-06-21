@@ -64,21 +64,22 @@ done, **cite the test names that cover each requirement**.
   [getting-started](docs/getting-started.md), and [user guide](docs/user-guide.md)
   in sync with reality.
 - [`/local-smoke`](.claude/skills/local-smoke/SKILL.md) — invoke before
-  `/deploy-nas` (or whenever the user says "smoke test"). Boots
+  `/deploy-local` (or whenever the user says "smoke test"). Boots
   [src/index.ts](src/index.ts) against a throwaway SQLite on a
   non-default port and exercises the CLI + `tools/list`. Catches
   boot-path regressions that `npm test` can't — env wiring, real
   SQLite open, steering-store construction, OAuth conditional mount.
-- [`/deploy-nas`](.claude/skills/deploy-nas/SKILL.md) — invoke when
-  shipping code changes to the running Synology container, or when
-  running any one-shot data migration from [docs/migrations/](docs/migrations/).
-  Drives the full build → ship → stop → migrate → verify → restart →
-  smoke loop one command at a time. `--migrate <name>` inserts a
-  registered migration; `--dry-run` prints the plan without executing.
+- [`/deploy-local`](.claude/skills/deploy-local/SKILL.md) — invoke when
+  shipping code changes to the running **Mac mini** (`waldomacmini1`) native
+  LaunchDaemon (no Docker), or when running any one-shot data migration from
+  [docs/migrations/](docs/migrations/). Drives test → local-smoke → pull →
+  `npm ci` → restart (`launchctl kickstart`) → re-assert Tailscale Serve →
+  smoke. `--migrate <name>` runs a registered migration; `--dry-run` prints
+  the plan without executing. Full runbook: [docs/deploy-macmini.md](docs/deploy-macmini.md).
 
 A task is not done until all three coding skills (tdd-cycle,
 security-scan, docs-update) have been run. `/local-smoke` and
-`/deploy-nas` are separate operator workflows, invoked when you want
+`/deploy-local` are separate operator workflows, invoked when you want
 to ship — not part of the coding-task definition-of-done.
 
 GitHub Copilot uses the **same** toolchain via
