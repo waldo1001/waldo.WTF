@@ -1,15 +1,34 @@
-import type { Message, SteeringRule } from "./types.js";
+import { escapeLikePattern } from "./like-pattern.js";
+import type { CalendarEvent, Message, SteeringRule, SteeringRuleType } from "./types.js";
 
-export interface SteeringPredicate {
+export type SteeringTarget = "message" | "event";
+
+export interface SteeringPredicate<T> {
   readonly sqlFragment: string | null;
   readonly params: readonly (string | number)[];
-  matches(msg: Message): boolean;
+  matches(item: T): boolean;
 }
 
-interface ClauseBuild {
+interface ClauseBuild<T> {
   sql: string;
   params: (string | number)[];
-  match(msg: Message): boolean;
+  match(item: T): boolean;
+}
+
+// Which side of the schema a rule type filters. Exhaustive switch: adding a
+// rule type to STEERING_RULE_TYPES without a case here is a compile error.
+function ruleTarget(ruleType: SteeringRuleType): SteeringTarget {
+  switch (ruleType) {
+    case "sender_email":
+    case "sender_domain":
+    case "thread_id":
+    case "thread_name_contains":
+    case "body_contains":
+      return "message";
+    case "event_organizer_email":
+    case "event_subject_contains":
+      return "event";
+  }
 }
 
 function scopeMatchesMessage(rule: SteeringRule, msg: Message): boolean {
@@ -18,7 +37,7 @@ function scopeMatchesMessage(rule: SteeringRule, msg: Message): boolean {
   return true;
 }
 
-function buildScopeSql(rule: SteeringRule): {
+function buildMessageScopeSql(rule: SteeringRule): {
   sql: string;
   params: (string | number)[];
 } {
@@ -42,8 +61,8 @@ function buildScopeSql(rule: SteeringRule): {
 // rows, because muting a whole thread is a stronger, explicit intent.
 const isFromMe = (msg: Message): boolean => msg.fromMe === true;
 
-function buildClause(rule: SteeringRule): ClauseBuild {
-  const scope = buildScopeSql(rule);
+function buildMessageClause(rule: SteeringRule): ClauseBuild<Message> {
+  const scope = buildMessageScopeSql(rule);
   switch (rule.ruleType) {
     case "sender_email": {
       const needle = rule.pattern;
@@ -96,28 +115,100 @@ function buildClause(rule: SteeringRule): ClauseBuild {
           (msg.body ?? "").toLowerCase().includes(rule.pattern),
       };
     }
+    /* c8 ignore next 3 -- unreachable: ruleTarget() filters event-targeted rules out before this is called */
+    default:
+      throw new Error(`not a message-targeted rule type: ${rule.ruleType}`);
   }
 }
 
-export function buildSteeringPredicate(
-  rules: readonly SteeringRule[],
-): SteeringPredicate {
-  const enabled = rules.filter((r) => r.enabled);
-  if (enabled.length === 0) {
+// Events have no MessageSource-comparable "source" dimension, so only
+// `account` scopes an event-targeted rule; `source` (if ever set on such a
+// rule) is simply not applicable and is ignored here.
+function scopeMatchesEvent(rule: SteeringRule, event: CalendarEvent): boolean {
+  if (rule.account !== undefined && event.account !== rule.account) return false;
+  return true;
+}
+
+function buildEventScopeSql(rule: SteeringRule): {
+  sql: string;
+  params: (string | number)[];
+} {
+  if (rule.account !== undefined) {
+    return { sql: "e.account = ?", params: [rule.account] };
+  }
+  return { sql: "1", params: [] };
+}
+
+function buildEventClause(rule: SteeringRule): ClauseBuild<CalendarEvent> {
+  const scope = buildEventScopeSql(rule);
+  switch (rule.ruleType) {
+    case "event_organizer_email": {
+      const needle = rule.pattern;
+      return {
+        sql: `(${scope.sql} AND LOWER(e.organizer_email) = ?)`,
+        params: [...scope.params, needle],
+        match: (event) =>
+          scopeMatchesEvent(rule, event) &&
+          (event.organizerEmail ?? "").toLowerCase() === needle,
+      };
+    }
+    case "event_subject_contains": {
+      const needle = `%${escapeLikePattern(rule.pattern)}%`;
+      return {
+        sql: `(${scope.sql} AND LOWER(e.subject) LIKE ? ESCAPE '\\')`,
+        params: [...scope.params, needle],
+        match: (event) =>
+          scopeMatchesEvent(rule, event) &&
+          (event.subject ?? "").toLowerCase().includes(rule.pattern),
+      };
+    }
+    /* c8 ignore next 3 -- unreachable: ruleTarget() filters message-targeted rules out before this is called */
+    default:
+      throw new Error(`not an event-targeted rule type: ${rule.ruleType}`);
+  }
+}
+
+// COALESCE guards against SQL three-valued logic: a clause like
+// `LOWER(m.sender_email) = ?` yields NULL (not FALSE) when the column is
+// NULL, which would make `NOT <fragment>` evaluate to NULL and silently
+// drop rows with null columns (e.g. every whatsapp message under a
+// sender_email rule, or every in-person event under an organizer rule).
+// Forcing NULL → 0 keeps those rows in results.
+function combine<T>(built: readonly ClauseBuild<T>[]): SteeringPredicate<T> {
+  if (built.length === 0) {
     return { sqlFragment: null, params: [], matches: () => false };
   }
-  const built = enabled.map(buildClause);
-  // COALESCE guards against SQL three-valued logic: a clause like
-  // `LOWER(m.sender_email) = ?` yields NULL (not FALSE) when the column is
-  // NULL, which would make `NOT <fragment>` evaluate to NULL and silently
-  // drop rows with null columns (e.g. every whatsapp message under a
-  // sender_email rule). Forcing NULL → 0 keeps those rows in results.
   const sqlFragment = `COALESCE((${built.map((c) => c.sql).join(" OR ")}), 0)`;
   const params: (string | number)[] = [];
   for (const c of built) params.push(...c.params);
   return {
     sqlFragment,
     params,
-    matches: (msg) => built.some((c) => c.match(msg)),
+    matches: (item) => built.some((c) => c.match(item)),
   };
+}
+
+// `target` is required (no default) so a caller can never accidentally
+// apply message-scoped filtering to events or vice versa — the two rule
+// families share this one builder, but a wrong-target bug would otherwise
+// be silent (both produce a same-shaped SteeringPredicate).
+export function buildSteeringPredicate(
+  rules: readonly SteeringRule[],
+  target: "message",
+): SteeringPredicate<Message>;
+export function buildSteeringPredicate(
+  rules: readonly SteeringRule[],
+  target: "event",
+): SteeringPredicate<CalendarEvent>;
+export function buildSteeringPredicate(
+  rules: readonly SteeringRule[],
+  target: SteeringTarget,
+): SteeringPredicate<Message> | SteeringPredicate<CalendarEvent> {
+  const enabled = rules.filter(
+    (r) => r.enabled && ruleTarget(r.ruleType) === target,
+  );
+  if (target === "message") {
+    return combine(enabled.map(buildMessageClause));
+  }
+  return combine(enabled.map(buildEventClause));
 }

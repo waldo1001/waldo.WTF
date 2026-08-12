@@ -1,7 +1,7 @@
 import type { Clock } from "../../clock.js";
 import type { MessageStore } from "../../store/message-store.js";
 import type {
-  MessageSource,
+  SyncLogSource,
   SyncLogStatus,
   SyncStatusRow,
 } from "../../store/types.js";
@@ -10,7 +10,7 @@ export const STALE_THRESHOLD_MS = 15 * 60 * 1000;
 
 export interface SyncStatusRowView {
   readonly account: string;
-  readonly source: MessageSource;
+  readonly source: SyncLogSource;
   readonly lastSyncAt?: string;
   readonly lastOkAt?: string;
   readonly lastStatus?: SyncLogStatus;

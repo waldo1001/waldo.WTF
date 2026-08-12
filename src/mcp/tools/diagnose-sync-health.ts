@@ -2,8 +2,8 @@ import type { Clock } from "../../clock.js";
 import type { MessageStore } from "../../store/message-store.js";
 import type { VivaSubscriptionStore } from "../../store/viva-subscription-store.js";
 import type {
-  MessageSource,
   SyncLogEntry,
+  SyncLogSource,
   SyncStatusRow,
   VivaSubscription,
 } from "../../store/types.js";
@@ -32,7 +32,7 @@ export interface Finding {
   readonly category: FindingCategory;
   readonly severity: FindingSeverity;
   readonly account: string;
-  readonly source?: MessageSource;
+  readonly source?: SyncLogSource;
   readonly summary: string;
   readonly evidence: Readonly<Record<string, unknown>>;
   readonly remediationPrompt: string;
@@ -192,7 +192,7 @@ function findingForPair(
 function countConsecutiveTrailingErrors(
   logs: readonly SyncLogEntry[],
   account: string,
-  source: MessageSource,
+  source: SyncLogSource,
 ): number {
   const forPair = logs.filter(
     (l) => l.account === account && l.source === source,

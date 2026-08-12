@@ -10,7 +10,7 @@ import { InvalidParamsError } from "./get-recent-activity.js";
 const clockAt = (iso: string): FakeClock => new FakeClock(new Date(iso));
 
 describe("handleAddSteeringRule", () => {
-  it("validates rule_type against the 5 allowed values", async () => {
+  it("validates rule_type against the 7 allowed values", async () => {
     const steering = new InMemorySteeringStore();
     const clock = clockAt("2026-04-20T10:00:00Z");
     await expect(
@@ -119,6 +119,32 @@ describe("handleAddSteeringRule", () => {
       pattern: "Sync Fail",
     });
     expect(body.rule.pattern).toBe("sync fail");
+  });
+
+  it("AC2: add_steering_rule accepts event-targeted rule types", async () => {
+    const steering = new InMemorySteeringStore();
+    const clock = clockAt("2026-04-20T10:00:00Z");
+    const organizer = await handleAddSteeringRule(steering, clock, {
+      rule_type: "event_organizer_email",
+      pattern: "Noisy@Example.TEST",
+    });
+    expect(organizer.rule.ruleType).toBe("event_organizer_email");
+    expect(organizer.rule.pattern).toBe("noisy@example.test");
+
+    const subject = await handleAddSteeringRule(steering, clock, {
+      rule_type: "event_subject_contains",
+      pattern: "Daily STANDUP",
+    });
+    expect(subject.rule.ruleType).toBe("event_subject_contains");
+    expect(subject.rule.pattern).toBe("daily standup");
+
+    // typo on rule type -> InvalidParams
+    await expect(
+      handleAddSteeringRule(steering, clock, {
+        rule_type: "event_organiser_email",
+        pattern: "x",
+      }),
+    ).rejects.toBeInstanceOf(InvalidParamsError);
   });
 
   it("preserves case for thread_id", async () => {

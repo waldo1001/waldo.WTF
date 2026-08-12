@@ -1,6 +1,11 @@
 import {
+  composeRecentItems,
   DEFAULT_GET_THREAD_LIMIT,
   type DeleteResult,
+  type FindEventsOptions,
+  type FindEventsResult,
+  type GetRecentItemsOptions,
+  type GetRecentItemsResult,
   type GetRecentMessagesOptions,
   type GetRecentMessagesResult,
   type GetThreadOptions,
@@ -8,20 +13,33 @@ import {
   type MessageStore,
   type SearchMessagesOptions,
   type SearchMessagesResult,
+  type SearchTranscriptSegmentsResult,
+  type TranscriptWithSegments,
   type UpsertResult,
+  type UpsertTranscriptInput,
 } from "../store/message-store.js";
-import { buildSteeringPredicate } from "../store/steering-filter.js";
+import {
+  buildSteeringPredicate,
+  type SteeringPredicate,
+} from "../store/steering-filter.js";
 import type { SteeringStore } from "../store/steering-store.js";
 import type {
   AccountRecord,
+  CalendarEvent,
   ChatCursorEntry,
+  EventKey,
   Message,
   MessageSource,
   SearchHit,
   SyncLogEntry,
+  SyncLogSource,
   SyncStateEntry,
   SyncStatusRow,
   ThreadSummary,
+  Transcript,
+  TranscriptKey,
+  TranscriptSearchHit,
+  TranscriptStatus,
 } from "../store/types.js";
 
 export type InMemoryMessageStoreCall =
@@ -38,6 +56,7 @@ export type InMemoryMessageStoreCall =
       limit: number;
       opts?: SearchMessagesOptions;
     }
+  | { method: "searchTranscriptSegments"; query: string; limit: number }
   | { method: "getRecentMessages"; opts: GetRecentMessagesOptions }
   | { method: "getThread"; opts: GetThreadOptions }
   | {
@@ -47,7 +66,26 @@ export type InMemoryMessageStoreCall =
   | { method: "getSyncStatus"; now: Date }
   | { method: "getChatCursor"; account: string; chatId: string }
   | { method: "setChatCursor"; entry: ChatCursorEntry }
-  | { method: "listChatCursors"; account: string };
+  | { method: "listChatCursors"; account: string }
+  | { method: "upsertEvents"; events: readonly CalendarEvent[] }
+  | { method: "deleteEvents"; keys: readonly EventKey[] }
+  | {
+      method: "getEventsInRange";
+      account: string;
+      from: Date;
+      to: Date;
+    }
+  | { method: "getEventByKey"; key: EventKey }
+  | { method: "findEvents"; opts: FindEventsOptions }
+  | { method: "upsertTranscript"; input: UpsertTranscriptInput }
+  | { method: "getTranscriptByKey"; key: TranscriptKey }
+  | { method: "listTranscriptsForEvent"; account: string; eventId: string }
+  | {
+      method: "markTranscriptStatus";
+      key: TranscriptKey;
+      status: TranscriptStatus;
+      fetchedAt: Date;
+    };
 
 export interface InMemoryMessageStoreOptions {
   seed?: {
@@ -60,9 +98,18 @@ export interface InMemoryMessageStoreOptions {
 
 const syncKey = (
   account: string,
-  source: MessageSource,
+  source: SyncLogSource,
   folder: string,
 ): string => `${account}::${source}::${folder}`;
+
+const eventKey = (account: string, eventId: string): string =>
+  `${account}::${eventId}`;
+
+const transcriptKey = (
+  account: string,
+  eventId: string,
+  transcriptId: string,
+): string => `${account}::${eventId}::${transcriptId}`;
 
 export class InMemoryMessageStore implements MessageStore {
   readonly calls: InMemoryMessageStoreCall[] = [];
@@ -71,6 +118,8 @@ export class InMemoryMessageStore implements MessageStore {
   private readonly syncState = new Map<string, SyncStateEntry>();
   private readonly accounts = new Map<string, AccountRecord>();
   private readonly chatCursors = new Map<string, ChatCursorEntry>();
+  private readonly events = new Map<string, CalendarEvent>();
+  private readonly transcripts = new Map<string, TranscriptWithSegments>();
   private readonly steeringStore: SteeringStore | undefined;
 
   constructor(opts: InMemoryMessageStoreOptions = {}) {
@@ -88,12 +137,22 @@ export class InMemoryMessageStore implements MessageStore {
 
   private async loadPredicate(
     includeMuted: boolean | undefined,
-  ): Promise<ReturnType<typeof buildSteeringPredicate>> {
+  ): Promise<SteeringPredicate<Message>> {
     if (includeMuted === true || this.steeringStore === undefined) {
-      return buildSteeringPredicate([]);
+      return buildSteeringPredicate([], "message");
     }
     const rules = await this.steeringStore.listRules();
-    return buildSteeringPredicate(rules);
+    return buildSteeringPredicate(rules, "message");
+  }
+
+  private async loadEventPredicate(
+    includeMuted: boolean | undefined,
+  ): Promise<SteeringPredicate<CalendarEvent>> {
+    if (includeMuted === true || this.steeringStore === undefined) {
+      return buildSteeringPredicate([], "event");
+    }
+    const rules = await this.steeringStore.listRules();
+    return buildSteeringPredicate(rules, "event");
   }
 
   async upsertMessages(messages: readonly Message[]): Promise<UpsertResult> {
@@ -212,6 +271,23 @@ export class InMemoryMessageStore implements MessageStore {
     return { hits: hits.slice(0, limit), mutedCount };
   }
 
+  async searchTranscriptSegments(
+    query: string,
+    limit: number,
+  ): Promise<SearchTranscriptSegmentsResult> {
+    this.calls.push({ method: "searchTranscriptSegments", query, limit });
+    const needle = query.trim().toLowerCase();
+    if (needle === "") return { hits: [] };
+    const hits: TranscriptSearchHit[] = [];
+    for (const { segments } of this.transcripts.values()) {
+      for (const s of segments) {
+        if (!s.text.toLowerCase().includes(needle)) continue;
+        hits.push({ segment: s, snippet: s.text, rank: 0 });
+      }
+    }
+    return { hits: hits.slice(0, limit) };
+  }
+
   async getSyncLogRecent(limit: number): Promise<readonly SyncLogEntry[]> {
     if (limit <= 0) return [];
     const sorted = this.syncLog
@@ -226,8 +302,8 @@ export class InMemoryMessageStore implements MessageStore {
 
   async getSyncStatus(now: Date): Promise<readonly SyncStatusRow[]> {
     this.calls.push({ method: "getSyncStatus", now });
-    const pairs = new Map<string, { account: string; source: MessageSource }>();
-    const pairKey = (account: string, source: MessageSource): string =>
+    const pairs = new Map<string, { account: string; source: SyncLogSource }>();
+    const pairKey = (account: string, source: SyncLogSource): string =>
       `${account}::${source}`;
     for (const s of this.syncState.values()) {
       pairs.set(pairKey(s.account, s.source), {
@@ -393,5 +469,168 @@ export class InMemoryMessageStore implements MessageStore {
       return b.id.localeCompare(a.id);
     });
     return { messages: rows.slice(0, opts.limit), mutedCount };
+  }
+
+  async upsertEvents(events: readonly CalendarEvent[]): Promise<void> {
+    this.calls.push({ method: "upsertEvents", events });
+    for (const e of events) {
+      const attendees = e.attendees.map((a) => ({
+        ...a,
+        email: a.email.toLowerCase(),
+      }));
+      this.events.set(eventKey(e.account, e.eventId), { ...e, attendees });
+    }
+  }
+
+  async deleteEvents(keys: readonly EventKey[]): Promise<void> {
+    this.calls.push({ method: "deleteEvents", keys });
+    for (const k of keys) {
+      this.events.delete(eventKey(k.account, k.eventId));
+    }
+  }
+
+  async getEventsInRange(
+    account: string,
+    from: Date,
+    to: Date,
+  ): Promise<readonly CalendarEvent[]> {
+    this.calls.push({ method: "getEventsInRange", account, from, to });
+    const fromMs = from.getTime();
+    const toMs = to.getTime();
+    const rows = [...this.events.values()].filter(
+      (e) =>
+        e.account === account &&
+        e.startAt.getTime() <= toMs &&
+        e.endAt.getTime() >= fromMs,
+    );
+    rows.sort((a, b) => a.startAt.getTime() - b.startAt.getTime());
+    return rows;
+  }
+
+  async getEventByKey(key: EventKey): Promise<CalendarEvent | null> {
+    this.calls.push({ method: "getEventByKey", key });
+    return this.events.get(eventKey(key.account, key.eventId)) ?? null;
+  }
+
+  async findEvents(opts: FindEventsOptions): Promise<FindEventsResult> {
+    this.calls.push({ method: "findEvents", opts });
+    const fromMs = opts.from.getTime();
+    const toMs = opts.to.getTime();
+    const accountsSet =
+      opts.accounts && opts.accounts.length > 0 ? new Set(opts.accounts) : null;
+    const subjectNeedle = opts.subjectContains?.toLowerCase();
+    const attendeeNeedle = opts.attendee?.toLowerCase();
+
+    const rows = [...this.events.values()].filter((e) => {
+      if (accountsSet !== null && !accountsSet.has(e.account)) return false;
+      if (e.startAt.getTime() > toMs || e.endAt.getTime() < fromMs) return false;
+      if (
+        subjectNeedle !== undefined &&
+        !(e.subject ?? "").toLowerCase().includes(subjectNeedle)
+      ) {
+        return false;
+      }
+      if (attendeeNeedle !== undefined) {
+        const organizerMatch =
+          (e.organizerName ?? "").toLowerCase().includes(attendeeNeedle) ||
+          (e.organizerEmail ?? "").toLowerCase().includes(attendeeNeedle);
+        const attendeeMatch = e.attendees.some(
+          (a) =>
+            (a.displayName ?? "").toLowerCase().includes(attendeeNeedle) ||
+            a.email.toLowerCase().includes(attendeeNeedle),
+        );
+        if (!organizerMatch && !attendeeMatch) return false;
+      }
+      return true;
+    });
+
+    const predicate = await this.loadEventPredicate(opts.includeMuted);
+    let mutedCount = 0;
+    const visible = rows.filter((e) => {
+      if (predicate.matches(e)) {
+        mutedCount++;
+        return false;
+      }
+      return true;
+    });
+
+    visible.sort((a, b) => {
+      const diff = a.startAt.getTime() - b.startAt.getTime();
+      return opts.order === "desc" ? -diff : diff;
+    });
+
+    const truncated = visible.length > opts.limit;
+    return { events: visible.slice(0, opts.limit), truncated, mutedCount };
+  }
+
+  async getRecentItems(
+    opts: GetRecentItemsOptions,
+  ): Promise<GetRecentItemsResult> {
+    return composeRecentItems(this, opts);
+  }
+
+  async upsertTranscript(input: UpsertTranscriptInput): Promise<void> {
+    this.calls.push({ method: "upsertTranscript", input });
+    const { transcript, segments } = input;
+    this.transcripts.set(
+      transcriptKey(transcript.account, transcript.eventId, transcript.transcriptId),
+      { transcript, segments: [...segments].sort((a, b) => a.sequence - b.sequence) },
+    );
+  }
+
+  async getTranscriptByKey(
+    key: TranscriptKey,
+  ): Promise<TranscriptWithSegments | null> {
+    this.calls.push({ method: "getTranscriptByKey", key });
+    return (
+      this.transcripts.get(
+        transcriptKey(key.account, key.eventId, key.transcriptId),
+      ) ?? null
+    );
+  }
+
+  async listTranscriptsForEvent(
+    account: string,
+    eventId: string,
+  ): Promise<readonly Transcript[]> {
+    this.calls.push({ method: "listTranscriptsForEvent", account, eventId });
+    const rows = [...this.transcripts.values()]
+      .filter(
+        (t) => t.transcript.account === account && t.transcript.eventId === eventId,
+      )
+      .map((t) => t.transcript);
+    rows.sort((a, b) => a.fetchedAt.getTime() - b.fetchedAt.getTime());
+    return rows;
+  }
+
+  async markTranscriptStatus(
+    key: TranscriptKey,
+    status: TranscriptStatus,
+    fetchedAt: Date,
+  ): Promise<void> {
+    this.calls.push({ method: "markTranscriptStatus", key, status, fetchedAt });
+    const k = transcriptKey(key.account, key.eventId, key.transcriptId);
+    const existing = this.transcripts.get(k);
+    if (existing !== undefined) {
+      this.transcripts.set(k, {
+        transcript: { ...existing.transcript, status, fetchedAt },
+        segments: existing.segments,
+      });
+      return;
+    }
+    // No existing row for this key — insert a status-only marker so a
+    // retry-cooldown policy (a later slice) has something to key off of
+    // without a real transcript ever existing, mirroring SqliteMessageStore.
+    this.transcripts.set(k, {
+      transcript: {
+        account: key.account,
+        eventId: key.eventId,
+        transcriptId: key.transcriptId,
+        fetchedAt,
+        segmentCount: 0,
+        status,
+      },
+      segments: [],
+    });
   }
 }

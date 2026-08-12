@@ -15,6 +15,19 @@ export const TEAMS_CHANNEL_SCOPES = [
   "Channel.ReadBasic.All",
   "ChannelMessage.Read.All",
 ] as const;
+// Calendar is per-account opt-in (calendar-overview.md's cross-cutting
+// decision): this scope is requested ONLY at --calendar-enable time for
+// the specific account being enabled, never merged into base SCOPES —
+// that separation is what keeps non-opted-in accounts from ever being
+// re-prompted for consent.
+export const CALENDAR_SCOPES = ["Calendars.Read"] as const;
+// Transcripts are opt-in on top of calendar (calendar-transcripts.md's
+// per-account opt-in decision): requested ONLY at --transcripts-enable
+// time, alongside the account's existing SCOPES + CALENDAR_SCOPES
+// (incremental delegated consent — Entra treats the combined re-request
+// as one grant). Never merged into CALENDAR_SCOPES — an account can have
+// calendar without transcripts.
+export const TRANSCRIPT_SCOPES = ["OnlineMeetingTranscript.Read.All"] as const;
 
 export function vivaAuthorityFor(tenantId: string): string {
   return `https://login.microsoftonline.com/${tenantId}/`;

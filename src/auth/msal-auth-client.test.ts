@@ -1,8 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   MsalAuthClient,
+  CALENDAR_SCOPES,
   DEFAULT_AUTHORITY,
   SCOPES,
+  TRANSCRIPT_SCOPES,
   YAMMER_SCOPE,
   YAMMER_PUBLIC_CLIENT_ID,
 } from "./msal-auth-client.js";
@@ -103,6 +105,27 @@ describe("MsalAuthClient", () => {
     expect(SCOPES).toContain("Chat.Read");
     expect(SCOPES).not.toContain(YAMMER_SCOPE);
     expect(SCOPES).not.toContain("Community.Read.All");
+  });
+
+  it("SCOPES still equals exactly Mail.Read and Chat.Read; CALENDAR_SCOPES equals exactly Calendars.Read", () => {
+    expect(SCOPES).toEqual(["Mail.Read", "Chat.Read"]);
+    expect(CALENDAR_SCOPES).toEqual(["Calendars.Read"]);
+    expect(SCOPES as readonly string[]).not.toContain("Calendars.Read");
+    expect(CALENDAR_SCOPES as readonly string[]).not.toContain("Mail.Read");
+    expect(CALENDAR_SCOPES as readonly string[]).not.toContain("Chat.Read");
+  });
+
+  it("TRANSCRIPT_SCOPES equals exactly OnlineMeetingTranscript.Read.All and is never merged into SCOPES or CALENDAR_SCOPES", () => {
+    expect(TRANSCRIPT_SCOPES).toEqual(["OnlineMeetingTranscript.Read.All"]);
+    expect(SCOPES as readonly string[]).not.toContain(
+      "OnlineMeetingTranscript.Read.All",
+    );
+    expect(CALENDAR_SCOPES as readonly string[]).not.toContain(
+      "OnlineMeetingTranscript.Read.All",
+    );
+    expect(TRANSCRIPT_SCOPES as readonly string[]).not.toContain(
+      "Calendars.Read",
+    );
   });
 
   it("YAMMER_PUBLIC_CLIENT_ID is the Azure CLI public client id", () => {

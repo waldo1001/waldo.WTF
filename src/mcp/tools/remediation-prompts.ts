@@ -1,4 +1,4 @@
-import type { MessageSource } from "../../store/types.js";
+import type { SyncLogSource } from "../../store/types.js";
 import type { FindingCategory } from "./classify-error.js";
 
 export function redactSecretsFromError(raw: string): string {
@@ -11,7 +11,7 @@ export function redactSecretsFromError(raw: string): string {
 export interface RemediationInput {
   readonly category: FindingCategory;
   readonly account: string;
-  readonly source?: MessageSource;
+  readonly source?: SyncLogSource;
   readonly tenantId?: string;
   readonly lastError?: string;
   readonly retryAfterSeconds?: number;

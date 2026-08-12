@@ -51,6 +51,9 @@ describe("createMcpServer (SDK, in-memory transport)", () => {
     expect(names).toEqual([
       "add_steering_rule",
       "diagnose_sync_health",
+      "find_events",
+      "get_event",
+      "get_event_transcript",
       "get_recent_activity",
       "get_steering",
       "get_sync_status",
@@ -76,6 +79,106 @@ describe("createMcpServer (SDK, in-memory transport)", () => {
       type: "object",
       required: ["rule_type", "pattern"],
     });
+  });
+
+  it("mcp server registers find_events", async () => {
+    const res = await client.listTools();
+    const names = res.tools.map((t) => t.name);
+    expect(names).toContain("find_events");
+  });
+
+  it("mcp server registers get_event with eventId required and account optional", async () => {
+    const res = await client.listTools();
+    const getEvent = res.tools.find((t) => t.name === "get_event");
+    expect(getEvent?.inputSchema).toMatchObject({
+      type: "object",
+      required: ["event_id"],
+      properties: {
+        event_id: { type: "string" },
+        account: { type: "string" },
+      },
+    });
+  });
+
+  it("mcp server registers get_event_transcript with event_id required and account optional", async () => {
+    const res = await client.listTools();
+    const tool = res.tools.find((t) => t.name === "get_event_transcript");
+    expect(tool?.inputSchema).toMatchObject({
+      type: "object",
+      required: ["event_id"],
+      properties: {
+        event_id: { type: "string" },
+        account: { type: "string" },
+      },
+    });
+  });
+
+  it("dispatches get_event through the tool call surface", async () => {
+    await store.upsertEvents([
+      {
+        account: "a@example.test",
+        eventId: "evt-1",
+        subject: "Dispatch check",
+        startAt: new Date("2026-04-13T10:00:00Z"),
+        endAt: new Date("2026-04-13T11:00:00Z"),
+        isAllDay: false,
+        isCancelled: false,
+        attendees: [],
+      },
+    ]);
+    const res = await client.callTool({
+      name: "get_event",
+      arguments: { event_id: "evt-1", account: "a@example.test" },
+    });
+    const content = res.content as Array<{ type: string; text: string }>;
+    const parsed = JSON.parse(content[0]!.text) as { event: { subject: string } };
+    expect(parsed.event.subject).toBe("Dispatch check");
+  });
+
+  it("dispatches get_event_transcript through the tool call surface", async () => {
+    await store.upsertEvents([
+      {
+        account: "a@example.test",
+        eventId: "evt-1",
+        startAt: new Date("2026-04-13T10:00:00Z"),
+        endAt: new Date("2026-04-13T11:00:00Z"),
+        isAllDay: false,
+        isCancelled: false,
+        attendees: [],
+      },
+    ]);
+    await store.upsertTranscript({
+      transcript: {
+        account: "a@example.test",
+        eventId: "evt-1",
+        transcriptId: "tr-1",
+        fetchedAt: new Date("2026-04-13T11:05:00Z"),
+        segmentCount: 1,
+        status: "ok",
+      },
+      segments: [
+        {
+          account: "a@example.test",
+          eventId: "evt-1",
+          transcriptId: "tr-1",
+          sequence: 0,
+          startOffsetMs: 0,
+          endOffsetMs: 1000,
+          text: "Dispatch check.",
+        },
+      ],
+    });
+    const res = await client.callTool({
+      name: "get_event_transcript",
+      arguments: { event_id: "evt-1", account: "a@example.test" },
+    });
+    const content = res.content as Array<{ type: string; text: string }>;
+    const parsed = JSON.parse(content[0]!.text) as {
+      transcript: { transcriptId: string };
+      segments: Array<{ text: string }>;
+    };
+    expect(parsed.transcript.transcriptId).toBe("tr-1");
+    expect(parsed.segments[0]?.text).toBe("Dispatch check.");
   });
 
   it("wraps list_threads result in a text content block with ISO timestamps", async () => {
@@ -120,7 +223,7 @@ describe("createMcpServer (SDK, in-memory transport)", () => {
     ]);
     const res = await client.callTool({
       name: "get_recent_activity",
-      arguments: { hours: 2 },
+      arguments: { hours: 2, kinds: ["message"] },
     });
     const content = res.content as Array<{ type: string; text: string }>;
     expect(content[0]?.type).toBe("text");
@@ -463,7 +566,7 @@ describe("createMcpServer (SDK, in-memory transport)", () => {
 
     const recent = await client.callTool({
       name: "get_recent_activity",
-      arguments: { hours: 2 },
+      arguments: { hours: 2, kinds: ["message"] },
     });
     const recentBody = JSON.parse(
       (recent.content as Array<{ text: string }>)[0]!.text,
@@ -478,7 +581,7 @@ describe("createMcpServer (SDK, in-memory transport)", () => {
 
     const withMuted = await client.callTool({
       name: "get_recent_activity",
-      arguments: { hours: 2, include_muted: true },
+      arguments: { hours: 2, include_muted: true, kinds: ["message"] },
     });
     const withMutedBody = JSON.parse(
       (withMuted.content as Array<{ text: string }>)[0]!.text,
@@ -511,7 +614,7 @@ describe("createMcpServer (SDK, in-memory transport)", () => {
     });
     const recent = await client.callTool({
       name: "get_recent_activity",
-      arguments: { hours: 2 },
+      arguments: { hours: 2, kinds: ["message"] },
     });
     const body = JSON.parse(
       (recent.content as Array<{ text: string }>)[0]!.text,

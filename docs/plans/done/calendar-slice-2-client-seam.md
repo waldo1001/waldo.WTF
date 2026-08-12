@@ -1,7 +1,17 @@
 # Calendar — Slice 2: `CalendarClient` seam + `FakeCalendarClient`
 
-Parent: [calendar-overview.md](./calendar-overview.md). Predecessor:
+Parent: [calendar-overview.md](../calendar-overview.md). Predecessor:
 [slice 1](./calendar-slice-1-schema-and-store.md).
+
+**Post-merge correction (2026-08-12, caught while starting slice 3):**
+`CalendarViewDeltaPage.events` was implemented as `readonly
+GraphCalendarEvent[]` (raw wire shape), following the `TeamsClient`
+precedent. That contradicted this doc's own line 36 below ("the fake
+and the real client both use the same lowering") and slice 3's doc,
+which both assume the page's `events` are already-lowered
+`CalendarEvent[]`. Fixed in `src/sources/calendar.ts` before slice 3
+started — `events` is now `readonly CalendarEvent[]`. No other
+consumer had shipped against the wrong shape yet.
 
 ## Task
 
@@ -29,7 +39,7 @@ tests.
   - The Graph-shaped DTOs we need: `GraphCalendarEvent`,
     `GraphAttendee`, `GraphOnlineMeetingInfo` — the **wire** types
     distinct from the lake-storage types in
-    [src/store/types.ts](../../src/store/types.ts) (those came in
+    [src/store/types.ts](../../../src/store/types.ts) (those came in
     slice 1).
   - `mapGraphEventToCalendarEvent(graphEvent, account, tenantId)`: pure
     function that lowers a Graph DTO to the slice-1 `CalendarEvent`
@@ -64,12 +74,12 @@ tests.
 
 ## Files to create / touch
 
-- [src/sources/calendar.ts](../../src/sources/calendar.ts) — new.
-- [src/sources/calendar.test.ts](../../src/sources/calendar.test.ts) —
+- [src/sources/calendar.ts](../../../src/sources/calendar.ts) — new.
+- [src/sources/calendar.test.ts](../../../src/sources/calendar.test.ts) —
   new. Covers `mapGraphEventToCalendarEvent`.
-- [src/testing/fake-calendar-client.ts](../../src/testing/fake-calendar-client.ts)
+- [src/testing/fake-calendar-client.ts](../../../src/testing/fake-calendar-client.ts)
   — new.
-- [src/testing/fake-calendar-client.test.ts](../../src/testing/fake-calendar-client.test.ts)
+- [src/testing/fake-calendar-client.test.ts](../../../src/testing/fake-calendar-client.test.ts)
   — new. Covers the fake's cursor walking.
 
 No changes to existing files. The interface is new, no consumer

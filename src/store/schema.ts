@@ -1,6 +1,6 @@
 import type { Database } from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 15;
+export const CURRENT_SCHEMA_VERSION = 19;
 
 const MIGRATION_1 = `
 CREATE TABLE IF NOT EXISTS messages (
@@ -262,6 +262,184 @@ function migrateV15(db: Database): void {
   }
 }
 
+// v16 adds calendar support: `events` + `event_attendees` hold synced
+// Microsoft Graph calendar data (slice 1 of the calendar feature), and
+// `calendar_accounts` tracks per-account opt-in (populated starting in a
+// later slice — calendar sync is deliberately not on-by-default like the
+// other sources). `start_at`/`end_at`/`last_modified_at` are ISO-8601 UTC
+// text, not the INTEGER-ms convention used elsewhere in this schema,
+// because Graph's all-day-event semantics (00:00→24:00 in the user's tz)
+// aren't faithfully representable as a single UTC instant without the
+// `is_all_day` flag alongside it — text keeps the two paired at the row
+// level. The `event_attendees` FK declares ON DELETE CASCADE for
+// documentation/defense-in-depth, but MessageStore.deleteEvents does not
+// rely on it — it deletes attendee rows explicitly in the same
+// transaction, since not every caller opens the database with
+// `PRAGMA foreign_keys = ON` (see openDatabase vs. bare `new Database()`
+// in tests).
+const MIGRATION_16 = `
+CREATE TABLE IF NOT EXISTS events (
+  account TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  tenant_id TEXT,
+  subject TEXT,
+  organizer_name TEXT,
+  organizer_email TEXT,
+  start_at TEXT NOT NULL,
+  end_at TEXT NOT NULL,
+  is_all_day INTEGER NOT NULL DEFAULT 0,
+  is_cancelled INTEGER NOT NULL DEFAULT 0,
+  chat_id TEXT,
+  online_meeting_url TEXT,
+  online_meeting_id TEXT,
+  last_modified_at TEXT,
+  raw_json TEXT,
+  PRIMARY KEY (account, event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_events_start_at ON events(start_at);
+CREATE INDEX IF NOT EXISTS idx_events_account_start_at ON events(account, start_at);
+
+CREATE TABLE IF NOT EXISTS event_attendees (
+  account TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  attendee_email TEXT NOT NULL,
+  display_name TEXT,
+  response_status TEXT NOT NULL DEFAULT 'none',
+  is_organizer INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (account, event_id, attendee_email),
+  FOREIGN KEY (account, event_id) REFERENCES events(account, event_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS calendar_accounts (
+  account TEXT PRIMARY KEY,
+  tenant_id TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  transcripts_enabled INTEGER NOT NULL DEFAULT 0,
+  enabled_at INTEGER NOT NULL
+);
+`;
+
+// v17 adds two event-targeted steering rule types
+// (event_organizer_email, event_subject_contains — calendar slice 8).
+// steering_rules.rule_type carries a CHECK constraint enumerating valid
+// values, so (unlike a plain TEXT column) this needs a real rebuild —
+// SQLite has no ALTER TABLE to widen a CHECK constraint in place. Mirrors
+// the sync_state rebuild in migrateV11: create the widened table, copy
+// rows verbatim (ids preserved), drop the old one, rename into place.
+// Any future schema change that needs real new columns/tables bumps to
+// v18+ — v17 is this enum-widening rebuild only.
+function migrateV17(db: Database): void {
+  db.exec(`
+    CREATE TABLE steering_rules_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      rule_type TEXT NOT NULL CHECK(rule_type IN
+        ('sender_email','sender_domain','thread_id','thread_name_contains','body_contains',
+         'event_organizer_email','event_subject_contains')),
+      pattern TEXT NOT NULL,
+      source TEXT,
+      account TEXT,
+      reason TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL
+    );
+    INSERT INTO steering_rules_new
+      (id, rule_type, pattern, source, account, reason, enabled, created_at)
+      SELECT id, rule_type, pattern, source, account, reason, enabled, created_at
+      FROM steering_rules;
+    DROP TABLE steering_rules;
+    ALTER TABLE steering_rules_new RENAME TO steering_rules;
+    CREATE INDEX IF NOT EXISTS idx_steering_enabled_type
+      ON steering_rules(enabled, rule_type);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_steering_dedupe
+      ON steering_rules(rule_type, pattern, IFNULL(source,''), IFNULL(account,''));
+  `);
+}
+
+// v18 adds meeting transcript support (calendar transcripts T1):
+// `transcripts` holds one row per fetched transcript (a recording restart
+// can produce more than one per meeting, hence transcript_id as part of
+// the PK, not just account+event_id) and `transcript_segments` holds the
+// parsed VTT cues. Both cascade-delete with their `events` row, mirroring
+// event_attendees in v16. `status` covers fetch attempts that found no
+// transcript content at all ('not-available' / 'quota-exhausted' /
+// 'fetch-failed') as well as successes ('ok') — the sync job (a later
+// slice) is expected to persist a status row even on failure so repeated
+// polling can apply a per-status retry cooldown instead of re-fetching
+// blindly every tick.
+const MIGRATION_18 = `
+CREATE TABLE IF NOT EXISTS transcripts (
+  account TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  transcript_id TEXT NOT NULL,
+  fetched_at TEXT NOT NULL,
+  vtt_bytes INTEGER,
+  segment_count INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  raw_json TEXT,
+  PRIMARY KEY (account, event_id, transcript_id),
+  FOREIGN KEY (account, event_id) REFERENCES events(account, event_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS transcript_segments (
+  account TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  transcript_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  speaker_email TEXT,
+  speaker_display_name TEXT,
+  start_offset_ms INTEGER NOT NULL,
+  end_offset_ms INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  PRIMARY KEY (account, event_id, transcript_id, sequence),
+  FOREIGN KEY (account, event_id, transcript_id)
+    REFERENCES transcripts(account, event_id, transcript_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_segments_event
+  ON transcript_segments(account, event_id, sequence);
+`;
+
+// v19 adds full-text search over transcript segments (calendar transcripts
+// T7), mirroring messages_fts (migration 2) exactly: external-content FTS5
+// table keyed off transcript_segments' implicit rowid (the table has a
+// composite TEXT primary key, same situation as messages.id — SQLite still
+// maintains a hidden rowid unless a table is declared WITHOUT ROWID), with
+// ai/ad/au triggers keeping the index in sync and a one-time backfill for
+// any segments that existed before this migration ran.
+// IF NOT EXISTS on the virtual table + triggers (unlike MIGRATION_2's
+// messages_fts, which never needs it — no test rewinds below v2): this is
+// currently the LATEST migration, so it's the one migration every
+// "rewind user_version and re-apply" test in this file re-runs on its
+// second applyMigrations call, after the first call already created these
+// objects. INSERT OR IGNORE on the backfill for the same reason.
+const MIGRATION_19 = `
+CREATE VIRTUAL TABLE IF NOT EXISTS transcript_segments_fts USING fts5(
+  text,
+  content='transcript_segments',
+  content_rowid='rowid',
+  tokenize='unicode61 remove_diacritics 2'
+);
+
+CREATE TRIGGER IF NOT EXISTS transcript_segments_ai AFTER INSERT ON transcript_segments BEGIN
+  INSERT INTO transcript_segments_fts(rowid, text)
+  VALUES (new.rowid, new.text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS transcript_segments_ad AFTER DELETE ON transcript_segments BEGIN
+  INSERT INTO transcript_segments_fts(transcript_segments_fts, rowid, text)
+  VALUES ('delete', old.rowid, old.text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS transcript_segments_au AFTER UPDATE ON transcript_segments BEGIN
+  INSERT INTO transcript_segments_fts(transcript_segments_fts, rowid, text)
+  VALUES ('delete', old.rowid, old.text);
+  INSERT INTO transcript_segments_fts(rowid, text)
+  VALUES (new.rowid, new.text);
+END;
+
+INSERT OR IGNORE INTO transcript_segments_fts(rowid, text)
+  SELECT rowid, text FROM transcript_segments;
+`;
+
 export function applyMigrations(db: Database): void {
   const current = (
     db.prepare("PRAGMA user_version").get() as { user_version: number }
@@ -314,6 +492,18 @@ export function applyMigrations(db: Database): void {
     }
     if (current < 15) {
       migrateV15(db);
+    }
+    if (current < 16) {
+      db.exec(MIGRATION_16);
+    }
+    if (current < 17) {
+      migrateV17(db);
+    }
+    if (current < 18) {
+      db.exec(MIGRATION_18);
+    }
+    if (current < 19) {
+      db.exec(MIGRATION_19);
     }
     db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
   });

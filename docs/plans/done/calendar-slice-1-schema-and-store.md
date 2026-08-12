@@ -15,9 +15,22 @@ wiring yet.
   - `events` table (PK `(account, event_id)`).
   - `event_attendees` table (PK `(account, event_id, attendee_email)`,
     FK on `(account, event_id)` with `ON DELETE CASCADE`).
+  - `calendar_accounts` table — per-account opt-in flag (schema only in
+    this slice; the `CalendarAccountStore` operations that read/write it
+    land in [slice 4](./calendar-slice-4-sync-and-scope.md), which also
+    owns the per-account consent model):
+    ```sql
+    CREATE TABLE calendar_accounts (
+      account TEXT PRIMARY KEY,       -- username, matches accounts elsewhere
+      tenant_id TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      transcripts_enabled INTEGER NOT NULL DEFAULT 0,
+      enabled_at INTEGER NOT NULL      -- clock.now().getTime()
+    );
+    ```
   - Supporting indexes for the queries we know we need
     (`events(start_at)`, `events(account, start_at)`).
-- New types in [src/store/types.ts](../../src/store/types.ts):
+- New types in [src/store/types.ts](../../../src/store/types.ts):
   - `CalendarEvent`
   - `EventAttendee`
   - `EventResponseStatus`
@@ -46,41 +59,44 @@ wiring yet.
 - Slice 5: meeting ↔ Teams chat link population (resolves `chat_id`
   from `onlineMeeting.chatInfo.threadId`, surfaces linked messages
   via `get_event` / by membership in the same `chat_id` query).
-- Slice 6: MCP tool `get_upcoming_events` + CLI flags.
+- Slice 6: MCP tool `find_events` + CLI flags.
 - Slice 7: fold events into `get_recent_activity` as a heterogeneous
   feed (`kind: "message" | "event"` discriminator), shared sort key,
   default window covering both directions.
 - Slice 8: steering rules apply to events — extend predicate types
   (`subject_contains`, plus a `kind` filter so the user can mute "all
   events from organizer X" without muting their messages).
-- Transcripts are a **separate plan** entirely (license-gated, app-only
-  consent, VTT parser, separate `transcript_segments` table).
+- Transcripts are a **separate plan** ([calendar-transcripts.md](./calendar-transcripts.md),
+  overview slices 9–14): delegated-scope consent, VTT parser, separate
+  `transcript_segments` table. Not license-gated (Teams Premium is not
+  required); gated instead by whether a given meeting was transcribed
+  and by Graph's per-tenant transcript-API metering.
 
 ## Files to create / touch
 
-- [src/store/schema.ts](../../src/store/schema.ts) — bump
+- [src/store/schema.ts](../../../src/store/schema.ts) — bump
   `CURRENT_SCHEMA_VERSION` to 16, add `migrateV16(db)` with the two
   CREATE TABLE statements + indexes + `applyMigrations` step.
-- [src/store/schema.test.ts](../../src/store/schema.test.ts) — new
+- [src/store/schema.test.ts](../../../src/store/schema.test.ts) — new
   cases for v15 → v16 migration (idempotent; tables present; indexes
   present; FK cascade observable).
-- [src/store/types.ts](../../src/store/types.ts) — `CalendarEvent`,
+- [src/store/types.ts](../../../src/store/types.ts) — `CalendarEvent`,
   `EventAttendee`, `EventResponseStatus`.
-- [src/store/types.test.ts](../../src/store/types.test.ts) — type-level
+- [src/store/types.test.ts](../../../src/store/types.test.ts) — type-level
   shape assertions where they exist for siblings.
-- [src/store/message-store-contract.ts](../../src/store/message-store-contract.ts)
+- [src/store/message-store-contract.ts](../../../src/store/message-store-contract.ts)
   — add `upsertEvents`, `deleteEvents`, `getEventsInRange` to the
   contract test suite.
-- [src/store/message-store.ts](../../src/store/message-store.ts) — extend
+- [src/store/message-store.ts](../../../src/store/message-store.ts) — extend
   `MessageStore` interface with the three new methods.
-- [src/store/sqlite-message-store.ts](../../src/store/sqlite-message-store.ts)
+- [src/store/sqlite-message-store.ts](../../../src/store/sqlite-message-store.ts)
   — implement against schema v16, transactional upsert (events row +
   attendee replace-set in one tx).
-- [src/store/sqlite-message-store.test.ts](../../src/store/sqlite-message-store.test.ts)
+- [src/store/sqlite-message-store.test.ts](../../../src/store/sqlite-message-store.test.ts)
   — drive via the shared contract suite + sqlite-specific edge cases.
 - `src/store/in-memory-message-store.ts` (or wherever the fake lives —
   confirm during FRAME) — mirror semantics.
-- [src/store/message-store.test.ts](../../src/store/message-store.test.ts)
+- [src/store/message-store.test.ts](../../../src/store/message-store.test.ts)
   — fake's pass through the contract suite.
 
 No changes to `src/sync/`, `src/sources/`, `src/mcp/`, `src/cli.ts`,
@@ -221,21 +237,30 @@ slice.
   `startDateTime` / `endDateTime` window, page walk via `@odata.nextLink`,
   delta token via `@odata.deltaLink`, `@removed` semantics, 401 / 410 /
   429 mapping reused from `classifyError`.
-- **Slice 4:** `Calendars.Read` delegated scope added to MSAL,
-  `syncCalendarEvents` job, scheduler tick wiring, `sync_log` rows for
-  `source = "calendar"`. Sync horizon = rolling `[now - 7d, now + 30d]`
-  unless a delta token already exists for the account.
+- **Slice 4:** `CalendarAccountStore` (reads/writes the
+  `calendar_accounts` table created in this slice) for per-account
+  opt-in; `CALENDAR_SCOPES = ["Calendars.Read"]` as a separate delegated
+  scope set (never joins base `SCOPES`, so non-opted-in accounts are
+  never re-prompted); `--calendar-enable` / `--calendar-disable` CLI;
+  `syncCalendarEvents` job; scheduler tick wiring gated on
+  `calendarAccounts.isEnabled(account)`; `sync_log` rows for
+  `source = "calendar"`. Sync horizon = rolling
+  `[now - 365d, now + 60d]` unless a delta token already exists for the
+  account.
 - **Slice 5:** Populate `events.chat_id` from
   `onlineMeeting.chatInfo.threadId` during sync; expose
   `get_event(eventId)` MCP tool that joins linked Teams chat messages.
-- **Slice 6:** `get_upcoming_events(from, to, accounts?)` MCP tool;
-  `--calendar-list` CLI flag.
+- **Slice 6:** `find_events(from, to, accounts?, subject_contains?,
+  attendee?, order?, limit?)` MCP tool; `--calendar-list` CLI flag.
 - **Slice 7:** Heterogeneous `get_recent_activity` — `kind`
   discriminator, shared sort key, default window covering past
   messages + upcoming events.
 - **Slice 8:** Steering rules apply to events — new predicate types
   `subject_contains` and `kind`, wired through `buildSteeringPredicate`.
-- **Separate plan (not a slice of this feature):** transcripts —
-  `OnlineMeetingTranscript.Read.All` (likely app-only, tenant admin
-  consent), VTT parser, `transcript_segments` table, search
-  integration. License-gated (Teams Premium).
+- **Separate plan (overview slices 9–14, not a slice of this
+  feature):** transcripts — delegated `OnlineMeetingTranscript.Read.All`
+  scope (no app-only auth, no tenant-admin consent beyond ordinary
+  delegated scope consent), VTT parser, `transcript_segments` table,
+  optional search integration. Not Teams Premium-gated; gated by
+  whether a meeting was transcribed and by Graph's transcript-API
+  metering. See [calendar-transcripts.md](./calendar-transcripts.md).

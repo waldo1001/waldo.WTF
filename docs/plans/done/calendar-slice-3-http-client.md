@@ -1,6 +1,6 @@
 # Calendar — Slice 3: `HttpCalendarClient`
 
-Parent: [calendar-overview.md](./calendar-overview.md). Predecessors:
+Parent: [calendar-overview.md](../calendar-overview.md). Predecessors:
 [slice 1](./calendar-slice-1-schema-and-store.md),
 [slice 2](./calendar-slice-2-client-seam.md).
 
@@ -30,11 +30,11 @@ mapping HTTP errors through the existing `classifyError`.
   - Subsequent calls follow the opaque `cursor` (the prior page's
     `@odata.nextLink` or `@odata.deltaLink`) verbatim.
   - Honors timeouts via `fetchWithTimeout`
-    ([src/sources/fetch-with-timeout.ts](../../src/sources/fetch-with-timeout.ts)).
+    ([src/sources/fetch-with-timeout.ts](../../../src/sources/fetch-with-timeout.ts)).
   - Maps responses:
     - 401 → `classifyError` `'auth-401'` (sync loop will force-refresh
       the token and retry once, mirroring how
-      [src/sources/http-teams-client.ts](../../src/sources/http-teams-client.ts)
+      [src/sources/http-teams-client.ts](../../../src/sources/http-teams-client.ts)
       does it).
     - 410 → `classifyError` `'delta-invalid'` (cursor expired —
       sync loop will reset the delta token and start over from the
@@ -42,7 +42,7 @@ mapping HTTP errors through the existing `classifyError`.
     - 429 → `classifyError` `'rate-limit'`, surface
       `Retry-After` to the caller.
     - 5xx → retry once with backoff (mirror
-      [src/sources/http-teams-client.ts](../../src/sources/http-teams-client.ts)'s
+      [src/sources/http-teams-client.ts](../../../src/sources/http-teams-client.ts)'s
       retry policy), then `classifyError` `'transient-5xx'`.
   - Token redaction in error messages: never log or surface the
     bearer.
@@ -55,7 +55,7 @@ mapping HTTP errors through the existing `classifyError`.
 - Dedicated lint test under `src/sources/__lint__/` to assert the new
   file uses `fetchWithTimeout`, not bare `fetch` (matches the project
   policy locked in by
-  [docs/plans/done/lint-bare-fetch-slice.md](./done/lint-bare-fetch-slice.md)).
+  [docs/plans/done/lint-bare-fetch-slice.md](./lint-bare-fetch-slice.md)).
 
 **OUT (deferred)**
 
@@ -70,9 +70,9 @@ mapping HTTP errors through the existing `classifyError`.
 
 ## Files to create / touch
 
-- [src/sources/http-calendar-client.ts](../../src/sources/http-calendar-client.ts)
+- [src/sources/http-calendar-client.ts](../../../src/sources/http-calendar-client.ts)
   — new.
-- [src/sources/http-calendar-client.test.ts](../../src/sources/http-calendar-client.test.ts)
+- [src/sources/http-calendar-client.test.ts](../../../src/sources/http-calendar-client.test.ts)
   — new. Drives the client with an injected `fetch` returning canned
   Graph responses (loaded from `src/testing/fixtures/`).
 - `src/sources/__lint__/http-calendar-client.bare-fetch.test.ts` —
@@ -80,7 +80,7 @@ mapping HTTP errors through the existing `classifyError`.
 - `src/testing/fixtures/calendar-view-delta-page-1.json` and friends
   — recorded shapes (sanitized: no real account emails, no real
   tenant ids, no bearer tokens).
-- [src/sources/classify-error.ts](../../src/mcp/tools/classify-error.ts)
+- [src/sources/classify-error.ts](../../../src/mcp/tools/classify-error.ts)
   — confirm during FRAME that `'delta-invalid'` already exists; if
   not, add it. (Existing teams-channel sync uses it; almost certain.)
 

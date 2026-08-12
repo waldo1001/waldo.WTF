@@ -20,6 +20,10 @@ import type { TeamsChannelClient } from "./sources/teams-channel.js";
 import { HttpTeamsChannelClient } from "./sources/http-teams-channel-client.js";
 import type { VivaClient } from "./sources/viva.js";
 import { HttpYammerClient } from "./sources/http-yammer-client.js";
+import type { CalendarClient } from "./sources/calendar.js";
+import { HttpCalendarClient } from "./sources/http-calendar-client.js";
+import type { TranscriptClient } from "./sources/transcript.js";
+import { HttpTranscriptClient } from "./sources/http-transcript-client.js";
 import { createFetchWithTimeout } from "./sources/fetch-with-timeout.js";
 import { openDatabase } from "./store/open-database.js";
 import { SqliteMessageStore } from "./store/sqlite-message-store.js";
@@ -27,6 +31,10 @@ import {
   SqliteVivaSubscriptionStore,
   type VivaSubscriptionStore,
 } from "./store/viva-subscription-store.js";
+import {
+  SqliteCalendarAccountStore,
+  type CalendarAccountStore,
+} from "./store/calendar-account-store.js";
 import {
   SqliteTeamsChannelSubscriptionStore,
   type TeamsChannelSubscriptionStore,
@@ -77,6 +85,9 @@ export interface MainOverrides {
   readonly teamsChannelSubs?: TeamsChannelSubscriptionStore;
   readonly viva?: VivaClient;
   readonly vivaSubs?: VivaSubscriptionStore;
+  readonly calendar?: CalendarClient;
+  readonly calendarAccounts?: CalendarAccountStore;
+  readonly transcripts?: TranscriptClient;
   readonly store?: MessageStore;
   readonly steering?: SteeringStore;
   readonly authStore?: AuthStore;
@@ -208,6 +219,43 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
           new Database(":memory:"),
           clock,
         ));
+  // CalendarClient resolves its own token per call (see
+  // http-calendar-client.ts) — the callback re-resolves the Account by
+  // username each call rather than closing over a fixed one, since this
+  // client is shared across every account's sync tick.
+  const calendarGetAccessToken = async (
+    username: string,
+    scope: string,
+    forceRefresh: boolean,
+  ): Promise<string> => {
+    const accounts = await auth.listAccounts();
+    const acct = accounts.find((a) => a.username === username);
+    if (acct === undefined) {
+      throw new Error(`calendar sync: unknown account ${username}`);
+    }
+    const tok = await auth.getTokenSilent(acct, { scopes: [scope], forceRefresh });
+    return tok.token;
+  };
+  const calendar: CalendarClient =
+    overrides.calendar ??
+    new HttpCalendarClient({
+      fetch: httpFetch,
+      getAccessToken: calendarGetAccessToken,
+    });
+  const calendarAccounts: CalendarAccountStore =
+    overrides.calendarAccounts ??
+    (db !== null
+      ? new SqliteCalendarAccountStore(db, clock)
+      : new SqliteCalendarAccountStore(new Database(":memory:"), clock));
+  // Shares calendarGetAccessToken with HttpCalendarClient — both resolve a
+  // token by account username with a scope override, MSAL doesn't care
+  // which caller asked.
+  const transcripts: TranscriptClient =
+    overrides.transcripts ??
+    new HttpTranscriptClient({
+      fetch: httpFetch,
+      getAccessToken: calendarGetAccessToken,
+    });
 
   const scheduler = new SyncScheduler({
     auth,
@@ -218,6 +266,9 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
     teamsChannelSubs,
     viva,
     vivaSubs,
+    calendar,
+    calendarAccounts,
+    transcripts,
     store,
     clock,
     setTimer: overrides.setTimer ?? nodeSetTimer,

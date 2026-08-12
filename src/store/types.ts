@@ -3,7 +3,14 @@ export type MessageSource =
   | "teams-channel"
   | "outlook"
   | "whatsapp"
-  | "viva-engage";
+  | "viva-engage"
+  | "calendar";
+
+// sync_state/sync_log also track sources that never produce Message rows
+// (calendar events and transcripts live in their own tables) — this widens
+// just the sync-bookkeeping surface rather than MessageSource itself, so
+// callers of Message.source can't accidentally match on "transcripts".
+export type SyncLogSource = MessageSource | "transcripts";
 
 export type ChatType = "oneOnOne" | "group" | "channel";
 
@@ -41,7 +48,7 @@ export type SyncLogStatus = "ok" | "error";
 export interface SyncLogEntry {
   readonly ts: Date;
   readonly account: string;
-  readonly source: MessageSource;
+  readonly source: SyncLogSource;
   readonly status: SyncLogStatus;
   readonly messagesAdded?: number;
   readonly errorMessage?: string;
@@ -49,7 +56,7 @@ export interface SyncLogEntry {
 
 export interface SyncStatusRow {
   readonly account: string;
-  readonly source: MessageSource;
+  readonly source: SyncLogSource;
   readonly lastSyncAt?: Date;
   readonly lastOkAt?: Date;
   readonly lastStatus?: SyncLogStatus;
@@ -87,12 +94,21 @@ export interface SearchHit {
   readonly rank: number;
 }
 
+export interface TranscriptSearchHit {
+  readonly segment: TranscriptSegment;
+  readonly snippet: string;
+  // bm25(transcript_segments_fts): lower score = better match.
+  readonly rank: number;
+}
+
 export const STEERING_RULE_TYPES = [
   "sender_email",
   "sender_domain",
   "thread_id",
   "thread_name_contains",
   "body_contains",
+  "event_organizer_email",
+  "event_subject_contains",
 ] as const;
 
 export type SteeringRuleType = (typeof STEERING_RULE_TYPES)[number];
@@ -161,6 +177,95 @@ export interface AddTeamsChannelSubscriptionInput {
   readonly teamName?: string;
   readonly channelId: string;
   readonly channelName?: string;
+}
+
+export const EVENT_RESPONSE_STATUSES = [
+  "none",
+  "accepted",
+  "tentative",
+  "declined",
+  "notResponded",
+  "organizer",
+] as const;
+
+export type EventResponseStatus = (typeof EVENT_RESPONSE_STATUSES)[number];
+
+export interface EventAttendee {
+  readonly email: string;
+  readonly displayName?: string;
+  readonly responseStatus: EventResponseStatus;
+  readonly isOrganizer?: boolean;
+}
+
+export interface CalendarEvent {
+  readonly account: string;
+  readonly eventId: string;
+  readonly tenantId?: string;
+  readonly subject?: string;
+  readonly organizerName?: string;
+  readonly organizerEmail?: string;
+  readonly startAt: Date;
+  readonly endAt: Date;
+  readonly isAllDay: boolean;
+  readonly isCancelled: boolean;
+  readonly chatId?: string;
+  readonly onlineMeetingUrl?: string;
+  readonly onlineMeetingId?: string;
+  readonly lastModifiedAt?: Date;
+  readonly rawJson?: string;
+  readonly attendees: readonly EventAttendee[];
+}
+
+export interface EventKey {
+  readonly account: string;
+  readonly eventId: string;
+}
+
+export interface CalendarAccount {
+  readonly account: string;
+  readonly tenantId?: string;
+  readonly transcriptsEnabled: boolean;
+  readonly enabledAt: Date;
+}
+
+export interface EnableCalendarAccountInput {
+  readonly account: string;
+  readonly tenantId?: string;
+}
+
+export type TranscriptStatus =
+  | "ok"
+  | "not-available"
+  | "quota-exhausted"
+  | "fetch-failed";
+
+export interface Transcript {
+  readonly account: string;
+  readonly eventId: string;
+  readonly transcriptId: string;
+  readonly fetchedAt: Date;
+  readonly vttBytes?: number;
+  readonly segmentCount: number;
+  readonly status: TranscriptStatus;
+  readonly rawJson?: string;
+}
+
+export interface TranscriptSegment {
+  readonly account: string;
+  readonly eventId: string;
+  readonly transcriptId: string;
+  readonly sequence: number;
+  readonly speakerEmail?: string;
+  readonly speakerDisplayName?: string;
+  readonly startOffsetMs: number;
+  readonly endOffsetMs: number;
+  readonly text: string;
+}
+
+export interface TranscriptKey {
+  readonly account: string;
+  readonly eventId: string;
+  readonly transcriptId: string;
 }
 
 export type StoreErrorKind = "not-found" | "conflict" | "corrupt";

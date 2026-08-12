@@ -66,6 +66,19 @@ describe("viva_subscriptions schema migration v13", () => {
           last_cursor_at INTEGER,
           PRIMARY KEY (account, community_id)
         );
+        -- Present in any real db by user_version 12 (created at migration
+        -- 10); migrateV17 (rule_type CHECK widening) assumes it exists.
+        CREATE TABLE steering_rules (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          rule_type TEXT NOT NULL CHECK(rule_type IN
+            ('sender_email','sender_domain','thread_id','thread_name_contains','body_contains')),
+          pattern TEXT NOT NULL,
+          source TEXT,
+          account TEXT,
+          reason TEXT,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at INTEGER NOT NULL
+        );
       `);
       db.exec(
         `INSERT INTO viva_subscriptions (account, network_id, community_id, subscribed_at)

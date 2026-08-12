@@ -154,7 +154,44 @@ this step reduces to "manual check the RED list is fully implemented").
 - Every AC on the list has at least one named test? Write the traceability
   mapping now.
 
-## Step 10 — SECURITY SCAN
+## Step 10 — MUTATE
+
+Coverage says a line ran. It doesn't say a test would notice if the line
+were wrong. Run Stryker, scoped to the files this cycle touched:
+
+```
+npx stryker run --mutate "<comma-separated touched production files>"
+```
+
+(Not test files — `--mutate` takes the production code being mutated.
+Never run with no `--mutate` override during a normal cycle; the
+unscoped full-repo run takes minutes and is for periodic audits, not
+every slice. See [stryker.config.mjs](../../../stryker.config.mjs).)
+
+- **Score ≥80%** (the config's `break` threshold) → proceeds automatically;
+  read the survived-mutant list anyway.
+- **Score <80%** → the run itself fails. Look at each survived mutant:
+  - If it exposes a real gap (a boundary your tests never hit, a branch
+    no test distinguishes), write a test that kills it and rerun.
+  - If it's a genuinely equivalent mutant (behavior is identical no
+    matter what the mutant does — e.g. flipping a no-op string
+    constant, or an idempotent `CREATE TABLE IF NOT EXISTS` re-running
+    harmlessly), leave a one-line comment at that call site explaining
+    why, and do not chase the number further. Per
+    [coverage-policy.md](../../../docs/tdd/coverage-policy.md): don't
+    chase 100%, focus on business-critical branches.
+- Survived mutants **outside** the current slice's diff (pre-existing
+  code you didn't touch) are out of scope for this cycle — same rule as
+  COVER and the security scan's `npm audit` line. Note them, don't
+  block on them.
+
+This step only exists once `stryker.config.mjs` is present in the repo
+(added 2026-08-12). If it's missing, treat this step as "add it" — see
+the config's comments for the concurrency caveat on this dev machine
+(`better-sqlite3` + default concurrency SIGSEGVs; `concurrency: 1` is
+pinned in config for that reason).
+
+## Step 11 — SECURITY SCAN
 
 Run the `/security-scan` skill
 ([.claude/skills/security-scan/SKILL.md](../security-scan/SKILL.md)).
@@ -168,9 +205,9 @@ A finding **blocks** the cycle. Never "note and continue". On a real
 secret hit, follow the rotation protocol in the skill before doing
 anything else.
 
-**Only on PASS** continue to Step 11.
+**Only on PASS** continue to Step 12.
 
-## Step 11 — UPDATE DOCS
+## Step 12 — UPDATE DOCS
 
 Run the `/docs-update` skill
 ([.claude/skills/docs-update/SKILL.md](../docs-update/SKILL.md)).
@@ -189,13 +226,13 @@ the slice is complete it moves `docs/plans/<name>.md` to
 bare `docs/plans/` directory stays reserved for in-flight work; a
 finished slice must not leave a plan rotting there.
 
-## Step 12 — REVIEW
+## Step 13 — REVIEW
 
 Answer each question from [methodology.md §2.7](../../../docs/tdd/methodology.md)
 and each box from [ai-maintainability.md §Review checklist](../../../docs/tdd/ai-maintainability.md).
 "Yes" to every one, or go back.
 
-## Step 13 — Report
+## Step 14 — Report
 
 Post a short summary in chat:
 
@@ -205,6 +242,7 @@ TDD cycle complete.
 - Tests added: <N>
 - Files touched: <list>
 - Coverage: <lines>% / <branches>%
+- Mutation score: <N>% (break threshold 80%) — <M> survived, <K> justified as equivalent
 - AC traceability:
   - AC1 <...> → <test file>: "<test name>"
   - AC2 <...> → <test file>: "<test name>"

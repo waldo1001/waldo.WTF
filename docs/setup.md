@@ -57,12 +57,45 @@ One-time, per developer. Required for MSAL device code flow.
      `user_impersonation` (delegated). Add this under **APIs my
      organisation uses** → search "Yammer". Only required if you intend
      to subscribe to one or more Viva communities via `--viva-subscribe`.
+   - For calendar sync (optional, per-account opt-in): `Calendars.Read`.
+     Only required for accounts you explicitly enable via
+     `--calendar-enable <account>` — see
+     [user-guide.md](user-guide.md). Like the Teams channel scopes,
+     this may require **admin consent** in the target tenant; if so,
+     `--calendar-enable` fails with a message naming the scope and
+     tenant to hand to your admin, and the account's opt-in row is not
+     written.
+   - For meeting transcripts (optional, per-account opt-in, requires
+     calendar already enabled for that account): delegated
+     `OnlineMeetingTranscript.Read.All`. Requested via
+     `--transcripts-enable <account>` — no second app registration and
+     no app-only/client-secret auth needed; it's one more delegated
+     scope on the same device-code flow as calendar. Like
+     `Calendars.Read`, this typically requires **admin consent**; on
+     rejection `--transcripts-enable` fails with a message naming the
+     scope, and the account's `transcripts_enabled` flag is not set.
+     Two things to know before enabling:
+     - **Metering.** Fetching transcript *content* (not just listing
+       transcripts) is a metered Graph API: evaluation mode gives
+       ~600 free minutes/month/tenant/app; past that, fetches return
+       HTTP 402 until you link an Azure subscription for billing
+       (then ~$0.0022/minute, ~$0.13/meeting-hour). A busy month across
+       multiple opted-in accounts can exceed the free tier.
+     - **Meeting expiration.** The transcript API only works for
+       meetings that haven't expired per Teams' own retention limits.
+       Enabling transcripts today does not retroactively recover
+       transcripts for meetings that happened before you enabled it,
+       even though calendar sync backfills a year of event history.
 
    `--add-account` requests only the two base Graph scopes (`Mail.Read`,
-   `Chat.Read`) in one device-code prompt. The Teams channel scopes
-   and the Yammer scope are requested separately on first use
-   (`--teams-discover` / `--viva-discover`), via MSAL's
-   incremental-consent / multi-resource token chain. **If you are upgrading from a version
+   `Chat.Read`) in one device-code prompt. The Teams channel scopes,
+   the Yammer scope, `Calendars.Read`, and
+   `OnlineMeetingTranscript.Read.All` are all requested separately on
+   first use (`--teams-discover` / `--viva-discover` /
+   `--calendar-enable` / `--transcripts-enable`), via MSAL's
+   incremental-consent / multi-resource token chain — enabling calendar
+   or transcripts for one account never re-prompts or re-consents any
+   other account. **If you are upgrading from a version
    prior to 2026-04-22 (hotfix)**, every existing account must re-run
    `--add-account <username>` to clear the stale mixed-resource token
    cache; `--add-account` was broken by an earlier commit that mixed

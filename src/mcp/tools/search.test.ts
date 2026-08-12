@@ -54,6 +54,17 @@ describe("handleSearch", () => {
     ).rejects.toBeInstanceOf(InvalidParamsError);
   });
 
+  it("rejects a non-string sender_email", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    await expect(
+      handleSearch(store, clock, {
+        query: "hello",
+        sender_email: 42 as unknown as string,
+      }),
+    ).rejects.toBeInstanceOf(InvalidParamsError);
+  });
+
   it("rejects limit <= 0", async () => {
     const store = new InMemoryMessageStore();
     const clock = clockAt("2026-04-13T12:00:00Z");
@@ -645,5 +656,223 @@ describe("handleSearch", () => {
     const withoutBody = result.hits.filter((h) => h.message.body === undefined);
     expect(withBody.length).toBeGreaterThan(0);
     expect(withoutBody.length).toBeGreaterThan(0);
+  });
+
+  it("kinds defaults to [\"message\"] and preserves the original response shape", async () => {
+    const store = new InMemoryMessageStore({
+      seed: { messages: [mkMessage({ id: "m1", body: "kangaroo" })] },
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleSearch(store, clock, { query: "kangaroo" });
+    expect(result).not.toHaveProperty("hits.0.kind");
+    expect(result.hits[0]?.message.id).toBe("m1");
+  });
+
+  it("rejects an unknown kind with InvalidParamsError", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    await expect(
+      handleSearch(store, clock, {
+        query: "x",
+        kinds: ["bogus"] as unknown as ("message" | "transcript")[],
+      }),
+    ).rejects.toBeInstanceOf(InvalidParamsError);
+  });
+
+  it("rejects an empty kinds array with InvalidParamsError", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    await expect(
+      handleSearch(store, clock, { query: "x", kinds: [] }),
+    ).rejects.toBeInstanceOf(InvalidParamsError);
+  });
+
+  it("kinds: [\"transcript\"] returns only transcript hits, each tagged with kind", async () => {
+    const store = new InMemoryMessageStore();
+    await store.upsertEvents([
+      {
+        account: "a@example.test",
+        eventId: "evt-1",
+        startAt: new Date("2026-04-13T09:00:00Z"),
+        endAt: new Date("2026-04-13T10:00:00Z"),
+        isAllDay: false,
+        isCancelled: false,
+        attendees: [],
+      },
+    ]);
+    await store.upsertTranscript({
+      transcript: {
+        account: "a@example.test",
+        eventId: "evt-1",
+        transcriptId: "tr-1",
+        fetchedAt: new Date("2026-04-13T10:05:00Z"),
+        segmentCount: 1,
+        status: "ok",
+      },
+      segments: [
+        {
+          account: "a@example.test",
+          eventId: "evt-1",
+          transcriptId: "tr-1",
+          sequence: 0,
+          speakerDisplayName: "Kristof",
+          startOffsetMs: 0,
+          endOffsetMs: 1000,
+          text: "let's discuss the budget review",
+        },
+      ],
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleSearch(store, clock, {
+      query: "budget",
+      kinds: ["transcript"],
+    });
+    expect(result.count).toBe(1);
+    expect(result.hits).toHaveLength(1);
+    const hit = result.hits[0] as {
+      kind: string;
+      segment: { eventId: string; transcriptId: string; text: string; speakerDisplayName?: string };
+    };
+    expect(hit.kind).toBe("transcript");
+    expect(hit.segment.eventId).toBe("evt-1");
+    expect(hit.segment.transcriptId).toBe("tr-1");
+    expect(hit.segment.text).toBe("let's discuss the budget review");
+    expect(hit.segment.speakerDisplayName).toBe("Kristof");
+  });
+
+  it("kinds: [\"message\", \"transcript\"] returns both kinds tagged, message hits keep their legacy field shape", async () => {
+    const store = new InMemoryMessageStore({
+      seed: { messages: [mkMessage({ id: "m1", body: "budget forecast" })] },
+    });
+    await store.upsertEvents([
+      {
+        account: "a@example.test",
+        eventId: "evt-1",
+        startAt: new Date("2026-04-13T09:00:00Z"),
+        endAt: new Date("2026-04-13T10:00:00Z"),
+        isAllDay: false,
+        isCancelled: false,
+        attendees: [],
+      },
+    ]);
+    await store.upsertTranscript({
+      transcript: {
+        account: "a@example.test",
+        eventId: "evt-1",
+        transcriptId: "tr-1",
+        fetchedAt: new Date("2026-04-13T10:05:00Z"),
+        segmentCount: 1,
+        status: "ok",
+      },
+      segments: [
+        {
+          account: "a@example.test",
+          eventId: "evt-1",
+          transcriptId: "tr-1",
+          sequence: 0,
+          startOffsetMs: 0,
+          endOffsetMs: 1000,
+          text: "budget review kickoff",
+        },
+      ],
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleSearch(store, clock, {
+      query: "budget",
+      kinds: ["message", "transcript"],
+    });
+    const kinds = (result.hits as Array<{ kind: string }>)
+      .map((h) => h.kind)
+      .sort();
+    expect(kinds).toEqual(["message", "transcript"]);
+  });
+
+  it("kinds: [\"transcript\"] with no query returns zero transcript hits, not an error", async () => {
+    const store = new InMemoryMessageStore();
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleSearch(store, clock, {
+      sender_email: "irrelevant@example.test",
+      kinds: ["transcript"],
+    });
+    expect(result.hits).toEqual([]);
+  });
+
+  it("kinds: [\"message\", \"transcript\"] still passes sender_email/sender_name/after/before through to the message search", async () => {
+    const store = new InMemoryMessageStore();
+    let capturedOpts: unknown;
+    // @ts-expect-error — spy stub to inspect the opts this unified branch passes through
+    store.searchMessages = async (_query: string, _limit: number, opts: unknown) => {
+      capturedOpts = opts;
+      return { hits: [], mutedCount: 0 };
+    };
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    await handleSearch(store, clock, {
+      query: "budget",
+      kinds: ["message", "transcript"],
+      sender_email: "gunter@example.test",
+      sender_name: "Gunter",
+      after: "2026-01-01T00:00:00Z",
+      before: "2026-12-31T00:00:00Z",
+    });
+    expect(capturedOpts).toMatchObject({
+      senderEmail: "gunter@example.test",
+      senderName: "Gunter",
+    });
+    expect((capturedOpts as { after: Date }).after).toBeInstanceOf(Date);
+    expect((capturedOpts as { before: Date }).before).toBeInstanceOf(Date);
+  });
+
+  it("kinds: [\"message\", \"transcript\"] emits a steering_hint when message hits are muted", async () => {
+    const store = new InMemoryMessageStore();
+    // @ts-expect-error — minimal stub to force a non-zero mutedCount without real steering rules
+    store.searchMessages = async () => ({ hits: [], mutedCount: 2 });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const res = await handleSearch(store, clock, {
+      query: "anything",
+      kinds: ["message", "transcript"],
+    });
+    expect(res.muted_count).toBe(2);
+    expect(res.steering_hint).toMatch(/2 hit\(s\) hidden/);
+  });
+
+  it("kinds: [\"transcript\"] respects the limit argument", async () => {
+    const store = new InMemoryMessageStore();
+    await store.upsertEvents([
+      {
+        account: "a@example.test",
+        eventId: "evt-1",
+        startAt: new Date("2026-04-13T09:00:00Z"),
+        endAt: new Date("2026-04-13T10:00:00Z"),
+        isAllDay: false,
+        isCancelled: false,
+        attendees: [],
+      },
+    ]);
+    await store.upsertTranscript({
+      transcript: {
+        account: "a@example.test",
+        eventId: "evt-1",
+        transcriptId: "tr-1",
+        fetchedAt: new Date("2026-04-13T10:05:00Z"),
+        segmentCount: 3,
+        status: "ok",
+      },
+      segments: [0, 1, 2].map((n) => ({
+        account: "a@example.test",
+        eventId: "evt-1",
+        transcriptId: "tr-1",
+        sequence: n,
+        startOffsetMs: 0,
+        endOffsetMs: 1000,
+        text: "kangaroo",
+      })),
+    });
+    const clock = clockAt("2026-04-13T12:00:00Z");
+    const result = await handleSearch(store, clock, {
+      query: "kangaroo",
+      kinds: ["transcript"],
+      limit: 2,
+    });
+    expect(result.hits).toHaveLength(2);
   });
 });

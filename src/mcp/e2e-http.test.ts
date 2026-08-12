@@ -117,6 +117,9 @@ describe("MCP HTTP server end-to-end (SQLite + SDK client over HTTP)", () => {
     expect(names).toEqual([
       "add_steering_rule",
       "diagnose_sync_health",
+      "find_events",
+      "get_event",
+      "get_event_transcript",
       "get_recent_activity",
       "get_steering",
       "get_sync_status",
@@ -178,7 +181,7 @@ describe("MCP HTTP server end-to-end (SQLite + SDK client over HTTP)", () => {
   it("get_recent_activity over HTTP returns in-window messages with no body/rawJson", async () => {
     const res = await client.callTool({
       name: "get_recent_activity",
-      arguments: { hours: 24 },
+      arguments: { hours: 24, kinds: ["message"] },
     });
     const content = res.content as Array<{ type: string; text: string }>;
     const parsed = parse<{
@@ -274,6 +277,109 @@ describe("MCP HTTP server end-to-end (SQLite + SDK client over HTTP)", () => {
     expect(parsed.messages[0]?.rawJson).toBeUndefined();
   });
 
+  it("e2e: find_events returns events from a real SQLite lake", async () => {
+    await store.upsertEvents([
+      {
+        account: "alice@example.test",
+        eventId: "evt-budget",
+        subject: "Q3 Budget Review",
+        startAt: new Date("2026-04-13T14:00:00Z"),
+        endAt: new Date("2026-04-13T15:00:00Z"),
+        isAllDay: false,
+        isCancelled: false,
+        attendees: [],
+      },
+      {
+        account: "alice@example.test",
+        eventId: "evt-far-history",
+        subject: "Budget kickoff",
+        startAt: new Date("2025-08-01T09:00:00Z"),
+        endAt: new Date("2025-08-01T10:00:00Z"),
+        isAllDay: false,
+        isCancelled: false,
+        attendees: [],
+      },
+    ]);
+
+    const unfiltered = await client.callTool({
+      name: "find_events",
+      arguments: {
+        from: "2026-04-13T00:00:00Z",
+        to: "2026-04-14T00:00:00Z",
+      },
+    });
+    const unfilteredContent = unfiltered.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    const unfilteredParsed = parse<{
+      events: Array<{ eventId: string; subject?: string }>;
+      truncated: boolean;
+    }>(unfilteredContent[0]!.text);
+    expect(unfilteredParsed.events.map((e) => e.eventId)).toEqual([
+      "evt-budget",
+    ]);
+    expect(unfilteredParsed.truncated).toBe(false);
+
+    // subject_contains reaches far outside the default window through the
+    // full HTTP stack, not just the unfiltered path.
+    const filtered = await client.callTool({
+      name: "find_events",
+      arguments: {
+        from: "2025-01-01T00:00:00Z",
+        to: "2026-12-31T00:00:00Z",
+        subject_contains: "budget",
+      },
+    });
+    const filteredContent = filtered.content as Array<{
+      type: string;
+      text: string;
+    }>;
+    const filteredParsed = parse<{
+      events: Array<{ eventId: string }>;
+    }>(filteredContent[0]!.text);
+    expect(filteredParsed.events.map((e) => e.eventId).sort()).toEqual([
+      "evt-budget",
+      "evt-far-history",
+    ]);
+  });
+
+  it("e2e: get_recent_activity returns mixed message+event items", async () => {
+    await store.upsertEvents([
+      {
+        account: "alice@example.test",
+        eventId: "evt-upcoming",
+        subject: "Roadmap sync",
+        startAt: new Date("2026-04-14T09:00:00Z"),
+        endAt: new Date("2026-04-14T10:00:00Z"),
+        isAllDay: false,
+        isCancelled: false,
+        attendees: [],
+      },
+    ]);
+
+    const res = await client.callTool({
+      name: "get_recent_activity",
+      arguments: { hours: 24 },
+    });
+    const content = res.content as Array<{ type: string; text: string }>;
+    const parsed = parse<{
+      items: Array<
+        | { kind: "message"; at: string; message: { id: string } }
+        | { kind: "event"; at: string; event: { eventId: string } }
+      >;
+    }>(content[0]!.text);
+    expect(parsed.items.map((i) => i.kind)).toEqual([
+      "message",
+      "message",
+      "event",
+    ]);
+    const eventItem = parsed.items.find((i) => i.kind === "event");
+    expect(eventItem && eventItem.kind === "event" && eventItem.event.eventId).toBe(
+      "evt-upcoming",
+    );
+  });
+
   it("get_thread returns empty for an unknown thread id", async () => {
     const res = await client.callTool({
       name: "get_thread",
@@ -334,7 +440,7 @@ describe("MCP HTTP server end-to-end (SQLite + SDK client over HTTP)", () => {
 
     const recent = await client.callTool({
       name: "get_recent_activity",
-      arguments: { hours: 24, sources: ["whatsapp"] },
+      arguments: { hours: 24, sources: ["whatsapp"], kinds: ["message"] },
     });
     const r = parse<{
       count: number;

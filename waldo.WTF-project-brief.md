@@ -6,7 +6,7 @@
 
 ## 1. Intent
 
-A single, private, always-on service that pulls messages from all the places waldo actually gets pinged — Microsoft Teams and Outlook across multiple tenants/accounts, plus WhatsApp (via manual exports), plus whatever else later — into one unified local SQLite "lake", and exposes it to Claude via an HTTP MCP server so that asking *"wtf is going on in my life?"* returns a genuinely useful triage across everything at once.
+A single, private, always-on service that pulls messages *and calendar agenda* from all the places waldo actually gets pinged and scheduled — Microsoft Teams and Outlook across multiple tenants/accounts, plus WhatsApp (via manual exports), plus whatever else later — into one unified local SQLite "lake", and exposes it to Claude via an HTTP MCP server so that asking *"wtf is going on in my life?"* returns a genuinely useful triage across everything at once, including "what's on my plate" and "when did we meet about X".
 
 **The actual problem being solved**: waldo lives in ~4 different Microsoft accounts (iFacto, Dynex, customer tenants, personal), plus a phone full of WhatsApp chats that matter. Right now, "did I miss something important?" requires logging in and out of multiple places all day, and the context cost is real. Off-the-shelf tools don't fit because:
 
@@ -51,7 +51,8 @@ A single, private, always-on service that pulls messages from all the places wal
 │  │  │  ─ Graph poll │    │  ─ sync_state             │ │ │
 │  │  │  ─ N accounts │    │  ─ sync_log               │ │ │
 │  │  │  ─ delta qry  │    │  ─ accounts               │ │ │
-│  │  │  ─ every 5min │    │  ─ FTS5 index             │ │ │
+│  │  │  ─ every 5min │    │  ─ events (calendar)      │ │ │
+│  │  │               │    │  ─ FTS5 index             │ │ │
 │  │  └───────────────┘    └────────────┬─────────────┘ │ │
 │  │                                    │               │ │
 │  │                       ┌────────────┴─────────────┐ │ │

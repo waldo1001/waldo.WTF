@@ -2,14 +2,18 @@ import * as path from "node:path";
 import { config as loadDotenv } from "dotenv";
 import { loadConfig, type Config } from "./config.js";
 import {
+  CALENDAR_SCOPES,
   isConsentRequiredError,
   MsalAuthClient,
+  SCOPES,
   teamsAuthorityFor,
   TEAMS_CHANNEL_SCOPES,
+  TRANSCRIPT_SCOPES,
   vivaAuthorityFor,
   YAMMER_PUBLIC_CLIENT_ID,
   YAMMER_SCOPE,
 } from "./auth/msal-auth-client.js";
+import type { CalendarAccountStore } from "./store/calendar-account-store.js";
 import { TokenCacheStore } from "./auth/token-cache-store.js";
 import { VivaExternalTenantsStore } from "./auth/viva-external-tenants-store.js";
 import type { AuthClient } from "./auth/auth-client.js";
@@ -18,12 +22,15 @@ import { main, type MainOptions, type MainResult } from "./index.js";
 import { nodeFileSystem } from "./fs-node.js";
 import type {
   AddSteeringRuleInput,
+  CalendarEvent,
   MessageSource,
   SteeringRule,
   SteeringRuleType,
   TeamsChannelSubscription,
   VivaSubscription,
 } from "./store/types.js";
+import type { MessageStore } from "./store/message-store.js";
+import type { Clock } from "./clock.js";
 import type { VivaClient, VivaCommunity } from "./sources/viva.js";
 import type { VivaSubscriptionStore } from "./store/viva-subscription-store.js";
 import type {
@@ -214,6 +221,9 @@ export interface RunCliOptions extends AddAccountOptions {
   readonly rethreadWhatsAppImpl?: RethreadWhatsAppImpl;
   readonly vivaImpl?: VivaImpl;
   readonly teamsImpl?: TeamsImpl;
+  readonly calendarAccountStore?: CalendarAccountStore;
+  readonly calendarStore?: MessageStore;
+  readonly clock?: Clock;
 }
 
 export type RunCliResult =
@@ -234,6 +244,31 @@ export type RunCliResult =
   | { readonly mode: "steer"; readonly result: SteerCliResult }
   | { readonly mode: "viva"; readonly result: VivaCliResult }
   | { readonly mode: "teams"; readonly result: TeamsCliResult }
+  | {
+      readonly mode: "calendar-enable";
+      readonly account: string;
+    }
+  | {
+      readonly mode: "calendar-disable";
+      readonly account: string;
+      readonly removed: boolean;
+    }
+  | {
+      readonly mode: "calendar-list";
+      readonly events: readonly CalendarEvent[];
+    }
+  | {
+      readonly mode: "calendar-resync";
+      readonly clearedAccounts: readonly string[];
+    }
+  | {
+      readonly mode: "transcripts-enable";
+      readonly account: string;
+    }
+  | {
+      readonly mode: "transcripts-disable";
+      readonly account: string;
+    }
   | { readonly mode: "server"; readonly main: MainResult };
 
 const BOOLEAN_FLAGS = new Set([
@@ -248,6 +283,8 @@ const BOOLEAN_FLAGS = new Set([
   "--teams-list",
   "--teams-discover",
   "--teams-admin-consent",
+  "--calendar-list",
+  "--calendar-resync",
 ]);
 
 const VIVA_VALUE_FLAGS = new Set([
@@ -261,6 +298,13 @@ const TEAMS_VALUE_FLAGS = new Set([
 ]);
 
 const ADD_ACCOUNT_VALUE_FLAGS = new Set(["--tenant"]);
+
+const CALENDAR_VALUE_FLAGS = new Set([
+  "--calendar-enable",
+  "--calendar-disable",
+  "--transcripts-enable",
+  "--transcripts-disable",
+]);
 
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -280,6 +324,8 @@ const STEER_ADD_FLAGS: Readonly<Record<string, SteeringRuleType>> = {
   "--steer-add-thread": "thread_id",
   "--steer-add-thread-name": "thread_name_contains",
   "--steer-add-body": "body_contains",
+  "--steer-add-event-organizer": "event_organizer_email",
+  "--steer-add-event-subject": "event_subject_contains",
 };
 
 const STEER_TOGGLE_FLAGS = new Set([
@@ -322,7 +368,8 @@ function parseArgv(argv: readonly string[]): {
       STEER_MODIFIER_FLAGS.has(a) ||
       VIVA_VALUE_FLAGS.has(a) ||
       TEAMS_VALUE_FLAGS.has(a) ||
-      ADD_ACCOUNT_VALUE_FLAGS.has(a)
+      ADD_ACCOUNT_VALUE_FLAGS.has(a) ||
+      CALENDAR_VALUE_FLAGS.has(a)
     ) {
       const v = argv[i + 1];
       if (v === undefined) {
@@ -336,7 +383,7 @@ function parseArgv(argv: readonly string[]): {
       continue;
     }
     throw new CliUsageError(
-      `Unknown flag: ${a}. Usage: waldo-wtf [--add-account | --backfill-bodies | --import-whatsapp | --steer-* | --viva-* | --teams-* | --teams-admin-consent]`,
+      `Unknown flag: ${a}. Usage: waldo-wtf [--add-account | --backfill-bodies | --import-whatsapp | --steer-* | --viva-* | --teams-* | --teams-admin-consent | --calendar-enable | --calendar-disable | --calendar-list | --calendar-resync | --transcripts-enable | --transcripts-disable]`,
     );
   }
   return { boolean, values };
@@ -1462,6 +1509,330 @@ export async function addAccount(
   return auth.loginWithDeviceCode((msg) => print(msg));
 }
 
+export interface CalendarEnableOptions extends AddAccountOptions {
+  readonly calendarAccountStore?: CalendarAccountStore;
+}
+
+async function buildDefaultCalendarAccountStore(
+  config: Config,
+): Promise<{
+  store: CalendarAccountStore;
+  close: () => void;
+}> {
+  /* c8 ignore start -- real sqlite store only constructed outside tests */
+  const { default: Database } = await import("better-sqlite3");
+  const { SqliteCalendarAccountStore } = await import(
+    "./store/calendar-account-store.js"
+  );
+  const db = new Database(config.dbPath);
+  db.pragma("journal_mode = WAL");
+  return {
+    store: new SqliteCalendarAccountStore(db),
+    close: () => db.close(),
+  };
+  /* c8 ignore stop */
+}
+
+export async function calendarEnable(
+  username: string,
+  opts: CalendarEnableOptions = {},
+): Promise<{ account: string }> {
+  const env = resolveEnv(opts);
+  const config = loadConfig(env);
+  /* c8 ignore next -- default console.log path, only in production */
+  const print: PrintFn = opts.print ?? ((m) => console.log(m));
+  /* c8 ignore next -- real MSAL adapter only constructed outside tests */
+  const auth = opts.auth ?? buildRealAuth(env);
+
+  let account: Account;
+  try {
+    account = await auth.loginWithDeviceCode((msg) => print(msg), {
+      scopes: [...SCOPES, ...CALENDAR_SCOPES],
+    });
+  } catch (err) {
+    if (isConsentRequiredError(err)) {
+      throw new CliUsageError(
+        `Calendar consent was not granted — ask a tenant admin to grant ${CALENDAR_SCOPES.join(", ")}, then re-run --calendar-enable ${username}.`,
+      );
+    }
+    throw err;
+  }
+  if (account.username.toLowerCase() !== username.toLowerCase()) {
+    throw new CliUsageError(
+      `signed-in account (${account.username}) does not match the requested account (${username}) — re-run --calendar-enable ${username} and sign in with that account`,
+    );
+  }
+
+  let store = opts.calendarAccountStore;
+  let close: (() => void) | undefined;
+  if (store === undefined) {
+    const built = await buildDefaultCalendarAccountStore(config);
+    store = built.store;
+    close = built.close;
+  }
+  try {
+    await store.enable({
+      account: account.username,
+      tenantId: account.tenantId,
+    });
+  } finally {
+    close?.();
+  }
+  return { account: account.username };
+}
+
+export interface CalendarDisableOptions {
+  readonly env?: Env;
+  readonly loadDotenv?: boolean;
+  readonly calendarAccountStore?: CalendarAccountStore;
+}
+
+export async function calendarDisable(
+  username: string,
+  opts: CalendarDisableOptions = {},
+): Promise<{ account: string; removed: boolean }> {
+  const env = resolveEnv(opts);
+  const config = loadConfig(env);
+
+  let store = opts.calendarAccountStore;
+  let close: (() => void) | undefined;
+  if (store === undefined) {
+    const built = await buildDefaultCalendarAccountStore(config);
+    store = built.store;
+    close = built.close;
+  }
+  try {
+    const result = await store.disable(username);
+    return { account: username, removed: result.removed };
+  } finally {
+    close?.();
+  }
+}
+
+export interface TranscriptsEnableOptions extends AddAccountOptions {
+  readonly calendarAccountStore?: CalendarAccountStore;
+}
+
+export async function transcriptsEnable(
+  username: string,
+  opts: TranscriptsEnableOptions = {},
+): Promise<{ account: string }> {
+  const env = resolveEnv(opts);
+  const config = loadConfig(env);
+  /* c8 ignore next -- default console.log path, only in production */
+  const print: PrintFn = opts.print ?? ((m) => console.log(m));
+  /* c8 ignore next -- real MSAL adapter only constructed outside tests */
+  const auth = opts.auth ?? buildRealAuth(env);
+
+  let store = opts.calendarAccountStore;
+  let close: (() => void) | undefined;
+  if (store === undefined) {
+    const built = await buildDefaultCalendarAccountStore(config);
+    store = built.store;
+    close = built.close;
+  }
+
+  try {
+    if (!(await store.isEnabled(username))) {
+      throw new CliUsageError(
+        `${username} is not calendar-enabled — run --calendar-enable ${username} first, then retry --transcripts-enable ${username}.`,
+      );
+    }
+
+    let account: Account;
+    try {
+      account = await auth.loginWithDeviceCode((msg) => print(msg), {
+        scopes: [...SCOPES, ...CALENDAR_SCOPES, ...TRANSCRIPT_SCOPES],
+      });
+    } catch (err) {
+      if (isConsentRequiredError(err)) {
+        throw new CliUsageError(
+          `Transcript consent was not granted — ask a tenant admin to grant ${TRANSCRIPT_SCOPES.join(", ")}, then re-run --transcripts-enable ${username}.`,
+        );
+      }
+      throw err;
+    }
+    if (account.username.toLowerCase() !== username.toLowerCase()) {
+      throw new CliUsageError(
+        `signed-in account (${account.username}) does not match the requested account (${username}) — re-run --transcripts-enable ${username} and sign in with that account`,
+      );
+    }
+
+    await store.setTranscriptsEnabled(account.username, true);
+    return { account: account.username };
+  } finally {
+    close?.();
+  }
+}
+
+export interface TranscriptsDisableOptions {
+  readonly env?: Env;
+  readonly loadDotenv?: boolean;
+  readonly calendarAccountStore?: CalendarAccountStore;
+}
+
+export async function transcriptsDisable(
+  username: string,
+  opts: TranscriptsDisableOptions = {},
+): Promise<{ account: string }> {
+  const env = resolveEnv(opts);
+  const config = loadConfig(env);
+
+  let store = opts.calendarAccountStore;
+  let close: (() => void) | undefined;
+  if (store === undefined) {
+    const built = await buildDefaultCalendarAccountStore(config);
+    store = built.store;
+    close = built.close;
+  }
+  try {
+    await store.setTranscriptsEnabled(username, false);
+    return { account: username };
+  } finally {
+    close?.();
+  }
+}
+
+const CALENDAR_LIST_WINDOW_DAYS = 7;
+const CALENDAR_LIST_SUBJECT_MAX = 60;
+
+function truncateSubject(subject: string): string {
+  return subject.length > CALENDAR_LIST_SUBJECT_MAX
+    ? `${subject.slice(0, CALENDAR_LIST_SUBJECT_MAX)}…`
+    : subject;
+}
+
+export interface CalendarListOptions {
+  readonly env?: Env;
+  readonly loadDotenv?: boolean;
+  readonly calendarStore?: MessageStore;
+  readonly clock?: Clock;
+  readonly print?: PrintFn;
+}
+
+export async function calendarList(
+  opts: CalendarListOptions = {},
+): Promise<{ events: readonly CalendarEvent[] }> {
+  const env = resolveEnv(opts);
+  const config = loadConfig(env);
+  /* c8 ignore next -- default console.log path, only in production */
+  const print: PrintFn = opts.print ?? ((m) => console.log(m));
+  /* c8 ignore next -- systemClock only constructed outside tests */
+  const clock = opts.clock ?? (await import("./clock.js")).systemClock;
+
+  let store = opts.calendarStore;
+  let close: (() => void) | undefined;
+  if (store === undefined) {
+    /* c8 ignore start -- real sqlite store only constructed outside tests */
+    const { default: Database } = await import("better-sqlite3");
+    const { SqliteMessageStore } = await import(
+      "./store/sqlite-message-store.js"
+    );
+    const db = new Database(config.dbPath);
+    db.pragma("journal_mode = WAL");
+    store = new SqliteMessageStore(db);
+    close = () => db.close();
+    /* c8 ignore stop */
+  }
+  try {
+    const from = clock.now();
+    const to = new Date(from.getTime() + CALENDAR_LIST_WINDOW_DAYS * 86_400_000);
+    const result = await store.findEvents({
+      from,
+      to,
+      order: "asc",
+      limit: 250,
+    });
+    if (result.events.length === 0) {
+      print("no upcoming events");
+    } else {
+      for (const e of result.events) {
+        const durationMin = Math.round(
+          (e.endAt.getTime() - e.startAt.getTime()) / 60_000,
+        );
+        const subject = truncateSubject(e.subject ?? "(no subject)");
+        const online = e.onlineMeetingUrl !== undefined ? "yes" : "no";
+        print(
+          `${e.account} | ${e.startAt.toISOString()} | ${durationMin}m | ${subject} | ${online}`,
+        );
+      }
+    }
+    return { events: result.events };
+  } finally {
+    close?.();
+  }
+}
+
+export interface CalendarResyncOptions {
+  readonly env?: Env;
+  readonly loadDotenv?: boolean;
+  readonly calendarStore?: MessageStore;
+  readonly calendarAccountStore?: CalendarAccountStore;
+  readonly print?: PrintFn;
+}
+
+export async function calendarResync(
+  account: string | undefined,
+  opts: CalendarResyncOptions = {},
+): Promise<{ clearedAccounts: readonly string[] }> {
+  const env = resolveEnv(opts);
+  const config = loadConfig(env);
+  /* c8 ignore next -- default console.log path, only in production */
+  const print: PrintFn = opts.print ?? ((m) => console.log(m));
+
+  let messageStore = opts.calendarStore;
+  let accountStore = opts.calendarAccountStore;
+  let close: (() => void) | undefined;
+  if (messageStore === undefined || accountStore === undefined) {
+    /* c8 ignore start -- real sqlite stores only constructed outside tests */
+    const { default: Database } = await import("better-sqlite3");
+    const { SqliteMessageStore } = await import(
+      "./store/sqlite-message-store.js"
+    );
+    const { SqliteCalendarAccountStore } = await import(
+      "./store/calendar-account-store.js"
+    );
+    const db = new Database(config.dbPath);
+    db.pragma("journal_mode = WAL");
+    messageStore ??= new SqliteMessageStore(db);
+    accountStore ??= new SqliteCalendarAccountStore(db);
+    close = () => db.close();
+    /* c8 ignore stop */
+  }
+
+  try {
+    const targets =
+      account !== undefined
+        ? [account]
+        : (await accountStore.listAll()).map((a) => a.account);
+
+    const cleared: string[] = [];
+    for (const target of targets) {
+      const enabled = await accountStore.isEnabled(target);
+      if (!enabled) {
+        if (account !== undefined) {
+          print(`${target} is not calendar-enabled — nothing to resync`);
+        }
+        continue;
+      }
+      await messageStore.setSyncState({
+        account: target,
+        source: "calendar",
+        folder: "default",
+      });
+      cleared.push(target);
+    }
+    if (cleared.length > 0) {
+      print(
+        `cleared calendar cursor for: ${cleared.join(", ")} — next scheduler tick re-walks the window`,
+      );
+    }
+    return { clearedAccounts: cleared };
+  } finally {
+    close?.();
+  }
+}
+
 export async function runCli(
   argv: readonly string[],
   opts: RunCliOptions = {},
@@ -1486,6 +1857,85 @@ export async function runCli(
   }
   if (tenantValue !== undefined) {
     throw new CliUsageError("--tenant requires --add-account");
+  }
+
+  const calendarEnableValue = parsed.values.get("--calendar-enable");
+  if (calendarEnableValue !== undefined) {
+    const result = await calendarEnable(calendarEnableValue, {
+      ...opts,
+      ...(opts.calendarAccountStore !== undefined && {
+        calendarAccountStore: opts.calendarAccountStore,
+      }),
+    });
+    return { mode: "calendar-enable", account: result.account };
+  }
+
+  const calendarDisableValue = parsed.values.get("--calendar-disable");
+  if (calendarDisableValue !== undefined) {
+    const result = await calendarDisable(calendarDisableValue, {
+      ...(opts.env !== undefined && { env: opts.env }),
+      ...(opts.loadDotenv !== undefined && { loadDotenv: opts.loadDotenv }),
+      ...(opts.calendarAccountStore !== undefined && {
+        calendarAccountStore: opts.calendarAccountStore,
+      }),
+    });
+    return {
+      mode: "calendar-disable",
+      account: result.account,
+      removed: result.removed,
+    };
+  }
+
+  const transcriptsEnableValue = parsed.values.get("--transcripts-enable");
+  if (transcriptsEnableValue !== undefined) {
+    const result = await transcriptsEnable(transcriptsEnableValue, {
+      ...opts,
+      ...(opts.calendarAccountStore !== undefined && {
+        calendarAccountStore: opts.calendarAccountStore,
+      }),
+    });
+    return { mode: "transcripts-enable", account: result.account };
+  }
+
+  const transcriptsDisableValue = parsed.values.get("--transcripts-disable");
+  if (transcriptsDisableValue !== undefined) {
+    const result = await transcriptsDisable(transcriptsDisableValue, {
+      ...(opts.env !== undefined && { env: opts.env }),
+      ...(opts.loadDotenv !== undefined && { loadDotenv: opts.loadDotenv }),
+      ...(opts.calendarAccountStore !== undefined && {
+        calendarAccountStore: opts.calendarAccountStore,
+      }),
+    });
+    return { mode: "transcripts-disable", account: result.account };
+  }
+
+  if (parsed.boolean.has("--calendar-list")) {
+    const result = await calendarList({
+      ...(opts.env !== undefined && { env: opts.env }),
+      ...(opts.loadDotenv !== undefined && { loadDotenv: opts.loadDotenv }),
+      ...(opts.print !== undefined && { print: opts.print }),
+      ...(opts.calendarStore !== undefined && {
+        calendarStore: opts.calendarStore,
+      }),
+      ...(opts.clock !== undefined && { clock: opts.clock }),
+    });
+    return { mode: "calendar-list", events: result.events };
+  }
+
+  if (parsed.boolean.has("--calendar-resync")) {
+    const resyncAccount = parsed.values.get("--account");
+    const result = await calendarResync(resyncAccount, {
+      ...(opts.env !== undefined && { env: opts.env }),
+      ...(opts.loadDotenv !== undefined && { loadDotenv: opts.loadDotenv }),
+      ...(opts.print !== undefined && { print: opts.print }),
+      ...(opts.calendarStore !== undefined && {
+        calendarStore: opts.calendarStore,
+      }),
+      ...(opts.calendarAccountStore !== undefined && {
+        calendarAccountStore: opts.calendarAccountStore,
+      }),
+    });
+    return { mode: "calendar-resync", clearedAccounts: result.clearedAccounts };
   }
 
   const steerCmd = resolveSteerCommand(parsed);
@@ -1603,6 +2053,26 @@ if (isMain) {
         console.log(
           `WhatsApp rethread done: ${r.rowsUpdated} rows updated, ${r.duplicatesDropped} duplicates dropped across ${r.mergedGroups}/${r.groups} groups`,
         );
+        process.exit(0);
+      } else if (r.mode === "calendar-enable") {
+        console.log(`Calendar enabled for ${r.account}`);
+        process.exit(0);
+      } else if (r.mode === "calendar-disable") {
+        console.log(
+          r.removed
+            ? `Calendar disabled for ${r.account} (synced events kept)`
+            : `${r.account} was not calendar-enabled — nothing to do`,
+        );
+        process.exit(0);
+      } else if (r.mode === "calendar-list" || r.mode === "calendar-resync") {
+        // calendarList/calendarResync already printed via their own `print`
+        // callback; nothing more to do here.
+        process.exit(0);
+      } else if (r.mode === "transcripts-enable") {
+        console.log(`Transcripts enabled for ${r.account}`);
+        process.exit(0);
+      } else if (r.mode === "transcripts-disable") {
+        console.log(`Transcripts disabled for ${r.account}`);
         process.exit(0);
       }
     })

@@ -5,7 +5,7 @@ import { InMemorySteeringStore } from "../testing/in-memory-steering-store.js";
 import type { MessageStore } from "./message-store.js";
 import { SqliteMessageStore } from "./sqlite-message-store.js";
 import { SqliteSteeringStore, type SteeringStore } from "./steering-store.js";
-import type { Message } from "./types.js";
+import type { CalendarEvent, Message } from "./types.js";
 
 function msg(overrides: Partial<Message> & Pick<Message, "id">): Message {
   return {
@@ -14,6 +14,20 @@ function msg(overrides: Partial<Message> & Pick<Message, "id">): Message {
     nativeId: `native-${overrides.id}`,
     sentAt: new Date("2026-04-20T10:00:00Z"),
     importedAt: new Date("2026-04-20T10:05:00Z"),
+    ...overrides,
+  };
+}
+
+function calendarEvent(
+  overrides: Partial<CalendarEvent> & Pick<CalendarEvent, "eventId">,
+): CalendarEvent {
+  return {
+    account: "a@example.test",
+    startAt: new Date("2026-04-20T10:00:00Z"),
+    endAt: new Date("2026-04-20T11:00:00Z"),
+    isAllDay: false,
+    isCancelled: false,
+    attendees: [],
     ...overrides,
   };
 }
@@ -298,6 +312,103 @@ for (const [label, factory] of [
       });
       const rows = await store.getThread({ threadId: "chat-1" });
       expect(rows.map((m) => m.id).sort()).toEqual(["m1", "m2"]);
+    });
+
+    const eventWindow = {
+      from: new Date("2026-04-01T00:00:00Z"),
+      to: new Date("2026-04-30T00:00:00Z"),
+      order: "asc" as const,
+      limit: 50,
+    };
+
+    it("findEvents excludes events matching an event_organizer_email rule by default", async () => {
+      const { store, steering } = factory(label);
+      await store.upsertEvents([
+        calendarEvent({ eventId: "muted", organizerEmail: "noisy@example.test" }),
+        calendarEvent({ eventId: "keep", organizerEmail: "alice@example.test" }),
+      ]);
+      await steering.addRule({
+        ruleType: "event_organizer_email",
+        pattern: "noisy@example.test",
+      });
+      const got = await store.findEvents(eventWindow);
+      expect(got.events.map((e) => e.eventId).sort()).toEqual(["keep"]);
+      expect(got.mutedCount).toBe(1);
+    });
+
+    it("findEvents excludes events matching an event_subject_contains rule by default", async () => {
+      const { store, steering } = factory(label);
+      await store.upsertEvents([
+        calendarEvent({ eventId: "muted", subject: "Daily standup" }),
+        calendarEvent({ eventId: "keep", subject: "1:1 with Kristof" }),
+      ]);
+      await steering.addRule({
+        ruleType: "event_subject_contains",
+        pattern: "standup",
+      });
+      const got = await store.findEvents(eventWindow);
+      expect(got.events.map((e) => e.eventId).sort()).toEqual(["keep"]);
+      expect(got.mutedCount).toBe(1);
+    });
+
+    it("findEvents with includeMuted=true returns everything", async () => {
+      const { store, steering } = factory(label);
+      await store.upsertEvents([
+        calendarEvent({ eventId: "muted", organizerEmail: "noisy@example.test" }),
+        calendarEvent({ eventId: "keep", organizerEmail: "alice@example.test" }),
+      ]);
+      await steering.addRule({
+        ruleType: "event_organizer_email",
+        pattern: "noisy@example.test",
+      });
+      const got = await store.findEvents({ ...eventWindow, includeMuted: true });
+      expect(got.events.map((e) => e.eventId).sort()).toEqual(["keep", "muted"]);
+      expect(got.mutedCount).toBe(0);
+    });
+
+    it("a sender_email rule muting an organizer's address does NOT drop their meetings", async () => {
+      const { store, steering } = factory(label);
+      await store.upsertEvents([
+        calendarEvent({ eventId: "e1", organizerEmail: "noisy@example.test" }),
+      ]);
+      await steering.addRule({
+        ruleType: "sender_email",
+        pattern: "noisy@example.test",
+      });
+      const got = await store.findEvents(eventWindow);
+      expect(got.events.map((e) => e.eventId)).toEqual(["e1"]);
+      expect(got.mutedCount).toBe(0);
+    });
+
+    it("an event_organizer_email rule does NOT mute that person's emails", async () => {
+      const { store, steering } = factory(label);
+      await store.upsertMessages([
+        msg({ id: "m1", senderEmail: "noisy@example.test" }),
+      ]);
+      await steering.addRule({
+        ruleType: "event_organizer_email",
+        pattern: "noisy@example.test",
+      });
+      const got = await store.getRecentMessages({ since, limit: 50 });
+      expect(got.messages.map((m) => m.id)).toEqual(["m1"]);
+      expect(got.mutedCount).toBe(0);
+    });
+
+    it("getEventsInRange is unaffected by event steering rules (store-level carve-out for get_event)", async () => {
+      const { store, steering } = factory(label);
+      await store.upsertEvents([
+        calendarEvent({ eventId: "muted", organizerEmail: "noisy@example.test" }),
+      ]);
+      await steering.addRule({
+        ruleType: "event_organizer_email",
+        pattern: "noisy@example.test",
+      });
+      const rows = await store.getEventsInRange(
+        "a@example.test",
+        eventWindow.from,
+        eventWindow.to,
+      );
+      expect(rows.map((e) => e.eventId)).toEqual(["muted"]);
     });
   });
 }

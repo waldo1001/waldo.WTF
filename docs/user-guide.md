@@ -22,32 +22,58 @@ on in my life?" return a better answer?* If no, don't build it.
 
 ## 2. The MCP tool surface (v1)
 
-Seven tools total. Claude chooses which to call.
+Nine tools total. Claude chooses which to call.
 
-### `get_recent_activity(hours, sources?, accounts?)`
+### `get_recent_activity(hours, sources?, accounts?, kinds?, to?)`
 
-"What's happened recently". Returns rows across all sources and
-accounts, ordered `sent_at DESC`, within the last `hours`. Filter by
-`sources` (`["outlook", "teams", "teams-channel", "whatsapp", "viva-engage"]`)
-or `accounts` (`["your@email.com"]`) to narrow. `teams` is 1:1 and group
-chats; `teams-channel` is messages from channels you've explicitly
-subscribed to via `--teams-subscribe` (see §5c).
+"What's happened recently — and what's coming up". Default `kinds` is
+`["message", "event"]`: a single chronological `items` feed mixing past
+messages (`from = now - hours`) with calendar events up to `to`
+(default `now + 7d` when events are included). Each item is
+`{kind: "message", at, message}` or `{kind: "event", at, event}`,
+ordered by `at` ascending. Filter by `sources`
+(`["outlook", "teams", "teams-channel", "whatsapp", "viva-engage"]`,
+messages only) or `accounts` (`["your@email.com"]`, both kinds) to
+narrow. `teams` is 1:1 and group chats; `teams-channel` is messages
+from channels you've explicitly subscribed to via `--teams-subscribe`
+(see §5c).
 
-Each message carries an optional `replied: boolean` — true iff the
-latest in-window message in that thread has `fromMe: true` (your own
-reply). Answers *"did I reply to X?"* in a single call. Messages
+Pass `kinds: ["message"]` to get the original messages-only response
+shape (`{count, messages, muted_count}`) unchanged — useful when the
+question is purely about messages and the mixed feed would just add
+noise. `kinds: ["event"]` returns event items only, still in the new
+`items` shape.
+
+Each message item carries an optional `replied: boolean` — true iff
+the latest in-window message in that thread has `fromMe: true` (your
+own reply). Answers *"did I reply to X?"* in a single call. Messages
 without a `threadId` are not annotated.
 
-Typical prompt: *"What happened in the last 4 hours across all my
-accounts?"* or *"Which mails from today am I still on the hook for?"*
-— Claude reads `replied=false` rows to build the second answer.
+Typical prompt: *"What's on my plate?"* (mixed feed — recent mail plus
+upcoming meetings) or *"What happened in the last 4 hours across all my
+accounts?"* (`kinds: ["message"]`) or *"Which mails from today am I
+still on the hook for?"* — Claude reads `replied=false` rows to build
+the last answer.
 
-### `search(query?, sender_email?, sender_name?, after?, before?, limit?, include_body?)`
+### `search(query?, sender_email?, sender_name?, after?, before?, limit?, include_body?, kinds?)`
 
 Full-text search via SQLite FTS5 over `thread_name`, `sender_name`,
 `body`, plus optional structured filters on the stored From header and
 `sent_at`. At least one of `query`, `sender_email`, or `sender_name`
 must be present.
+
+`kinds` defaults to `["message"]`, keeping the original response shape
+(each hit carries `message` directly). Pass `kinds: ["transcript"]` or
+`["message", "transcript"]` to also full-text search meeting
+transcripts (requires `--transcripts-enable` for the account, §5e) —
+once `kinds` includes `"transcript"`, every hit gains a `kind` field
+plus either `message` or `segment`. `sender_email` / `sender_name` /
+`after` / `before` / `include_body` are message-only — a
+transcript-only search (`kinds: ["transcript"]`) ignores them and only
+ever uses `query`; passing no query text with `kinds: ["transcript"]`
+returns zero transcript hits, not an error. Transcript hits are never
+filtered by steering (transcripts attach to events, which already have
+their own steering predicates — same carve-out as `get_event`).
 
 - `sender_email` — case-insensitive exact match on the From header
   address. Hits messages *from* that address, not just ones mentioning
@@ -74,6 +100,8 @@ Typical prompts:
   `sender_name: "peeters"`, `after: "2026-03-21"`.
 - *"Find emails from Defrancq about the pricing proposal."* →
   `sender_name: "defrancq"`, `query: "pricing"`.
+- *"Did anyone say 'budget' in a meeting recently?"* →
+  `query: "budget"`, `kinds: ["transcript"]`.
 
 ### `get_thread(thread_id, limit?, include_body?, from_start?)`
 
@@ -113,6 +141,60 @@ Typical flow: Claude calls `search` → picks a result → calls
 Every projection (`search`, `get_recent_activity`, `get_thread`)
 echoes an optional `threadId` field on each message, so the round-trip
 needs no guessing.
+
+### `find_events(from?, to?, accounts?, subject_contains?, attendee?, order?, limit?, include_muted?)`
+
+Agenda **and** history search over calendar events. Default (no args):
+next 7 days across all calendar-enabled accounts, soonest first. Pass
+`subject_contains` and/or `attendee` to search the full ~year of
+synced history — "when is the meeting about the office move", "did I
+already plan something with Kristof" — both are case-insensitive
+substring matches (subject text; attendee display name, email, or
+organizer). Setting either filter lifts the normal 92-day window cap
+that otherwise bounds unfiltered queries. Use `order: "desc"` for
+history questions (most recent match first); leave it at the default
+`"asc"` for agenda questions. `truncated: true` in the response means
+there were more matches than the `limit` (default 100, max 250) —
+narrow the query rather than assume you saw everything. Prefer this
+tool over `search` or `get_recent_activity` for anything about a
+meeting or appointment. Needs `--calendar-enable` to have been run for
+an account first (§5d) — otherwise there's nothing to find.
+
+Events matching an `event_organizer_email` or `event_subject_contains`
+steering rule are hidden by default (`muted_count` + `steering_hint`
+report how many, same UX as `search`/`get_recent_activity`); pass
+`include_muted: true` to see them (§6e).
+
+### `get_event(event_id, account?, include_transcript?)`
+
+Look up a single calendar event by id — take the id from a prior
+`find_events` result. Returns the event, its attendees, and — for
+online meetings — the last 50 messages from the linked Teams
+meeting-chat, so "what did we say in the chat for the budget review
+meeting" is one call once you have the event id. `linkedChat` is
+`null` for in-person meetings; it's `{chatId, messages: []}` rather
+than an error when the meeting is online but the chat sync hasn't
+caught up yet. Steering does **not** apply here — neither to the event
+itself nor to `linkedChat.messages` — same carve-out as `get_thread`.
+Calendar sync is per-account opt-in (see §5d) — accounts that haven't
+run `--calendar-enable` have no events for this tool to find.
+
+Pass `include_transcript: true` to also pull the meeting transcript
+into `linkedTranscript` (same shape as `get_event_transcript` below) —
+useful for "give me everything about meeting X" in one call. The field
+is absent entirely when not requested, not `null`.
+
+### `get_event_transcript(event_id, account?)`
+
+Return just the transcript for a calendar event — `{transcript,
+segments}`. `transcript` is `null` and `segments` is `[]` when nothing
+was fetched yet; this single shape covers "not transcribed", "sync
+hasn't run", "quota-exhausted", and "fetch failed" indistinguishably —
+check `get_sync_status`/`diagnose_sync_health` if the caller needs to
+tell those apart. Requires `--transcripts-enable` for the account
+(§5e); an event can accumulate more than one transcript row (e.g. a
+recording restart) — this always returns the most recently fetched
+*successful* one. No steering, same carve-out as `get_event`.
 
 ### `list_accounts()`
 
@@ -405,6 +487,84 @@ other source — `add_steering_rule(rule_type="thread_id", pattern=…)`
 mutes a single channel-thread without touching anything else, and
 `source: "teams-channel"` scopes a rule to channels only.
 
+## 5d. Enabling calendar sync (per-account opt-in)
+
+Unlike every other source, calendar sync is **off by default for every
+account** — enable it only for the accounts whose agenda you actually
+want in the lake.
+
+```sh
+# Enable calendar for one account. Prompts a device-code login
+# requesting the Calendars.Read scope alongside the base scopes —
+# this is the ONLY account that gets prompted; every other account is
+# untouched. If the tenant requires admin consent for Calendars.Read,
+# the command fails with a message naming the scope and tenant to hand
+# to your admin, and nothing is written.
+npm run dev -- --calendar-enable your@email.com
+
+# Disable calendar for an account. Removes the opt-in row only —
+# events already synced into the lake are kept, not deleted.
+npm run dev -- --calendar-disable your@email.com
+```
+
+Once enabled, the next sync tick walks `/me/calendarView/delta` over a
+rolling `[now − 365 days, now + 60 days]` window on first sync (so
+"when did we meet about X" works for the past year), then resumes from
+the stored delta cursor on every later tick.
+
+```sh
+# Operator-side inspection: print the next 7 days across every
+# calendar-enabled account. Read-only.
+npm run dev -- --calendar-list
+
+# Clear the stored delta cursor for every calendar-enabled account, so
+# the next scheduler tick re-walks the full window from scratch.
+npm run dev -- --calendar-resync
+
+# Clear just one account's cursor.
+npm run dev -- --calendar-resync --account your@email.com
+```
+
+Ask Claude directly once an account is enabled and has synced —
+`find_events` is the query tool (§2).
+
+## 5e. Enabling meeting transcripts (per-account opt-in, requires calendar)
+
+Meeting transcript sync is layered on top of calendar sync and is
+**also off by default**. `--transcripts-enable` requires the account
+already be calendar-enabled (§5d) — it errors with a pointer to
+`--calendar-enable` otherwise.
+
+```sh
+# Enable transcripts for one account. Requires --calendar-enable to
+# have been run for that account first. Prompts a device-code login
+# requesting OnlineMeetingTranscript.Read.All alongside the account's
+# existing scopes (Entra treats this as one combined consent grant —
+# it does not re-prompt for Mail.Read/Chat.Read/Calendars.Read). If the
+# tenant requires admin consent, the command fails with a message
+# naming the scope, and the flag is not set.
+npm run dev -- --transcripts-enable your@email.com
+
+# Disable transcripts for an account. Clears the flag only — already
+# fetched transcripts are kept, not deleted, and calendar sync for
+# that account is unaffected.
+npm run dev -- --transcripts-disable your@email.com
+```
+
+Before enabling, read the metering and meeting-expiration notes in
+[setup.md](setup.md) — transcript *content* fetches are a metered
+Graph API (free tier ~600 min/month/tenant/app, then billed), and the
+API only works for meetings that haven't expired, so enabling
+transcripts today cannot recover transcripts for meetings that already
+happened.
+
+Once enabled, transcript sync runs automatically on the next scheduler
+tick (same background loop as everything else) — no separate command
+needed. Query what was fetched with `get_event_transcript` (§2) or via
+`get_event`'s `include_transcript` flag when you already have the
+event id, or with `search(..., kinds: ["transcript"])` when you don't
+— e.g. "did anyone say X in a meeting?".
+
 ## 6. Adding WhatsApp exports (Weekend 6+)
 
 The end-to-end flow, once set up:
@@ -646,14 +806,20 @@ each, archives to `WALDO_WHATSAPP_ARCHIVE_PATH/YYYY-MM/`, and exits.
 | `WALDO_WHATSAPP_ARCHIVE_PATH` | `~/WhatsAppArchive` | Where imported files are moved |
 | `WALDO_WHATSAPP_ACCOUNT` | `whatsapp-local` | `account` column value for imported rows |
 
-## 6e. Muting noisy senders (steering rules)
+## 6e. Muting noisy senders and meetings (steering rules)
 
-`get_recent_activity` and `search` hide messages that match **steering
-rules** by default. Rules are stored in the lake's `steering_rules`
-table; sync is never touched — all messages are still in `messages`,
-you just don't see them on the default read path. Think of steering as
-a *lens*, not a filter: every muted row is one `include_muted: true`
-away from returning.
+`get_recent_activity` and `search` hide messages, and `find_events`
+plus the event side of `get_recent_activity` hide calendar events,
+that match **steering rules** by default. Rules are stored in the
+lake's `steering_rules` table; sync is never touched — all
+messages/events are still in the database, you just don't see them on
+the default read path. Think of steering as a *lens*, not a filter:
+every muted row is one `include_muted: true` away from returning.
+
+Message-targeted and event-targeted rules never cross over: muting a
+sender doesn't hide their meeting invites, and muting a meeting
+organizer doesn't hide their emails. Each rule type only ever applies
+to the one side it targets.
 
 ### Via Claude Desktop (the expected path)
 
@@ -664,15 +830,39 @@ Talk to it. When Claude surfaces something low-signal, say:
 Claude calls `add_steering_rule(rule_type="sender_domain",
 pattern="devops.example.com", reason="too noisy")`. Next `search` or
 `get_recent_activity` skips those rows and returns `muted_count` + a
-`steering_hint` telling Claude how many were hidden. Claude can also:
+`steering_hint` telling Claude how many were hidden. For meetings:
 
-- `get_steering()` to list all rules (enabled + disabled).
+> *Hide the recurring standup invites.*
+
+Claude calls `add_steering_rule(rule_type="event_subject_contains",
+pattern="standup")`, and `find_events` / `get_recent_activity` skip
+those events the same way. Claude can also:
+
+- `get_steering()` to list all rules (enabled + disabled, both kinds).
 - `remove_steering_rule(id)` to drop one.
 - `set_steering_enabled(id, enabled)` to temporarily un-mute without
   deleting the rule.
 
-`get_thread` and `list_accounts` are **not** filtered — once you open a
-thread you see everything in it, and account listing is metadata.
+`get_thread`, `get_event`, `get_event_transcript`, and `list_accounts`
+are **not** filtered — once you open a thread or look up a specific
+event you see everything in it, and account listing is metadata.
+
+### Rule types
+
+Message-targeted:
+
+- `sender_email` — exact match on sender address (case-insensitive).
+- `sender_domain` — sender email ends with `@<pattern>`.
+- `thread_id` — exact match on thread id.
+- `thread_name_contains` — case-insensitive substring on thread name.
+- `body_contains` — keyword/phrase search in the message body.
+
+Event-targeted:
+
+- `event_organizer_email` — exact match on the event organizer's
+  address (case-insensitive).
+- `event_subject_contains` — case-insensitive substring on the event
+  subject.
 
 ### Carve-out for your own replies
 
@@ -683,7 +873,8 @@ thread, otherwise `replied=true` annotations would under-report. The
 two thread-level rule types (`thread_id`, `thread_name_contains`)
 still mute fromMe rows because muting a whole conversation is a
 stronger, explicit intent. `muted_count` reflects what was actually
-muted.
+muted. (Event-targeted rules have no `fromMe`-equivalent concept —
+there is no "your own meeting" carve-out.)
 
 ### Via the CLI (for bulk setup and recovery)
 
@@ -697,6 +888,8 @@ npm run dev -- --steer-add-domain  "marketing.example.com" --reason "newsletters
 npm run dev -- --steer-add-thread  "AAMkA...thread-id"
 npm run dev -- --steer-add-thread-name "[Jira]"
 npm run dev -- --steer-add-body    "sync fail"
+npm run dev -- --steer-add-event-organizer "noisy@example.com"
+npm run dev -- --steer-add-event-subject   "daily standup"
 
 # optional modifiers narrow a rule to one source / account:
 npm run dev -- --steer-add-sender  "bob@example.com" \
@@ -718,6 +911,8 @@ Rule types:
 | `thread_id` | exact `thread_id` | mute one conversation |
 | `thread_name_contains` | case-insensitive substring on `thread_name` | good for `[Jira]`, `out of office` |
 | `body_contains` | FTS5 match on the body | single word or phrase |
+| `event_organizer_email` | exact event `organizer_email` | lowercased; event-targeted only |
+| `event_subject_contains` | case-insensitive substring on event `subject` | event-targeted only |
 
 ### Why add-tools on a "read-only" MCP surface
 

@@ -1,11 +1,21 @@
 import type { Clock } from "../../clock.js";
 import type { MessageStore } from "../../store/message-store.js";
-import type { ChatType, Message, SearchHit } from "../../store/types.js";
+import type {
+  ChatType,
+  Message,
+  SearchHit,
+  TranscriptSearchHit,
+} from "../../store/types.js";
 import { MAX_TOTAL_BODY_CHARS, projectBody } from "./body-projection.js";
 import { InvalidParamsError } from "./get-recent-activity.js";
 
 export const DEFAULT_SEARCH_LIMIT = 20;
 export const MAX_SEARCH_LIMIT = 100;
+
+export type SearchKind = "message" | "transcript";
+
+const KNOWN_KINDS: ReadonlySet<SearchKind> = new Set(["message", "transcript"]);
+const DEFAULT_KINDS: readonly SearchKind[] = ["message"];
 
 export interface SearchParams {
   readonly query?: string;
@@ -16,6 +26,7 @@ export interface SearchParams {
   readonly sender_name?: string;
   readonly after?: string;
   readonly before?: string;
+  readonly kinds?: readonly SearchKind[];
 }
 
 export interface ProjectedSearchMessage {
@@ -40,13 +51,48 @@ export interface ProjectedSearchHit {
   readonly rank: number;
 }
 
-export interface SearchResult {
+export interface ProjectedTranscriptSegment {
+  readonly eventId: string;
+  readonly transcriptId: string;
+  readonly sequence: number;
+  readonly speakerEmail?: string;
+  readonly speakerDisplayName?: string;
+  readonly startOffsetMs: number;
+  readonly endOffsetMs: number;
+  readonly text: string;
+}
+
+export type UnifiedSearchHit =
+  | {
+      readonly kind: "message";
+      readonly message: ProjectedSearchMessage;
+      readonly snippet: string;
+      readonly rank: number;
+    }
+  | {
+      readonly kind: "transcript";
+      readonly segment: ProjectedTranscriptSegment;
+      readonly snippet: string;
+      readonly rank: number;
+    };
+
+export interface LegacySearchResult {
   readonly count: number;
   readonly hits: readonly ProjectedSearchHit[];
   readonly bodyBudgetExhausted?: true;
   readonly muted_count: number;
   readonly steering_hint?: string;
 }
+
+export interface UnifiedSearchResult {
+  readonly count: number;
+  readonly hits: readonly UnifiedSearchHit[];
+  readonly bodyBudgetExhausted?: true;
+  readonly muted_count: number;
+  readonly steering_hint?: string;
+}
+
+export type SearchResult = LegacySearchResult | UnifiedSearchResult;
 
 export const SEARCH_TOOL = {
   name: "search",
@@ -58,6 +104,8 @@ export const SEARCH_TOOL = {
     "Empty results are not proof of absence. They usually mean the query didn't match the indexed tokens. Widen before concluding.",
     "",
     'Pass `include_body: true` only when the user wants the full text of the matched messages (e.g. "read me the mail", "quote what it said"). Otherwise snippets are enough. Bodies are head-truncated per message (flagged with `bodyTruncated: true`) and the response carries `bodyBudgetExhausted: true` when later hits had to be returned without a body to protect context.',
+    "",
+    'Default kinds is ["message"] — the original response shape (hits carry `message` directly). Pass kinds: ["transcript"] or ["message", "transcript"] to also search meeting transcripts (requires --transcripts-enable for the account); each hit then carries a `kind` field plus either `message` or `segment`. `sender_email`/`sender_name`/`after`/`before`/`include_body` are message-only filters — transcript hits only use `query`, and a transcript-kind search with no query text returns zero transcript hits rather than an error.',
   ].join("\n"),
   inputSchema: {
     type: "object",
@@ -67,6 +115,13 @@ export const SEARCH_TOOL = {
         minLength: 1,
         description:
           "Free-text search query. Optional when sender_email or sender_name is set, but at least one of query/sender_email/sender_name is required.",
+      },
+      kinds: {
+        type: "array",
+        items: { type: "string", enum: ["message", "transcript"] },
+        minItems: 1,
+        description:
+          'Which item kinds to include. Default ["message"] (original response shape). Pass ["transcript"] or ["message", "transcript"] to also search meeting transcripts.',
       },
       sender_email: {
         type: "string",
@@ -175,21 +230,124 @@ export async function handleSearch(
   ) {
     throw new InvalidParamsError("include_muted must be a boolean");
   }
+  const kinds = normalizeKinds(params.kinds);
   const includeMuted = params.include_muted === true;
-  const storeQuery = queryProvided ? (query as string) : "";
-  const { hits, mutedCount } = await store.searchMessages(storeQuery, limit, {
-    includeMuted,
-    ...(senderEmail !== undefined && { senderEmail }),
-    ...(senderName !== undefined && { senderName }),
-    ...(after !== undefined && { after }),
-    ...(before !== undefined && { before }),
-  });
   const includeBody = params.include_body === true;
+  const storeQuery = queryProvided ? (query as string) : "";
+
+  if (kinds.length === 1 && kinds[0] === "message") {
+    const messages = await searchMessagesProjected(store, storeQuery, limit, {
+      includeMuted,
+      includeBody,
+      ...(senderEmail !== undefined && { senderEmail }),
+      ...(senderName !== undefined && { senderName }),
+      ...(after !== undefined && { after }),
+      ...(before !== undefined && { before }),
+    });
+    const hint = mutedHint(includeMuted, messages.mutedCount);
+    return {
+      count: messages.hits.length,
+      hits: messages.hits,
+      ...(messages.exhausted && { bodyBudgetExhausted: true as const }),
+      muted_count: messages.mutedCount,
+      ...(hint !== undefined && { steering_hint: hint }),
+    };
+  }
+
+  // Past the legacy-only branch above, kinds always includes at least one
+  // of "message"/"transcript" — sender_email/sender_name/after/before and
+  // include_body only ever apply to the message side; a transcript-only
+  // request with no query text simply yields zero transcript hits (the
+  // store already treats an empty FTS phrase as "no match"), not an error.
+  let messageHits: readonly UnifiedSearchHit[] = [];
+  let mutedCount = 0;
+  let exhausted = false;
+  if (kinds.includes("message")) {
+    const messages = await searchMessagesProjected(store, storeQuery, limit, {
+      includeMuted,
+      includeBody,
+      ...(senderEmail !== undefined && { senderEmail }),
+      ...(senderName !== undefined && { senderName }),
+      ...(after !== undefined && { after }),
+      ...(before !== undefined && { before }),
+    });
+    messageHits = messages.hits.map((h) => ({ kind: "message" as const, ...h }));
+    mutedCount = messages.mutedCount;
+    exhausted = messages.exhausted;
+  }
+  let transcriptHits: readonly UnifiedSearchHit[] = [];
+  if (kinds.includes("transcript")) {
+    const { hits } = await store.searchTranscriptSegments(storeQuery, limit);
+    transcriptHits = hits.map((h) => ({
+      kind: "transcript" as const,
+      segment: projectSegment(h),
+      snippet: h.snippet,
+      rank: h.rank,
+    }));
+  }
+  const hits = [...messageHits, ...transcriptHits];
+  const hint = mutedHint(includeMuted, mutedCount);
+  return {
+    count: hits.length,
+    hits,
+    ...(exhausted && { bodyBudgetExhausted: true as const }),
+    muted_count: mutedCount,
+    ...(hint !== undefined && { steering_hint: hint }),
+  };
+}
+
+function normalizeKinds(
+  kinds: readonly SearchKind[] | undefined,
+): readonly SearchKind[] {
+  if (kinds === undefined) return DEFAULT_KINDS;
+  if (kinds.length === 0) {
+    throw new InvalidParamsError("kinds must not be empty");
+  }
+  for (const k of kinds) {
+    if (!KNOWN_KINDS.has(k)) {
+      throw new InvalidParamsError(`unknown kind: ${k}`);
+    }
+  }
+  return kinds;
+}
+
+function mutedHint(includeMuted: boolean, mutedCount: number): string | undefined {
+  return !includeMuted && mutedCount > 0
+    ? `${mutedCount} hit(s) hidden by steering rules. Pass include_muted=true to see them, or call get_steering to review active rules.`
+    : undefined;
+}
+
+interface SearchMessagesProjectedOptions {
+  readonly includeMuted: boolean;
+  readonly includeBody: boolean;
+  readonly senderEmail?: string;
+  readonly senderName?: string;
+  readonly after?: Date;
+  readonly before?: Date;
+}
+
+async function searchMessagesProjected(
+  store: MessageStore,
+  storeQuery: string,
+  limit: number,
+  opts: SearchMessagesProjectedOptions,
+): Promise<{
+  hits: readonly ProjectedSearchHit[];
+  mutedCount: number;
+  exhausted: boolean;
+}> {
+  const { hits, mutedCount } = await store.searchMessages(storeQuery, limit, {
+    includeMuted: opts.includeMuted,
+    ...(opts.senderEmail !== undefined && { senderEmail: opts.senderEmail }),
+    ...(opts.senderName !== undefined && { senderName: opts.senderName }),
+    ...(opts.after !== undefined && { after: opts.after }),
+    ...(opts.before !== undefined && { before: opts.before }),
+  });
   let remaining = MAX_TOTAL_BODY_CHARS;
   let exhausted = false;
   const projected = hits.map((h) => {
     const base = projectCore(h);
-    if (!includeBody) return base;
+    if (!opts.includeBody) return base;
     const bp = projectBody(h.message, remaining);
     if (bp.body === undefined) {
       if (h.message.body !== undefined) exhausted = true;
@@ -205,17 +363,7 @@ export async function handleSearch(
       },
     };
   });
-  const hint =
-    !includeMuted && mutedCount > 0
-      ? `${mutedCount} hit(s) hidden by steering rules. Pass include_muted=true to see them, or call get_steering to review active rules.`
-      : undefined;
-  return {
-    count: hits.length,
-    hits: projected,
-    ...(exhausted && { bodyBudgetExhausted: true as const }),
-    muted_count: mutedCount,
-    ...(hint !== undefined && { steering_hint: hint }),
-  };
+  return { hits: projected, mutedCount, exhausted };
 }
 
 function validateOptionalNonEmptyString(
@@ -265,5 +413,21 @@ function projectCore(h: SearchHit): ProjectedSearchHit {
     },
     snippet: h.snippet,
     rank: h.rank,
+  };
+}
+
+function projectSegment(h: TranscriptSearchHit): ProjectedTranscriptSegment {
+  const s = h.segment;
+  return {
+    eventId: s.eventId,
+    transcriptId: s.transcriptId,
+    sequence: s.sequence,
+    ...(s.speakerEmail !== undefined && { speakerEmail: s.speakerEmail }),
+    ...(s.speakerDisplayName !== undefined && {
+      speakerDisplayName: s.speakerDisplayName,
+    }),
+    startOffsetMs: s.startOffsetMs,
+    endOffsetMs: s.endOffsetMs,
+    text: s.text,
   };
 }

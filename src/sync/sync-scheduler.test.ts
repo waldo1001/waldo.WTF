@@ -3,6 +3,7 @@ import {
   SyncScheduler,
   DEFAULT_SYNC_INTERVAL_MS,
   type SetTimerFn,
+  type TickSummary,
   type TimerHandle,
 } from "./sync-scheduler.js";
 import { FakeAuthClient } from "../testing/fake-auth-client.js";
@@ -13,10 +14,15 @@ import { FakeVivaClient } from "../testing/fake-viva-client.js";
 import { InMemoryMessageStore } from "../testing/in-memory-message-store.js";
 import { InMemoryTeamsChannelSubscriptionStore } from "../testing/in-memory-teams-channel-subscription-store.js";
 import { InMemoryVivaSubscriptionStore } from "../testing/in-memory-viva-subscription-store.js";
+import { InMemoryCalendarAccountStore } from "../testing/in-memory-calendar-account-store.js";
+import { FakeCalendarClient } from "../testing/fake-calendar-client.js";
 import { FakeClock } from "../testing/fake-clock.js";
 import { GraphRateLimitedError, TokenExpiredError } from "../sources/viva.js";
+import { FakeTranscriptClient } from "../testing/fake-transcript-client.js";
 import {
+  CALENDAR_SCOPES,
   TEAMS_CHANNEL_SCOPES,
+  TRANSCRIPT_SCOPES,
   teamsAuthorityFor,
   vivaAuthorityFor,
   YAMMER_SCOPE,
@@ -807,6 +813,442 @@ describe("SyncScheduler", () => {
     await scheduler.runOnce();
     expect(store.syncLog).toHaveLength(2);
     expect(store.syncLog.every((e) => e.source === "outlook")).toBe(true);
+  });
+
+  it("with calendar deps: scheduler runs calendar sync only for accounts enabled in CalendarAccountStore", async () => {
+    const a1 = acc("alice");
+    const a2 = acc("bob");
+    const a3 = acc("carol");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do-1" }) },
+        sentOk,
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do-2" }) },
+        sentOk,
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do-3" }) },
+        sentOk,
+      ],
+    });
+    const calendar = new FakeCalendarClient({
+      pages: { __initial__: { events: [], removedIds: [], deltaLink: "cal-delta" } },
+      allowedAccounts: [a1.username, a2.username],
+    });
+    const calendarAccounts = new InMemoryCalendarAccountStore();
+    await calendarAccounts.enable({ account: a1.username });
+    await calendarAccounts.enable({ account: a2.username });
+    // a3 never enabled.
+    const auth = new FakeAuthClient({
+      accounts: [a1, a2, a3],
+      tokens: new Map([
+        [a1.homeAccountId, tok(a1)],
+        [a2.homeAccountId, tok(a2)],
+        [a3.homeAccountId, tok(a3)],
+      ]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    let summary: TickSummary | undefined;
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      calendar,
+      calendarAccounts,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+      onTickComplete: (s) => {
+        summary = s;
+      },
+    });
+    await scheduler.runOnce();
+
+    const calendarRows = store.syncLog.filter((e) => e.source === "calendar");
+    expect(calendarRows).toHaveLength(2);
+    expect(calendarRows.every((r) => r.status === "ok")).toBe(true);
+    // 3 accounts x (inbox + sent) = 6, plus the 2 calendar rows = 8 ok, 0 error.
+    expect(summary).toEqual({ accounts: 3, okCount: 8, errorCount: 0 });
+    expect(calendar.calls.map((c) => c.account).sort()).toEqual(
+      [a1.username, a2.username].sort(),
+    );
+  });
+
+  it("with calendar deps but zero enabled accounts: no calendar Graph calls, no calendar rows", async () => {
+    const a1 = acc("alice");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
+    });
+    const calendar = new FakeCalendarClient({
+      pages: { __initial__: { events: [], removedIds: [], deltaLink: "cal-delta" } },
+      allowedAccounts: [],
+    });
+    const calendarAccounts = new InMemoryCalendarAccountStore();
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      calendar,
+      calendarAccounts,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+
+    expect(calendar.calls).toHaveLength(0);
+    expect(store.syncLog.every((e) => e.source === "outlook")).toBe(true);
+  });
+
+  it("without calendar dep: no calendar rows even if calendarAccounts present (both must be set)", async () => {
+    const a1 = acc("alice");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
+    });
+    const calendarAccounts = new InMemoryCalendarAccountStore();
+    await calendarAccounts.enable({ account: a1.username });
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      calendarAccounts,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+    expect(store.syncLog).toHaveLength(2);
+    expect(store.syncLog.every((e) => e.source === "outlook")).toBe(true);
+  });
+
+  it("calendar consent rejection logs one sync_log row per account per tick and does not block other accounts", async () => {
+    const a1 = acc("alice");
+    const a2 = acc("bob");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do-1" }) },
+        sentOk,
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do-2" }) },
+        sentOk,
+      ],
+    });
+    const consentError = new Error(
+      "AADSTS65001: user or admin has not consented",
+    );
+    const calendar = {
+      calls: [] as { account: string }[],
+      async listCalendarViewDelta(input: { account: string }) {
+        this.calls.push({ account: input.account });
+        if (input.account === a1.username) throw consentError;
+        return { events: [], removedIds: [], deltaLink: "cal-delta" };
+      },
+    };
+    const calendarAccounts = new InMemoryCalendarAccountStore();
+    await calendarAccounts.enable({ account: a1.username });
+    await calendarAccounts.enable({ account: a2.username });
+    const auth = new FakeAuthClient({
+      accounts: [a1, a2],
+      tokens: new Map([
+        [a1.homeAccountId, tok(a1)],
+        [a2.homeAccountId, tok(a2)],
+      ]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      calendar,
+      calendarAccounts,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+
+    const calendarRows = store.syncLog.filter((e) => e.source === "calendar");
+    expect(calendarRows).toHaveLength(2);
+    const a1Row = calendarRows.find((r) => r.account === a1.username);
+    const a2Row = calendarRows.find((r) => r.account === a2.username);
+    expect(a1Row?.status).toBe("error");
+    expect(a1Row?.errorMessage).toContain(CALENDAR_SCOPES.join(", "));
+    expect(a1Row?.errorMessage).toContain("Calendar scope not consented");
+    expect(a2Row?.status).toBe("ok");
+  });
+
+  it("a non-consent calendar error is recorded as a plain error row (not the admin-grant hint)", async () => {
+    const a1 = acc("alice");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do" }) },
+        sentOk,
+      ],
+    });
+    const calendar = {
+      async listCalendarViewDelta() {
+        throw new Error("boom: transient failure");
+      },
+    };
+    const calendarAccounts = new InMemoryCalendarAccountStore();
+    await calendarAccounts.enable({ account: a1.username });
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      calendar,
+      calendarAccounts,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+
+    const calendarRow = store.syncLog.find((e) => e.source === "calendar");
+    expect(calendarRow?.status).toBe("error");
+    expect(calendarRow?.errorMessage).toBe("boom: transient failure");
+    expect(calendarRow?.errorMessage).not.toContain("Calendar scope not consented");
+  });
+
+  it("with transcripts deps: scheduler runs transcript sync only for accounts with both calendar and transcripts enabled", async () => {
+    const a1 = acc("alice");
+    const a2 = acc("bob");
+    const a3 = acc("carol");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do-1" }) },
+        sentOk,
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do-2" }) },
+        sentOk,
+        { kind: "ok", response: ok({ "@odata.deltaLink": "do-3" }) },
+        sentOk,
+      ],
+    });
+    const calendarAccounts = new InMemoryCalendarAccountStore();
+    await calendarAccounts.enable({ account: a1.username });
+    await calendarAccounts.enable({ account: a2.username });
+    await calendarAccounts.setTranscriptsEnabled(a1.username, true);
+    // a2: calendar enabled but transcripts not opted in.
+    // a3: no calendar row at all.
+    await store.upsertEvents([
+      {
+        account: a1.username,
+        eventId: "evt-1",
+        startAt: new Date("2026-04-13T09:00:00Z"),
+        endAt: new Date("2026-04-13T10:00:00Z"),
+        isAllDay: false,
+        isCancelled: false,
+        onlineMeetingId: "meeting-1",
+        attendees: [],
+      },
+    ]);
+    const transcripts = new FakeTranscriptClient({
+      transcriptsByMeeting: {
+        "meeting-1": [{ transcriptId: "t-1", createdAt: "2026-04-13T10:05:00Z" }],
+      },
+      vttByTranscriptId: {
+        "t-1": "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello",
+      },
+    });
+    const auth = new FakeAuthClient({
+      accounts: [a1, a2, a3],
+      tokens: new Map([
+        [a1.homeAccountId, tok(a1)],
+        [a2.homeAccountId, tok(a2)],
+        [a3.homeAccountId, tok(a3)],
+      ]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    let summary: TickSummary | undefined;
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      calendarAccounts,
+      transcripts,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+      onTickComplete: (s) => {
+        summary = s;
+      },
+    });
+    await scheduler.runOnce();
+
+    const transcriptRows = store.syncLog.filter(
+      (e) => e.source === "transcripts",
+    );
+    expect(transcriptRows).toHaveLength(1);
+    expect(transcriptRows[0]?.account).toBe(a1.username);
+    expect(transcriptRows[0]?.status).toBe("ok");
+    expect(transcriptRows[0]?.messagesAdded).toBe(1);
+    expect(transcripts.calls.every((c) => c.account === a1.username)).toBe(
+      true,
+    );
+    // 3 accounts x (inbox + sent) = 6, plus the 1 transcripts row = 7 ok.
+    expect(summary).toEqual({ accounts: 3, okCount: 7, errorCount: 0 });
+  });
+
+  it("transcripts dep present but calendarAccounts absent: transcripts block is skipped entirely, no crash", async () => {
+    const a1 = acc("alice");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [{ kind: "ok", response: ok({ "@odata.deltaLink": "do" }) }, sentOk],
+    });
+    const transcripts = new FakeTranscriptClient({
+      transcriptsByMeeting: {},
+      vttByTranscriptId: {},
+    });
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      transcripts,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+
+    expect(store.syncLog.every((e) => e.source === "outlook")).toBe(true);
+    expect(transcripts.calls).toHaveLength(0);
+  });
+
+  it("without transcripts dep: no transcript rows even if transcripts_enabled is set (both must be set)", async () => {
+    const a1 = acc("alice");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [{ kind: "ok", response: ok({ "@odata.deltaLink": "do" }) }, sentOk],
+    });
+    const calendarAccounts = new InMemoryCalendarAccountStore();
+    await calendarAccounts.enable({ account: a1.username });
+    await calendarAccounts.setTranscriptsEnabled(a1.username, true);
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      calendarAccounts,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+    });
+    await scheduler.runOnce();
+    expect(store.syncLog.every((e) => e.source === "outlook")).toBe(true);
+  });
+
+  it("transcripts consent rejection logs a sync_log error row with the transcript scope hint", async () => {
+    const a1 = acc("alice");
+    const store = new InMemoryMessageStore();
+    const graph = new FakeGraphClient({
+      steps: [{ kind: "ok", response: ok({ "@odata.deltaLink": "do" }) }, sentOk],
+    });
+    const calendarAccounts = new InMemoryCalendarAccountStore();
+    await calendarAccounts.enable({ account: a1.username });
+    await calendarAccounts.setTranscriptsEnabled(a1.username, true);
+    await store.upsertEvents([
+      {
+        account: a1.username,
+        eventId: "evt-1",
+        startAt: new Date("2026-04-13T09:00:00Z"),
+        endAt: new Date("2026-04-13T10:00:00Z"),
+        isAllDay: false,
+        isCancelled: false,
+        onlineMeetingId: "meeting-1",
+        attendees: [],
+      },
+    ]);
+    const consentError = new Error(
+      "AADSTS65001: user or admin has not consented",
+    );
+    const transcripts = {
+      calls: [] as { account: string }[],
+      async listTranscripts(account: string) {
+        this.calls.push({ account });
+        throw consentError;
+      },
+      async fetchVttContent() {
+        throw new Error("unreachable");
+      },
+    };
+    const auth = new FakeAuthClient({
+      accounts: [a1],
+      tokens: new Map([[a1.homeAccountId, tok(a1)]]),
+    });
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    const timer = makeFakeSetTimer();
+
+    let summary: TickSummary | undefined;
+    const scheduler = new SyncScheduler({
+      auth,
+      graph,
+      calendarAccounts,
+      transcripts,
+      store,
+      clock,
+      setTimer: timer.setTimer,
+      intervalMs: 1000,
+      onTickComplete: (s) => {
+        summary = s;
+      },
+    });
+    await scheduler.runOnce();
+
+    const row = store.syncLog.find((e) => e.source === "transcripts");
+    expect(row?.status).toBe("error");
+    expect(row?.errorMessage).toContain(TRANSCRIPT_SCOPES.join(", "));
+    expect(row?.errorMessage).toContain("Transcript scope not consented");
+    // inbox + sent = 2 ok, plus the 1 transcripts error = 1 error.
+    expect(summary).toEqual({ accounts: 1, okCount: 2, errorCount: 1 });
   });
 
   it("runOnce invokes onTickComplete with the tick summary after sync_log writes", async () => {

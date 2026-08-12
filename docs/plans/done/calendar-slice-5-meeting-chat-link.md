@@ -1,6 +1,6 @@
 # Calendar — Slice 5: meeting ↔ Teams chat link
 
-Parent: [calendar-overview.md](./calendar-overview.md). Predecessor:
+Parent: [calendar-overview.md](../calendar-overview.md). Predecessor:
 [slice 4](./calendar-slice-4-sync-and-scope.md).
 
 ## Task
@@ -70,25 +70,25 @@ event together with the messages from that linked chat.
 
 ## Files to create / touch
 
-- [src/sources/calendar.ts](../../src/sources/calendar.ts) —
+- [src/sources/calendar.ts](../../../src/sources/calendar.ts) —
   potentially fix `mapGraphEventToCalendarEvent` based on what slice 4
   smoke turns up.
-- [src/sources/calendar.test.ts](../../src/sources/calendar.test.ts)
+- [src/sources/calendar.test.ts](../../../src/sources/calendar.test.ts)
   — corresponding fixture updates.
-- [src/store/message-store.ts](../../src/store/message-store.ts) —
+- [src/store/message-store.ts](../../../src/store/message-store.ts) —
   add `getEventByKey` to the contract.
-- [src/store/message-store-contract.ts](../../src/store/message-store-contract.ts)
+- [src/store/message-store-contract.ts](../../../src/store/message-store-contract.ts)
   — add tests.
-- [src/store/sqlite-message-store.ts](../../src/store/sqlite-message-store.ts)
+- [src/store/sqlite-message-store.ts](../../../src/store/sqlite-message-store.ts)
   — implement.
 - (in-memory fake) — implement.
-- [src/mcp/tools/get-event.ts](../../src/mcp/tools/get-event.ts) — new
+- [src/mcp/tools/get-event.ts](../../../src/mcp/tools/get-event.ts) — new
   handler.
-- [src/mcp/tools/get-event.test.ts](../../src/mcp/tools/get-event.test.ts)
+- [src/mcp/tools/get-event.test.ts](../../../src/mcp/tools/get-event.test.ts)
   — new.
-- [src/mcp/mcp-server.ts](../../src/mcp/mcp-server.ts) — register the
+- [src/mcp/mcp-server.ts](../../../src/mcp/mcp-server.ts) — register the
   tool in the `{name → handler}` map.
-- [src/mcp/mcp-server.test.ts](../../src/mcp/mcp-server.test.ts) —
+- [src/mcp/mcp-server.test.ts](../../../src/mcp/mcp-server.test.ts) —
   assert the tool is in `tools/list`.
 
 ## Seams involved
@@ -121,7 +121,7 @@ event together with the messages from that linked chat.
   - seams touched: mcp, store
   - edge cases: 50+ messages exist (top 50 returned, ordered by
     `created_at` desc, mirroring `get_thread`'s slice-1 behaviour
-    after [docs/plans/done/fix-get-thread-latest-by-default.md](./done/fix-get-thread-latest-by-default.md));
+    after [docs/plans/done/fix-get-thread-latest-by-default.md](./fix-get-thread-latest-by-default.md));
     fewer than 50 (all returned).
 
 - AC4: `get_event` for an online meeting whose chat has no messages
@@ -170,7 +170,7 @@ event together with the messages from that linked chat.
    `get_event` yet.
 3. **Assumption:** Steering carve-out matches `get_thread` and
    `list_accounts`. Documented in the brief §10 resolution and
-   [.claude/skills/security-scan/SKILL.md](../../.claude/skills/security-scan/SKILL.md)
+   [.claude/skills/security-scan/SKILL.md](../../../.claude/skills/security-scan/SKILL.md)
    doesn't flag this. FRAME re-checks the brief.
 
 ## Risks
@@ -193,7 +193,7 @@ event together with the messages from that linked chat.
 
 ## Out-of-scope follow-ups
 
-- Slice 6: `get_upcoming_events`.
+- Slice 6: `find_events`.
 - Slice 7: unify into `get_recent_activity`.
 - A "find chat → event" reverse lookup tool.
 - Surfacing the meeting in the Teams-channel side: when a meeting

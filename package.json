@@ -13,9 +13,12 @@
     "test:integration": "vitest run src/**/__integration__",
     "test:contract": "vitest run src/**/__contract__",
     "typecheck": "tsc -p tsconfig.test.json",
-    "lint": "eslint src --ignore-pattern 'src/sources/__lint__/**'"
+    "lint": "eslint src --ignore-pattern 'src/sources/__lint__/**'",
+    "mutate": "stryker run"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "^9.6.1",
+    "@stryker-mutator/vitest-runner": "^9.6.1",
     "@types/adm-zip": "^0.5.8",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.0.0",

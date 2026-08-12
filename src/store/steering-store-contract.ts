@@ -52,6 +52,24 @@ export function runSteeringStoreContract(
       expect(rule.pattern).toBe("ChAt-1/AbC");
     });
 
+    it("addRule normalizes pattern to lowercase for event_organizer_email", async () => {
+      const store = await factory();
+      const rule = await store.addRule({
+        ruleType: "event_organizer_email",
+        pattern: "Noisy@Example.COM",
+      });
+      expect(rule.pattern).toBe("noisy@example.com");
+    });
+
+    it("addRule normalizes pattern to lowercase for event_subject_contains", async () => {
+      const store = await factory();
+      const rule = await store.addRule({
+        ruleType: "event_subject_contains",
+        pattern: "Daily STANDUP",
+      });
+      expect(rule.pattern).toBe("daily standup");
+    });
+
     it("addRule rejects unknown rule_type", async () => {
       const store = await factory();
       await expect(

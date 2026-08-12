@@ -11,6 +11,441 @@ skill.
 
 ---
 
+## 2026-08-12
+
+- Calendar feature, slice 1 of 8 base + 6 transcript slices: schema v16
+  adds `events`, `event_attendees`, `calendar_accounts` tables and three
+  new `MessageStore` operations (`upsertEvents`, `deleteEvents`,
+  `getEventsInRange`). Internal store seam only — no Graph client, sync
+  job, MCP tool, or CLI wiring yet; nothing user-visible changes with
+  this slice. `deleteEvents` deletes attendee rows explicitly rather
+  than relying on the SQLite FK cascade, since not every connection in
+  this codebase enables `PRAGMA foreign_keys`. Full spec:
+  [plans/done/calendar-slice-1-schema-and-store.md](plans/done/calendar-slice-1-schema-and-store.md),
+  parent plan [plans/calendar-overview.md](plans/calendar-overview.md).
+- Added mutation testing (Stryker) to `/tdd-cycle` as a new mandatory
+  Step 10, between COVER and SECURITY SCAN — closes a gap the coverage
+  policy had flagged as a "Weekend 3" target that never actually landed.
+  New `npm run mutate` (`stryker run`), config at
+  [stryker.config.mjs](../stryker.config.mjs) (break threshold 80%
+  mutation score, scoped per-cycle via `--mutate "<touched files>"`).
+  Baseline run against `schema.ts` found real gaps in the pre-existing
+  migration-chain boundary conditions. Note for this dev machine:
+  default Stryker concurrency SIGSEGVs (`better-sqlite3` native addon +
+  concurrent worker processes) — pinned `concurrency: 1` in config.
+  `.stryker-tmp/` and `reports/` gitignored. Docs:
+  [methodology.md §2.61](tdd/methodology.md),
+  [coverage-policy.md](tdd/coverage-policy.md).
+- Calendar feature, slice 2 of 14: `CalendarClient` seam
+  ([src/sources/calendar.ts](../src/sources/calendar.ts)) — interface,
+  Graph wire DTOs, `mapGraphEventToCalendarEvent` pure lowering
+  function, and `FakeCalendarClient` for slice-3/4 testing. No HTTP, no
+  sync yet. Mutation score 87.42% on the new files (Stryker's first
+  real use since the tooling landed this session). Plan:
+  [plans/done/calendar-slice-2-client-seam.md](plans/done/calendar-slice-2-client-seam.md).
+- Calendar feature, slice 3 of 14: `HttpCalendarClient`
+  ([src/sources/http-calendar-client.ts](../src/sources/http-calendar-client.ts))
+  — real `/me/calendarView/delta` impl (`Prefer: outlook.timezone="UTC"`,
+  `odata.body-content-type="text"`), 401/410/429 mapping
+  (`TokenExpiredError`/`DeltaTokenInvalidError`/`GraphRateLimitedError`),
+  5xx retry-with-backoff (mirrors `HttpTeamsClient`), bearer redaction,
+  cursor host validation. Resolves its own token per call via an
+  injected `getAccessToken(account, scope)` callback (`CalendarViewDeltaInput`
+  carries no token param, unlike `TeamsClient`). Mutation score 89.47%.
+  Also: caught and fixed a slice-2 type bug before it propagated —
+  `CalendarViewDeltaPage.events` was typed as raw Graph wire DTOs,
+  should have been (and now is) the already-lowered `CalendarEvent[]`
+  per slice 2's own stated design. Plan:
+  [plans/done/calendar-slice-3-http-client.md](plans/done/calendar-slice-3-http-client.md).
+- Calendar feature, slice 4 of 14 (the big one): per-account opt-in.
+  New `CalendarAccountStore` ([src/store/calendar-account-store.ts](../src/store/calendar-account-store.ts),
+  mirrors `VivaSubscriptionStore`), `CALENDAR_SCOPES = ["Calendars.Read"]`
+  as its own scope set (never merged into base `SCOPES`),
+  `--calendar-enable <account>` / `--calendar-disable <account>` CLI,
+  `syncCalendarEvents` ([src/sync/sync-calendar.ts](../src/sync/sync-calendar.ts))
+  walking `[now-365d, now+60d]` on first sync, and scheduler wiring that
+  skips calendar sync entirely for non-enabled accounts. `MessageSource`
+  gained a `"calendar"` value (shared `sync_state`/`sync_log` tables).
+  Two more mid-flight corrections, same spirit as slice 2/3's fixes:
+  (1) the 401-retry-once design assumed the sync loop could force a
+  fresh token into an already-built `HttpCalendarClient` — it can't,
+  since that client resolves its own tokens via a constructor-time
+  callback — so the retry moved into the client itself
+  (`GetCalendarAccessToken` gained a `forceRefresh` parameter); (2) the
+  plan's `Logger` interface assumption (`.info(event, ctx)`) doesn't
+  match this codebase's actual `Logger` (`.info(message: string)` only,
+  interpolated event=value strings) — fixed to match. Mutation score
+  83.50% on the store/scope/client-retry batch, 83.00% on the
+  sync-job/scheduler batch (both scoped to touched lines — full-file
+  scores are dragged down by pre-existing untested branches elsewhere
+  in `sync-scheduler.ts`, out of scope for this cycle). CLI mutation
+  testing was scoped out given `cli.ts`'s size (1600+ lines, only a
+  small fraction touched) — 96%/95% line/branch coverage stands in for
+  it here. Plan:
+  [plans/done/calendar-slice-4-sync-and-scope.md](plans/done/calendar-slice-4-sync-and-scope.md).
+- Calendar feature, slice 5 of 14: new `get_event(event_id, account?)`
+  MCP tool ([src/mcp/tools/get-event.ts](../src/mcp/tools/get-event.ts))
+  — returns a calendar event with its attendees and, for online
+  meetings, the linked Teams meeting-chat messages (last 50). New
+  `MessageStore.getEventByKey`. Steering does **not** apply (mirrors
+  `get_thread`). This is the first calendar MCP tool — 6th tool users
+  can call, though there's still no search/list tool for calendar yet
+  (slice 6). Mutation score 84.99% on the touched files (aggregate,
+  scoped runs weren't worth the extra time here since the touched
+  surface — `getEventByKey` — is small relative to the shared files it
+  landed in).
+  Plan: [plans/done/calendar-slice-5-meeting-chat-link.md](plans/done/calendar-slice-5-meeting-chat-link.md).
+- Calendar feature, slice 6 of 14: new `find_events` MCP tool
+  ([src/mcp/tools/find-events.ts](../src/mcp/tools/find-events.ts)) —
+  agenda queries (next 7 days by default) and history search
+  (`subject_contains`/`attendee`, case-insensitive `LIKE`, SQL
+  metacharacters escaped) over the full ~425-day synced range, with a
+  92-day cap on unfiltered queries only. `order: "asc"|"desc"`,
+  `limit`/`truncated`. New `MessageStore.findEvents`. Also
+  `--calendar-list` (prints next 7 days across accounts) and
+  `--calendar-resync [--account <account>]` (clears the calendar delta
+  cursor so the next tick re-walks the window) CLI flags. This is the
+  first calendar search/agenda surface — `find_events` is the 7th MCP
+  tool. Mutation score 85.71% on `find-events.ts`.
+  Plan: [plans/done/calendar-slice-6-mcp-and-cli.md](plans/done/calendar-slice-6-mcp-and-cli.md).
+- Calendar feature, slice 7 of 14: `get_recent_activity` folds events
+  into a single chronological feed — new optional `kinds?: ("message" |
+  "event")[]` (default both) and `to?` (default `now + 7d` once events
+  are requested) inputs. Output becomes a discriminated `items: [{kind,
+  at, message|event}]` array ordered by `at` ascending, capped at 500
+  (`RECENT_ITEMS_CAP`); passing `kinds: ["message"]` preserves the exact
+  pre-slice-7 `{count, messages, muted_count}` shape so existing callers
+  don't break. New `MessageStore.getRecentItems` /
+  `composeRecentItems` — implemented as a JS-side merge of
+  `getRecentMessages` + `findEvents` rather than a SQL `UNION ALL`,
+  since `messages.sent_at` (INTEGER ms) and `events.start_at` (TEXT ISO)
+  are incompatible column types for a literal union; shared by both
+  `SqliteMessageStore` and `InMemoryMessageStore` so there's no
+  union-vs-fake divergence risk. Simplified away a redundant
+  message-before-event tiebreak in the sort comparator — the merged
+  array is always built `[...messages, ...events]` and
+  `Array.prototype.sort` is spec-guaranteed stable (ES2019+), so ties
+  already resolve correctly without explicit kind-tiebreak logic.
+  Mutation-driven hardening: `message-store.ts` 96.30%,
+  `get-recent-activity.ts` 85.32% (up from a 75.40% baseline — this
+  file predates the Stryker rollout and was never mutation-tested
+  before this slice touched it; remaining survivors are pre-existing
+  validation/projection code this slice didn't change). Combined
+  touched-file score 84.76%.
+  Plan: [plans/done/calendar-slice-7-unified-activity.md](plans/done/calendar-slice-7-unified-activity.md).
+- Calendar feature, slice 8 of 14 (last base slice — base feature
+  complete): event steering. Two new `steering_rules.rule_type` values,
+  `event_organizer_email` (exact, case-insensitive) and
+  `event_subject_contains` (case-insensitive substring) — schema v17
+  widens the `rule_type` CHECK constraint. `buildSteeringPredicate`
+  gained a required `target: "message" | "event"` param (no default) so
+  the two rule families structurally can't cross-apply; wired into
+  `find_events` and the event branch of `get_recent_activity`
+  (`include_muted`, `muted_count`, `steering_hint` — same UX as
+  `search`). `get_event` keeps its existing carve-out (mirrors
+  `get_thread`), now pinned by a test. New
+  `--steer-add-event-organizer`/`--steer-add-event-subject` CLI flags
+  (deviates from the plan's `--steer-event-*` naming to match the
+  existing `--steer-add-*` prefix convention). Extracted
+  `escapeLikePattern` out of `sqlite-message-store.ts` into
+  `src/store/like-pattern.ts` so `steering-filter.ts` can reuse it
+  without a circular import.
+  Design correction from the plan: v17 needs a real migration, not a
+  no-op marker bump — `steering_rules.rule_type` carries a `CHECK`
+  constraint enumerating valid values (not just a bare `TEXT` column as
+  assumed), so SQLite needs the standard rebuild-and-rename dance
+  (mirrors the `sync_state` rebuild in `migrateV11`) to widen it; ids
+  and existing rows are preserved.
+  Mutation-driven hardening: `steering-filter.ts` (new file this slice)
+  96.70% / 100% of covered mutants killed — the only survivors are
+  defensive unreachable-by-construction throws already `c8 ignore`d.
+  `schema.ts` 92.13% (the one new-code survivor, the v17 version guard,
+  is a provable equivalent mutant — it's the *last* version check in
+  the chain, gated by the same early-return as `applyMigrations`
+  itself, so it's tautologically true whenever reached; the other
+  survivors are pre-existing gaps in older version guards, already
+  flagged in the slice-1 mutation-testing rollout entry above).
+  Combined touched-file score 87.26%.
+  Plan: [plans/done/calendar-slice-8-event-steering.md](plans/done/calendar-slice-8-event-steering.md).
+- Meeting transcripts, sub-slice T1 of 6 (schema + store ops): schema
+  v18 adds `transcripts` (one row per fetched transcript — a recording
+  restart can produce more than one per meeting, hence `transcript_id`
+  in the PK, not just account+event_id) and `transcript_segments`
+  (parsed VTT cues), both FK-cascading off `events` (mirrors
+  `event_attendees`). New `MessageStore` ops: `upsertTranscript`
+  (atomic replace-set — deletes the existing segment set for that key,
+  inserts the new one, upserts the transcript row), `getTranscriptByKey`,
+  `listTranscriptsForEvent`, `markTranscriptStatus`. Internal store seam
+  only — no Graph client, sync job, MCP tool, or CLI wiring yet (those
+  land in T2–T6); nothing user-visible changes with this slice.
+  Design note not fully specified in the plan: `markTranscriptStatus`
+  needs to record "checked, nothing there" even when no transcript was
+  ever found (so a later sync job can apply the per-status retry
+  cooldown from T5 without re-fetching every tick), but the schema's PK
+  requires a non-null `transcript_id`. Resolved by making
+  `markTranscriptStatus` an upsert: it takes the full `TranscriptKey`
+  (including whatever placeholder `transcript_id` the future sync job
+  chooses for the no-transcript case) and inserts a status-only marker
+  row (`segment_count = 0`, no VTT bytes) when none exists yet, or
+  updates status + `fetchedAt` in place when one does. `fetchedAt` is a
+  caller-supplied `Date` (not read internally) — matches every other
+  timestamp-writing method on this store; no clock is injected into
+  `SqliteMessageStore`.
+  Mutation-driven hardening: combined touched-file score 84.60%
+  (`message-store.ts` 96.77%, `schema.ts` 88.72%,
+  `sqlite-message-store.ts` 84.43%, `in-memory-message-store.ts`
+  82.69%). Note: Stryker's dry run crashed on this dev machine
+  repeatedly today (SIGSEGV, `better-sqlite3` native addon) — worse
+  than the occasional single-retry recovery seen on earlier slices,
+  consistent with tonight's unusually high system memory pressure
+  rather than a regression in the mutate config.
+  Plan: [plans/done/calendar-transcripts.md](plans/done/calendar-transcripts.md)
+  §T1 (not yet archived — five more sub-slices to land in this file).
+- Meeting transcripts, sub-slice T2 of 6 (delegated scope + admin
+  consent): new `TRANSCRIPT_SCOPES = ["OnlineMeetingTranscript.Read.All"]`
+  constant, kept separate from `CALENDAR_SCOPES` for the same reason
+  `CALENDAR_SCOPES` is separate from base `SCOPES` — an account can have
+  calendar without transcripts. New `--transcripts-enable <account>` /
+  `--transcripts-disable <account>` CLI flags: enable requires the
+  account already be calendar-enabled (rejects with a pointer to
+  `--calendar-enable` before ever prompting for device-code login, so a
+  doomed request doesn't waste an OAuth round-trip), device-codes with
+  `[...SCOPES, ...CALENDAR_SCOPES, ...TRANSCRIPT_SCOPES]` combined
+  (incremental delegated consent — Entra treats the re-request as one
+  grant, not a new prompt for the already-consented scopes), then flips
+  `calendar_accounts.transcripts_enabled` via the `setTranscriptsEnabled`
+  method slice 4 already declared on `CalendarAccountStore` but never
+  exercised until now. Same consent-rejection remediation pattern as
+  `--calendar-enable` (names the scope, doesn't write the flag). Disable
+  clears the flag only — fetched transcripts and calendar sync are
+  unaffected. No second app registration, no app-only/client-secret
+  auth — this re-confirms the plan doc's re-spec finding that transcripts
+  need only one more delegated scope on the existing device-code flow.
+  Admin-consent + metering + meeting-expiration notes added to
+  [setup.md](setup.md) and a new [user-guide.md §5e](user-guide.md).
+  Mutation testing: the combined touched-file score (`msal-auth-client.ts`
+  + `cli.ts`) came in at 66.53%, under the 80% gate — entirely an
+  artifact of `cli.ts` being a ~2100-line file most of which predates
+  the Stryker rollout (Viva/Teams/steering CLI surfaces never
+  mutation-tested), the same shape of gap already disclosed for
+  `get-recent-activity.ts` in slice 7. Verified line-by-line that the
+  new `transcriptsEnable`/`transcriptsDisable` functions' survivors are
+  mutant-for-mutant identical to the pre-existing `calendarEnable`/
+  `calendarDisable` code they were modeled after (same `print` default
+  pattern, same conditional-spread option-forwarding, same
+  `isConsentRequiredError` branch gap) — i.e. new code matches, not
+  regresses, the established quality bar for this class of CLI
+  function. Added one test beyond the RED list (non-consent
+  `AuthError` propagates unmodified) that closes a real gap shared with
+  `calendarEnable`. Not attempting to backfill `cli.ts`'s entire
+  pre-existing mutation debt as part of this two-flag sub-slice.
+  Plan: [plans/done/calendar-transcripts.md](plans/done/calendar-transcripts.md)
+  §T2.
+- Meeting transcripts, sub-slice T3 of 6 (`TranscriptClient` seam +
+  fake): new [src/sources/transcript.ts](../src/sources/transcript.ts)
+  — `TranscriptHandle` DTO (`transcriptId`, `createdAt`, `contentUrl`)
+  and the `TranscriptClient` interface (`listTranscripts`,
+  `fetchVttContent`), mirroring `CalendarClient`'s one-seam shape so the
+  sync job (T5) can be written generically. Keyed by `onlineMeetingId`
+  (from `events.online_meeting_id`, populated by calendar slice 5) —
+  the plan's T3 description said "eventId" loosely, but
+  `GET /me/onlineMeetings/{onlineMeetingId}/transcripts` is what the
+  real endpoint (T4) actually takes, so the seam is typed for the
+  identifier that will actually be threaded through, not the
+  looser wording. New
+  [src/testing/fake-transcript-client.ts](../src/testing/fake-transcript-client.ts)
+  mirrors `FakeCalendarClient`: fixtures keyed by onlineMeetingId
+  (transcript lists) and transcriptId (VTT content), throws a named
+  error for an unscripted key so a wrong-id bug in the sync job (T5)
+  surfaces immediately instead of silently returning nothing. No HTTP,
+  no VTT parsing yet — both land in T4. `transcript.ts` is pure
+  interface/DTO declarations with zero executable statements, so it has
+  zero mutants (mutation testing is vacuous here, not a coverage gap);
+  `fake-transcript-client.ts` is test infrastructure, excluded from
+  both coverage and mutation scope by
+  [stryker.config.mjs](../stryker.config.mjs) the same way
+  `fake-calendar-client.ts` already is.
+  Plan: [plans/done/calendar-transcripts.md](plans/done/calendar-transcripts.md)
+  §T3.
+- Meeting transcripts, sub-slice T4 of 6 (`HttpTranscriptClient` + VTT
+  parser): new
+  [src/sources/http-transcript-client.ts](../src/sources/http-transcript-client.ts)
+  — real `GET /me/onlineMeetings/{id}/transcripts` (list) and
+  `.../transcripts/{transcriptId}/content?$format=text/vtt` (fetch,
+  preferring the handle's own `contentUrl` when Graph provided one)
+  impl, mirroring `HttpCalendarClient`'s shape exactly: delegated token
+  via an injected `getAccessToken(id, scope, forceRefresh)` callback,
+  401 force-refresh-and-retry-once, 429 `Retry-After` mapping, 5xx
+  backoff-with-jitter-and-retry, bearer redaction, ≤200-char error body
+  truncation. Two new error classes on
+  [transcript.ts](../src/sources/transcript.ts): `TranscriptQuotaExhaustedError`
+  (402 — the metered content-fetch limit) and
+  `TranscriptNotAvailableError` (403/404 — not transcribed, API
+  disabled, or the meeting expired; Graph gives no reliable way to tell
+  these apart from the response alone, so they collapse to one status).
+  Also new: `parseVtt(text): readonly VttCue[]` — a small in-tree
+  WebVTT parser (no dependency), tolerant of an optional cue-identifier
+  line before the timing line, `<v Name>` / `<v.class Name>` voice
+  tags (treating the class as an email only when it's shaped like one),
+  overlapping cue times, and unicode text.
+  Design correction from the plan: the "403 → `not-available` if body
+  says API disabled; `consent-required` if body says missing grant"
+  distinction doesn't map onto how consent detection actually works in
+  this codebase — `isConsentRequiredError` inspects MSAL/AuthError
+  messages from *token acquisition* failures (`interaction_required` /
+  `consent_required` / `AADSTS65001`), not Graph HTTP response bodies
+  from a call made with an already-valid token. A consent problem
+  would surface as an exception from the `getAccessToken` callback
+  before `HttpTranscriptClient` ever makes the request — same as
+  `--calendar-enable`'s existing consent-rejection handling — so there
+  is no "403-body-means-consent-required" case for this client to
+  detect; both 403 and 404 map to the single `not-available` status.
+  Mutation score 85.94% (started at 75.78% pre-hardening — all-new
+  code this slice, so unlike prior legacy-file findings this one got
+  fixed properly rather than documented-and-accepted: added ~20 tests
+  targeting `parseVtt`'s regex anchors, null-timestamp/empty-text drop
+  paths, voice-tag edge cases, and the `#request` retry math). Three
+  regex-quantifier survivors remain and are accepted as effectively
+  equivalent mutants — e.g. `\s+` → `\s` in the voice-tag regex is
+  unobservable because the capture group's own `.trim()` absorbs the
+  difference and the overall match boundary (used for `cueText`
+  slicing) is identical either way.
+  Plan: [plans/done/calendar-transcripts.md](plans/done/calendar-transcripts.md)
+  §T4.
+- Meeting transcripts, sub-slice T5 of 6 (`syncTranscripts` job +
+  scheduler wiring): new
+  [src/sync/sync-transcripts.ts](../src/sync/sync-transcripts.ts) — walks
+  an account's ended online-meeting events from the last 60 days
+  (`TRANSCRIPT_ELIGIBILITY_DAYS`), fetches+parses+stores any transcript
+  Graph has for them (capped at `MAX_TRANSCRIPT_EVENTS_PER_TICK = 20` per
+  tick), and applies the T1-specced retry cooldowns (`not-available`
+  never retried, `quota-exhausted` 7 days, `fetch-failed` 24h; "any row
+  ever ok" makes an event permanently done regardless of later rows).
+  Wired into `sync-scheduler.ts` behind a double gate — both
+  `calendar_accounts.enabled` AND `.transcripts_enabled` must be true,
+  since transcript sync reads events off the store that only calendar
+  sync populates. `src/index.ts` now constructs a real
+  `HttpTranscriptClient`, sharing calendar's existing
+  `getAccessToken(username, scope, forceRefresh)` callback (MSAL doesn't
+  care which caller asked). `SyncLogEntry.source`/`SyncStatusRow.source`
+  widened from `MessageSource` to a new `SyncLogSource = MessageSource |
+  "transcripts"` — transcripts never produce `Message` rows (same as
+  `"calendar"`, which already used this MessageSource-but-not-really
+  pattern), so this keeps `Message.source` itself from ever matching on
+  it.
+  Two design corrections found and fixed before shipping, both self-caught
+  during implementation rather than by the user:
+  (1) T3/T4's `TranscriptClient.listTranscripts`/`fetchVttContent` were
+  wrongly passing `onlineMeetingId` as the token-resolution "account"
+  argument — MSAL tokens are per-user-account, not per-meeting. Fixed by
+  adding an explicit `account` parameter to the interface, the fake, and
+  the HTTP client (mechanical but codebase-wide: three source files plus
+  their tests).
+  (2) `syncTranscripts` originally caught *every* client error
+  (including consent-required) and persisted it as a per-event
+  `fetch-failed` status — for a consent problem that's wrong on two
+  counts: it silently retry-loops every 24h forever, and it never
+  surfaces the actionable admin-consent hint the scheduler already knows
+  how to produce for calendar. Fixed by rethrowing
+  `isConsentRequiredError(err)` from both catch sites so it propagates to
+  the scheduler's existing per-account catch block, mirroring
+  `syncCalendarEvents`'s identical pattern exactly.
+  Also found and removed one line of dead code during mutation
+  hardening: the JS-side `endAt < from` re-check was provably
+  unreachable — both `MessageStore` implementations' `getEventsInRange`
+  already filter on the exact `end_at >= from` bound (not an
+  approximation, as the removed comment claimed), so every candidate the
+  store returns already satisfies it.
+  Mutation score 85.32% combined (`sync-transcripts.ts` 92.79%,
+  `sync-scheduler.ts` 80.77% — the latter is a large file most of which
+  predates this slice; its own new transcripts block is fully killed).
+  Three accepted-equivalent survivors documented inline in
+  `sync-transcripts.ts`: the `not-available` case's `return false` is
+  unobservable because the sole call site only checks truthiness (an
+  implicit `undefined` from a dropped case is exactly as falsy as
+  `false` there), and `NO_TRANSCRIPT_FOUND_MARKER`'s exact string value
+  doesn't affect correctness beyond non-collision with real GUIDs.
+  Plan: [plans/done/calendar-transcripts.md](plans/done/calendar-transcripts.md)
+  §T5.
+- Meeting transcripts, sub-slice T6 of 6 (MCP surface — **last
+  transcripts sub-slice, feature complete**): new `get_event_transcript(
+  event_id, account?)` MCP tool
+  ([src/mcp/tools/get-event-transcript.ts](../src/mcp/tools/get-event-transcript.ts))
+  returns `{transcript, segments}` for an event's most-recently-fetched
+  *successful* transcript (an event can accumulate more than one row —
+  e.g. a recording restart — only `status: 'ok'` rows count, and the
+  newest wins); `null`/`[]` when nothing's been fetched yet, not an
+  error. `get_event` (slice 5) gained an optional `include_transcript:
+  boolean` that folds the same shape into a `linkedTranscript` field —
+  the field is omitted entirely when not requested, not `null`, so "the
+  meeting + its chat + its transcript" is one call when wanted. Neither
+  tool applies steering, mirroring `get_event`'s existing carve-out.
+  Extracted `resolveEvent` (the "look up directly, or search every
+  account and require disambiguation on a collision" logic) out of
+  `get_event.ts` into a new
+  [resolve-event.ts](../src/mcp/tools/resolve-event.ts) — a pure
+  refactor under `get_event.test.ts`'s existing coverage, done because
+  `get_event_transcript` needed the identical resolution logic and
+  duplicating it would have been the second copy. Mutation score 90.09%
+  combined (`get-event.ts` 93.33%, `get-event-transcript.ts` 91.11%,
+  `resolve-event.ts` 80.95% — its remaining survivors are all in the
+  ambiguous-event error message's exact wording, which no test
+  meaningfully depends on beyond `instanceof InvalidParamsError`).
+  Also closed a **pre-existing** coverage gap while touching
+  `mcp-server.ts`: neither `get_event` nor any tool's dispatch line had
+  ever been exercised through an actual `client.callTool()` round-trip
+  (only via direct unit tests on the handler functions) — added
+  dispatch-level tests for both `get_event` and the new
+  `get_event_transcript`.
+  This completes the meeting-transcripts feature (T1–T6 of 6; T7 FTS5
+  search remains optional/deferred per the original spec) and the full
+  14-slice calendar + transcripts roadmap.
+  Plan: [plans/done/calendar-transcripts.md](plans/done/calendar-transcripts.md)
+  §T6.
+- Meeting transcripts, sub-slice T7 of 6 committed sub-slices (optional,
+  now also done — **the full calendar + meeting-transcripts feature is
+  complete**): schema v19 adds `transcript_segments_fts`, an
+  external-content FTS5 table mirroring `messages_fts` (migration 2)
+  exactly — same `content=`/`content_rowid='rowid'` approach (the
+  parent table's composite TEXT primary key still leaves SQLite's
+  implicit rowid available, same situation as `messages.id`), same
+  `ai`/`ad`/`au` trigger shape. New `MessageStore.searchTranscriptSegments(query,
+  limit)` (no steering — transcripts attach to events, which already
+  have their own predicates). Extended the `search` MCP tool with an
+  optional `kinds: ("message" | "transcript")[]` input, default
+  `["message"]` to preserve the exact original response shape (mirrors
+  `get_recent_activity`'s legacy/unified split from slice 7); once
+  `kinds` includes `"transcript"`, every hit carries a `kind`
+  discriminator plus either `message` or `segment`.
+  `sender_email`/`sender_name`/`after`/`before`/`include_body` stay
+  message-only; a transcript-kind search with no query text yields zero
+  transcript hits rather than an error.
+  One migration-ordering bug caught during the schema TDD cycle, not
+  anticipated by the plan: `MIGRATION_19`, being the newest migration,
+  is the one every existing "rewind `user_version` and re-apply"
+  regression test in `schema.test.ts` re-runs on its second
+  `applyMigrations` call — unlike `MIGRATION_2`'s `messages_fts` (never
+  re-triggered, since no test rewinds below v2). Fixed with `CREATE
+  VIRTUAL TABLE IF NOT EXISTS` / `CREATE TRIGGER IF NOT EXISTS` / `INSERT
+  OR IGNORE` on the backfill, none of which the original messages_fts
+  migration needed.
+  Mutation score 82.17% across the touched production files
+  (`schema.ts`, `sqlite-message-store.ts`, `in-memory-message-store.ts`,
+  `search.ts` — three of these are large pre-existing files carrying
+  unrelated legacy survivors; the new `searchTranscriptSegments` method
+  and the v19 migration gate achieved a full kill in both store
+  implementations and schema.ts respectively).
+  Plan: [plans/done/calendar-transcripts.md](plans/done/calendar-transcripts.md)
+  §T7.
+- Re-specced the calendar+transcripts plan docs before implementation
+  started: calendar sync is now per-account opt-in (not on-by-default
+  like other sources), the initial sync window widened to a year of
+  history, the upcoming events tool gained subject/attendee filters and
+  was renamed `find_events`, and the transcripts follow-up was promoted
+  from optional to committed (slices 9–14) after confirming against
+  current Microsoft Graph docs that transcripts use delegated auth (no
+  app-only client needed) and are not Teams Premium-gated.
+
 ## 2026-06-21
 
 - **Migrated production off the NAS+Docker onto the Mac mini (`waldomacmini1`), native, no Docker.** Existing lake moved intact (1.37 GB, 65,567 messages, schema v15) via tar-over-ssh, `integrity_check`/`quick_check` gated, zero re-sync; MSAL token cache copied (5 accounts, first tick 19 ok / 0 errors). Now a launchd LaunchDaemon `com.waldo.wtf.server` (`KeepAlive` + the existing in-process event-loop watchdog replace the Docker `autoheal` sidecar). Data root `/Users/waldo/waldo-wtf/{db,auth,whatsapp-inbox,whatsapp-archive,logs}` + `.env` (chmod 600, loaded by dotenv from the daemon WorkingDirectory). Exposed via Tailscale Serve TLS → `127.0.0.1:8765` at `https://waldomacmini1.tailb07704.ts.net` (OAuth + static-bearer both live). Full runbook: [deploy-macmini.md](deploy-macmini.md).

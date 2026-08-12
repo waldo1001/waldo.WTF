@@ -1,6 +1,6 @@
 # Calendar — Slice 8: steering rules apply to events
 
-Parent: [calendar-overview.md](./calendar-overview.md). Predecessors:
+Parent: [calendar-overview.md](../calendar-overview.md). Predecessors:
 [slice 6](./calendar-slice-6-mcp-and-cli.md),
 [slice 7](./calendar-slice-7-unified-activity.md).
 
@@ -9,7 +9,7 @@ Parent: [calendar-overview.md](./calendar-overview.md). Predecessors:
 Extend the steering system so the user can mute meetings the same
 way they mute message senders, with two new event-specific predicate
 types and a single shared filter that applies to both
-`get_upcoming_events` and the event side of `get_recent_activity`.
+`find_events` and the event side of `get_recent_activity`.
 
 ## Scope boundary
 
@@ -38,7 +38,7 @@ types and a single shared filter that applies to both
     using only the two new predicate types. Returns a no-op
     predicate if no event-targeted rules are enabled.
 - Wire the event-targeted predicate into:
-  - `MessageStore.getUpcomingEvents` from slice 6.
+  - `MessageStore.findEvents` from slice 6.
   - `MessageStore.getRecentItems` (event branch only) from slice 7.
   - `MessageStore.getEventsInRange` from slice 1, but **only when
     called from a tool that has the `applySteering: true` flag**.
@@ -47,7 +47,7 @@ types and a single shared filter that applies to both
     any future tool with a "show me everything" semantic stay
     pristine.
 - Honour the `include_muted` escape hatch on
-  `get_upcoming_events` and `get_recent_activity` exactly as
+  `find_events` and `get_recent_activity` exactly as
   `search` and `get_recent_activity` do today:
   - `include_muted: false` (default) — apply both message-targeted
     and event-targeted predicates.
@@ -76,34 +76,35 @@ types and a single shared filter that applies to both
 
 ## Files to create / touch
 
-- [src/store/schema.ts](../../src/store/schema.ts) — bump to v17,
+- [src/store/schema.ts](../../../src/store/schema.ts) — bump to v17,
   no-op `migrateV17`.
-- [src/store/schema.test.ts](../../src/store/schema.test.ts) —
+- [src/store/schema.test.ts](../../../src/store/schema.test.ts) —
   v16 → v17 idempotency.
-- [src/store/steering-store.ts](../../src/store/steering-store.ts)
+- [src/store/steering-store.ts](../../../src/store/steering-store.ts)
   — accept the two new `rule_type` values; reject anything else
   with `InvalidParams` (existing pattern).
-- [src/store/steering-store.test.ts](../../src/store/steering-store.test.ts)
+- [src/store/steering-store.test.ts](../../../src/store/steering-store.test.ts)
   — extended tests.
-- [src/store/steering-filter.ts](../../src/store/steering-filter.ts)
+- [src/store/steering-filter.ts](../../../src/store/steering-filter.ts)
   — `buildSteeringPredicate({rules, target}: ...)`.
-- [src/store/steering-filter.test.ts](../../src/store/steering-filter.test.ts)
+- [src/store/steering-filter.test.ts](../../../src/store/steering-filter.test.ts)
   — extended tests.
-- [src/store/sqlite-message-store.ts](../../src/store/sqlite-message-store.ts)
-  — wire predicate into `getUpcomingEvents`, event branch of
+- [src/store/sqlite-message-store.ts](../../../src/store/sqlite-message-store.ts)
+  — wire predicate into `findEvents`, event branch of
   `getRecentItems`.
 - (in-memory fake) — same.
-- [src/mcp/tools/get-upcoming-events.ts](../../src/mcp/tools/get-upcoming-events.ts)
-  — accept `include_muted`, default false.
-- [src/mcp/tools/get-recent-activity.ts](../../src/mcp/tools/get-recent-activity.ts)
+- [src/mcp/tools/find-events.ts](../../../src/mcp/tools/find-events.ts)
+  — accept `include_muted`, default false. (Renamed from
+  `get-upcoming-events.ts` in slice 6, before this slice started.)
+- [src/mcp/tools/get-recent-activity.ts](../../../src/mcp/tools/get-recent-activity.ts)
   — confirm `include_muted` already there from prior steering
   rollout; gate event branch on it.
-- [src/mcp/tools/add-steering-rule.ts](../../src/mcp/tools/add-steering-rule.ts)
+- [src/mcp/tools/add-steering-rule.ts](../../../src/mcp/tools/add-steering-rule.ts)
   — extend enum.
-- [src/mcp/tools/get-steering.ts](../../src/mcp/tools/get-steering.ts)
+- [src/mcp/tools/get-steering.ts](../../../src/mcp/tools/get-steering.ts)
   — output the new types in listings.
-- [src/cli.ts](../../src/cli.ts) — new flags.
-- [src/cli.test.ts](../../src/cli.test.ts) — new cases.
+- [src/cli.ts](../../../src/cli.ts) — new flags.
+- [src/cli.test.ts](../../../src/cli.test.ts) — new cases.
 
 ## Seams involved
 
@@ -154,16 +155,16 @@ types and a single shared filter that applies to both
   - edge cases: `event_organizer_email` rule does NOT mute that
     person's emails.
 
-- AC7: `get_upcoming_events` with `include_muted: false` (default)
+- AC7: `find_events` with `include_muted: false` (default)
   excludes muted events
-  - test file: `src/mcp/tools/get-upcoming-events.test.ts`
-  - test name: `"get_upcoming_events excludes muted events by default"`
+  - test file: `src/mcp/tools/find-events.test.ts`
+  - test name: `"find_events excludes muted events by default"`
   - seams touched: mcp, store
 
-- AC8: `get_upcoming_events` with `include_muted: true` returns muted
+- AC8: `find_events` with `include_muted: true` returns muted
   events
-  - test file: `src/mcp/tools/get-upcoming-events.test.ts`
-  - test name: `"get_upcoming_events with include_muted=true returns everything"`
+  - test file: `src/mcp/tools/find-events.test.ts`
+  - test name: `"find_events with include_muted=true returns everything"`
   - seams touched: mcp, store
 
 - AC9: `get_recent_activity` event branch honours `include_muted`
@@ -216,11 +217,43 @@ types and a single shared filter that applies to both
 - **Migration churn.** v17 is a marker-only bump. The risk is a
   future schema change that needs real DDL also bumping to v17 and
   conflating the two. Mitigation: comment in
-  [src/store/schema.ts](../../src/store/schema.ts) calls out v17 is
+  [src/store/schema.ts](../../../src/store/schema.ts) calls out v17 is
   enum-widening only and any DDL bumps to v18+.
 - **CLI flag surface keeps growing.** Mitigation: `/docs-update`
   refreshes the user guide; the flag list is deliberately
   enumerable in `--help`.
+
+## Implementation notes (post-hoc)
+
+- **v17 needed a real migration, not a no-op marker.** `steering_rules
+  .rule_type` carries a `CHECK(rule_type IN (...))` constraint, not a
+  bare `TEXT` column as this doc assumed — SQLite has no `ALTER TABLE`
+  to widen a `CHECK` in place, so `migrateV17` does the standard
+  rebuild-and-rename (mirrors `migrateV11`'s `sync_state` rebuild):
+  create the widened table, copy rows verbatim (ids preserved via
+  explicit `INSERT ... SELECT`, not relying on `AUTOINCREMENT`), drop
+  the old one, rename into place, recreate the two indexes.
+- Open question 1 resolved: no `event_organizer_domain` rule type
+  added this slice — kept to exactly the two types the plan specified,
+  deferred as an out-of-scope follow-up (unchanged from the plan).
+- Open question 2 resolved: the schema column is `organizer_email`
+  (confirmed in `MIGRATION_16`), so the rule type is
+  `event_organizer_email` — matches the plan's assumption exactly.
+- CLI flag names: `--steer-add-event-organizer` /
+  `--steer-add-event-subject`, not the plan's `--steer-event-organizer`
+  / `--steer-event-subject` — matches the existing `--steer-add-*`
+  prefix convention used by every other add-rule flag
+  (`--steer-add-sender`, `--steer-add-domain`, etc.), which this doc's
+  own examples used inconsistently with its own flag names.
+- `escapeLikePattern` moved out of `sqlite-message-store.ts` into a new
+  [src/store/like-pattern.ts](../../../src/store/like-pattern.ts) so
+  `steering-filter.ts` (which `sqlite-message-store.ts` imports) could
+  reuse it for `event_subject_contains` without a circular import.
+- Account scoping for event-targeted rules: `CalendarEvent` has no
+  `source`-comparable field, so only `rule.account` scopes an
+  event-targeted rule; `rule.source` (if ever set on one) is simply
+  ignored rather than rejected at validation time. Not called out in
+  the plan; documented here and in the user guide.
 
 ## Out-of-scope follow-ups
 

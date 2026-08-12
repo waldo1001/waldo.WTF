@@ -40,6 +40,8 @@ import type { AddSteeringRuleInput, SteeringRule } from "./store/types.js";
 import { FakeClock } from "./testing/fake-clock.js";
 import { YAMMER_SCOPE } from "./auth/msal-auth-client.js";
 import { InMemoryFileSystem } from "./testing/in-memory-file-system.js";
+import { InMemoryCalendarAccountStore } from "./testing/in-memory-calendar-account-store.js";
+import { InMemoryMessageStore } from "./testing/in-memory-message-store.js";
 import { VivaExternalTenantsStore } from "./auth/viva-external-tenants-store.js";
 
 const VALID_TENANT = "cccccccc-cccc-cccc-cccc-cccccccccccc";
@@ -214,6 +216,392 @@ describe("runCli", () => {
         print: () => {},
       }),
     ).rejects.toBeInstanceOf(CliUsageError);
+  });
+
+  it("--calendar-enable device-codes with Calendars.Read alongside SCOPES and writes the opt-in row on match", async () => {
+    const auth = new FakeAuthClient({
+      accounts: [],
+      deviceCodeResult: ACCT,
+      deviceCodeMessage: "visit https://microsoft.com/devicelogin",
+    });
+    const calendarAccountStore = new InMemoryCalendarAccountStore();
+    const result = await runCli(["--calendar-enable", ACCT.username], {
+      env: ENV,
+      loadDotenv: false,
+      auth,
+      calendarAccountStore,
+      print: () => {},
+    });
+    expect(result).toEqual({
+      mode: "calendar-enable",
+      account: ACCT.username,
+    });
+    const call = auth.calls.find((c) => c.method === "loginWithDeviceCode");
+    expect(call?.scopes).toEqual(
+      expect.arrayContaining(["Mail.Read", "Chat.Read", "Calendars.Read"]),
+    );
+    expect(await calendarAccountStore.isEnabled(ACCT.username)).toBe(true);
+  });
+
+  it("--calendar-enable rejects when the signed-in account does not match the requested account", async () => {
+    const auth = new FakeAuthClient({
+      accounts: [],
+      deviceCodeResult: ACCT,
+    });
+    const calendarAccountStore = new InMemoryCalendarAccountStore();
+    await expect(
+      runCli(["--calendar-enable", "someone-else@example.invalid"], {
+        env: ENV,
+        loadDotenv: false,
+        auth,
+        calendarAccountStore,
+        print: () => {},
+      }),
+    ).rejects.toBeInstanceOf(CliUsageError);
+    expect(await calendarAccountStore.isEnabled(ACCT.username)).toBe(false);
+  });
+
+  it("--calendar-enable surfaces a remediation message naming the scope on consent rejection, without writing the store row", async () => {
+    const auth = new FakeAuthClient({
+      accounts: [],
+      deviceCodeResult: new AuthError(
+        "device-code-failed",
+        "interaction_required: AADSTS65001 admin consent required",
+      ),
+    });
+    const calendarAccountStore = new InMemoryCalendarAccountStore();
+    await expect(
+      runCli(["--calendar-enable", ACCT.username], {
+        env: ENV,
+        loadDotenv: false,
+        auth,
+        calendarAccountStore,
+        print: () => {},
+      }),
+    ).rejects.toThrow(/Calendars\.Read/);
+    expect(await calendarAccountStore.isEnabled(ACCT.username)).toBe(false);
+  });
+
+  it("--calendar-disable removes the opt-in row and reports whether one existed", async () => {
+    const calendarAccountStore = new InMemoryCalendarAccountStore();
+    await calendarAccountStore.enable({ account: ACCT.username });
+    const result = await runCli(
+      ["--calendar-disable", ACCT.username],
+      { env: ENV, loadDotenv: false, calendarAccountStore },
+    );
+    expect(result).toEqual({
+      mode: "calendar-disable",
+      account: ACCT.username,
+      removed: true,
+    });
+    expect(await calendarAccountStore.isEnabled(ACCT.username)).toBe(false);
+  });
+
+  it("--calendar-disable on an account with no opt-in row reports removed=false", async () => {
+    const calendarAccountStore = new InMemoryCalendarAccountStore();
+    const result = await runCli(
+      ["--calendar-disable", "never-enabled@example.invalid"],
+      { env: ENV, loadDotenv: false, calendarAccountStore },
+    );
+    expect(result).toEqual({
+      mode: "calendar-disable",
+      account: "never-enabled@example.invalid",
+      removed: false,
+    });
+  });
+
+  it("AC: --transcripts-enable rejects an account with no calendar_accounts row (no device-code attempted)", async () => {
+    const auth = new FakeAuthClient({
+      accounts: [],
+      deviceCodeResult: ACCT,
+    });
+    const calendarAccountStore = new InMemoryCalendarAccountStore();
+    await expect(
+      runCli(["--transcripts-enable", ACCT.username], {
+        env: ENV,
+        loadDotenv: false,
+        auth,
+        calendarAccountStore,
+        print: () => {},
+      }),
+    ).rejects.toThrow(/--calendar-enable/);
+    expect(
+      auth.calls.some((c) => c.method === "loginWithDeviceCode"),
+    ).toBe(false);
+  });
+
+  it("AC: --transcripts-enable device-codes with SCOPES + CALENDAR_SCOPES + TRANSCRIPT_SCOPES combined and sets transcripts_enabled on match", async () => {
+    const auth = new FakeAuthClient({
+      accounts: [],
+      deviceCodeResult: ACCT,
+      deviceCodeMessage: "visit https://microsoft.com/devicelogin",
+    });
+    const calendarAccountStore = new InMemoryCalendarAccountStore();
+    await calendarAccountStore.enable({ account: ACCT.username });
+    const result = await runCli(["--transcripts-enable", ACCT.username], {
+      env: ENV,
+      loadDotenv: false,
+      auth,
+      calendarAccountStore,
+      print: () => {},
+    });
+    expect(result).toEqual({
+      mode: "transcripts-enable",
+      account: ACCT.username,
+    });
+    const call = auth.calls.find((c) => c.method === "loginWithDeviceCode");
+    expect(call?.scopes).toEqual(
+      expect.arrayContaining([
+        "Mail.Read",
+        "Chat.Read",
+        "Calendars.Read",
+        "OnlineMeetingTranscript.Read.All",
+      ]),
+    );
+    const account = await calendarAccountStore.listAll();
+    expect(account.find((a) => a.account === ACCT.username)?.transcriptsEnabled).toBe(
+      true,
+    );
+  });
+
+  it("AC: --transcripts-enable rejects when the signed-in account does not match the requested account", async () => {
+    const auth = new FakeAuthClient({
+      accounts: [],
+      deviceCodeResult: ACCT,
+    });
+    const calendarAccountStore = new InMemoryCalendarAccountStore();
+    await calendarAccountStore.enable({ account: "someone-else@example.invalid" });
+    await expect(
+      runCli(["--transcripts-enable", "someone-else@example.invalid"], {
+        env: ENV,
+        loadDotenv: false,
+        auth,
+        calendarAccountStore,
+        print: () => {},
+      }),
+    ).rejects.toBeInstanceOf(CliUsageError);
+    const account = await calendarAccountStore.listAll();
+    expect(
+      account.find((a) => a.account === "someone-else@example.invalid")
+        ?.transcriptsEnabled,
+    ).toBe(false);
+  });
+
+  it("AC: --transcripts-enable surfaces a remediation message naming the transcript scope on consent rejection, leaving transcripts_enabled unset", async () => {
+    const auth = new FakeAuthClient({
+      accounts: [],
+      deviceCodeResult: new AuthError(
+        "device-code-failed",
+        "interaction_required: AADSTS65001 admin consent required",
+      ),
+    });
+    const calendarAccountStore = new InMemoryCalendarAccountStore();
+    await calendarAccountStore.enable({ account: ACCT.username });
+    await expect(
+      runCli(["--transcripts-enable", ACCT.username], {
+        env: ENV,
+        loadDotenv: false,
+        auth,
+        calendarAccountStore,
+        print: () => {},
+      }),
+    ).rejects.toThrow(/OnlineMeetingTranscript\.Read\.All/);
+    const account = await calendarAccountStore.listAll();
+    expect(
+      account.find((a) => a.account === ACCT.username)?.transcriptsEnabled,
+    ).toBe(false);
+  });
+
+  it("--transcripts-enable propagates a non-consent device-code error unmodified (no remediation rewrite)", async () => {
+    const auth = new FakeAuthClient({
+      accounts: [],
+      deviceCodeResult: new AuthError("device-code-failed", "network timeout"),
+    });
+    const calendarAccountStore = new InMemoryCalendarAccountStore();
+    await calendarAccountStore.enable({ account: ACCT.username });
+    await expect(
+      runCli(["--transcripts-enable", ACCT.username], {
+        env: ENV,
+        loadDotenv: false,
+        auth,
+        calendarAccountStore,
+        print: () => {},
+      }),
+    ).rejects.toThrow("network timeout");
+  });
+
+  it("--transcripts-disable clears the flag without deleting the calendar opt-in row", async () => {
+    const calendarAccountStore = new InMemoryCalendarAccountStore();
+    await calendarAccountStore.enable({ account: ACCT.username });
+    await calendarAccountStore.setTranscriptsEnabled(ACCT.username, true);
+    const result = await runCli(["--transcripts-disable", ACCT.username], {
+      env: ENV,
+      loadDotenv: false,
+      calendarAccountStore,
+    });
+    expect(result).toEqual({
+      mode: "transcripts-disable",
+      account: ACCT.username,
+    });
+    expect(await calendarAccountStore.isEnabled(ACCT.username)).toBe(true);
+    const account = await calendarAccountStore.listAll();
+    expect(
+      account.find((a) => a.account === ACCT.username)?.transcriptsEnabled,
+    ).toBe(false);
+  });
+
+  it("--calendar-list prints next 7 days across accounts", async () => {
+    const calendarStore = new InMemoryMessageStore();
+    const clock = new FakeClock(new Date("2026-04-13T12:00:00Z"));
+    await calendarStore.upsertEvents([
+      {
+        account: "a@example.test",
+        eventId: "evt-in-window",
+        subject: "In-window meeting",
+        startAt: new Date("2026-04-14T09:00:00Z"),
+        endAt: new Date("2026-04-14T09:30:00Z"),
+        isAllDay: false,
+        isCancelled: false,
+        attendees: [],
+      },
+      {
+        account: "b@example.test",
+        eventId: "evt-out-of-window",
+        subject: "Later",
+        startAt: new Date("2026-05-01T09:00:00Z"),
+        endAt: new Date("2026-05-01T10:00:00Z"),
+        isAllDay: false,
+        isCancelled: false,
+        attendees: [],
+      },
+    ]);
+    const lines: string[] = [];
+    const result = await runCli(["--calendar-list"], {
+      env: ENV,
+      loadDotenv: false,
+      calendarStore,
+      clock,
+      print: (m) => lines.push(m),
+    });
+    expect(result.mode).toBe("calendar-list");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("a@example.test");
+    expect(lines[0]).toContain("In-window meeting");
+    expect(lines[0]).toContain("30m");
+  });
+
+  it("--calendar-list prints a friendly message for an empty lake", async () => {
+    const calendarStore = new InMemoryMessageStore();
+    const lines: string[] = [];
+    await runCli(["--calendar-list"], {
+      env: ENV,
+      loadDotenv: false,
+      calendarStore,
+      clock: new FakeClock(new Date("2026-04-13T12:00:00Z")),
+      print: (m) => lines.push(m),
+    });
+    expect(lines).toEqual(["no upcoming events"]);
+  });
+
+  it("--calendar-resync clears every calendar delta cursor", async () => {
+    const calendarStore = new InMemoryMessageStore();
+    const calendarAccountStore = new InMemoryCalendarAccountStore();
+    await calendarAccountStore.enable({ account: "a@example.test" });
+    await calendarAccountStore.enable({ account: "b@example.test" });
+    await calendarStore.setSyncState({
+      account: "a@example.test",
+      source: "calendar",
+      folder: "default",
+      deltaToken: "old-delta-a",
+    });
+    await calendarStore.setSyncState({
+      account: "b@example.test",
+      source: "calendar",
+      folder: "default",
+      deltaToken: "old-delta-b",
+    });
+    const result = await runCli(["--calendar-resync"], {
+      env: ENV,
+      loadDotenv: false,
+      calendarStore,
+      calendarAccountStore,
+      print: () => {},
+    });
+    expect(result).toEqual({
+      mode: "calendar-resync",
+      clearedAccounts: ["a@example.test", "b@example.test"],
+    });
+    const stateA = await calendarStore.getSyncState(
+      "a@example.test",
+      "calendar",
+      "default",
+    );
+    const stateB = await calendarStore.getSyncState(
+      "b@example.test",
+      "calendar",
+      "default",
+    );
+    expect(stateA?.deltaToken).toBeUndefined();
+    expect(stateB?.deltaToken).toBeUndefined();
+  });
+
+  it("--calendar-resync --account <account> clears just one cursor", async () => {
+    const calendarStore = new InMemoryMessageStore();
+    const calendarAccountStore = new InMemoryCalendarAccountStore();
+    await calendarAccountStore.enable({ account: "a@example.test" });
+    await calendarAccountStore.enable({ account: "b@example.test" });
+    await calendarStore.setSyncState({
+      account: "a@example.test",
+      source: "calendar",
+      folder: "default",
+      deltaToken: "old-delta-a",
+    });
+    await calendarStore.setSyncState({
+      account: "b@example.test",
+      source: "calendar",
+      folder: "default",
+      deltaToken: "old-delta-b",
+    });
+    const result = await runCli(
+      ["--calendar-resync", "--account", "a@example.test"],
+      { env: ENV, loadDotenv: false, calendarStore, calendarAccountStore, print: () => {} },
+    );
+    expect(result).toEqual({
+      mode: "calendar-resync",
+      clearedAccounts: ["a@example.test"],
+    });
+    const stateA = await calendarStore.getSyncState(
+      "a@example.test",
+      "calendar",
+      "default",
+    );
+    const stateB = await calendarStore.getSyncState(
+      "b@example.test",
+      "calendar",
+      "default",
+    );
+    expect(stateA?.deltaToken).toBeUndefined();
+    expect(stateB?.deltaToken).toBe("old-delta-b");
+  });
+
+  it("--calendar-resync --account <not enabled> is a no-op, exit 0, with a message", async () => {
+    const calendarStore = new InMemoryMessageStore();
+    const calendarAccountStore = new InMemoryCalendarAccountStore();
+    const lines: string[] = [];
+    const result = await runCli(
+      ["--calendar-resync", "--account", "never-enabled@example.invalid"],
+      {
+        env: ENV,
+        loadDotenv: false,
+        calendarStore,
+        calendarAccountStore,
+        print: (m) => lines.push(m),
+      },
+    );
+    expect(result).toEqual({ mode: "calendar-resync", clearedAccounts: [] });
+    expect(lines).toEqual([
+      "never-enabled@example.invalid is not calendar-enabled — nothing to resync",
+    ]);
   });
 
   it("throws CliUsageError on an unknown flag", async () => {
@@ -438,6 +826,59 @@ describe("runCli", () => {
       action: "add",
       input: { ruleType: "body_contains", pattern: "sync fail" },
     });
+  });
+
+  it("AC11: --steer-add-event-organizer adds a rule the predicate honours", async () => {
+    const calls: SteerCommand[] = [];
+    const steerImpl: SteerImpl = async (_cfg, cmd) => {
+      calls.push(cmd);
+      const rule: SteeringRule = {
+        id: 5,
+        ruleType: "event_organizer_email",
+        pattern: "noisy@example.com",
+        enabled: true,
+        createdAt: new Date("2026-04-20T12:00:00Z"),
+      };
+      return { action: "add", rule };
+    };
+    const result = await runCli(
+      ["--steer-add-event-organizer", "Noisy@Example.COM"],
+      { env: ENV, loadDotenv: false, print: () => {}, steerImpl },
+    );
+    expect(calls[0]).toEqual({
+      action: "add",
+      input: {
+        ruleType: "event_organizer_email",
+        pattern: "Noisy@Example.COM",
+      },
+    });
+    expect(result.mode).toBe("steer");
+  });
+
+  it("AC12: --steer-add-event-subject adds a substring rule the predicate honours", async () => {
+    const calls: SteerCommand[] = [];
+    const steerImpl: SteerImpl = async (_cfg, cmd) => {
+      calls.push(cmd);
+      const rule: SteeringRule = {
+        id: 6,
+        ruleType: "event_subject_contains",
+        pattern: "standup",
+        enabled: true,
+        createdAt: new Date("2026-04-20T12:00:00Z"),
+      };
+      return { action: "add", rule };
+    };
+    const result = await runCli(["--steer-add-event-subject", "standup"], {
+      env: ENV,
+      loadDotenv: false,
+      print: () => {},
+      steerImpl,
+    });
+    expect(calls[0]).toEqual({
+      action: "add",
+      input: { ruleType: "event_subject_contains", pattern: "standup" },
+    });
+    expect(result.mode).toBe("steer");
   });
 
   it("--reason / --source / --account are threaded into AddSteeringRuleInput", async () => {

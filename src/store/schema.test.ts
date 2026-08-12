@@ -23,7 +23,7 @@ describe("schema / applyMigrations", () => {
     expect(userVersion(db)).toBe(0);
     applyMigrations(db);
     expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
-    expect(CURRENT_SCHEMA_VERSION).toBe(15);
+    expect(CURRENT_SCHEMA_VERSION).toBe(19);
   });
 
   it("creates all four tables and expected indices", () => {
@@ -1079,7 +1079,7 @@ describe("schema / teams_channel_subscriptions tenant_id (migration 15)", () => 
     applyMigrations(db);
 
     expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
-    expect(CURRENT_SCHEMA_VERSION).toBe(15);
+    expect(CURRENT_SCHEMA_VERSION).toBe(19);
     expect(hasColumn(db, "teams_channel_subscriptions", "tenant_id")).toBe(
       true,
     );
@@ -1111,5 +1111,415 @@ describe("schema / teams_channel_subscriptions tenant_id (migration 15)", () => 
     applyMigrations(db);
     applyMigrations(db);
     expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it("v16 migration creates events, event_attendees, and calendar_accounts tables with expected columns", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+
+    const tables = objectNames(db, "table");
+    expect(tables).toEqual(
+      expect.arrayContaining([
+        "events",
+        "event_attendees",
+        "calendar_accounts",
+      ]),
+    );
+
+    const eventCols = (
+      db.prepare("PRAGMA table_info(events)").all() as { name: string }[]
+    ).map((c) => c.name);
+    expect(eventCols).toEqual(
+      expect.arrayContaining([
+        "account",
+        "event_id",
+        "tenant_id",
+        "subject",
+        "organizer_name",
+        "organizer_email",
+        "start_at",
+        "end_at",
+        "is_all_day",
+        "is_cancelled",
+        "chat_id",
+        "online_meeting_url",
+        "online_meeting_id",
+        "last_modified_at",
+        "raw_json",
+      ]),
+    );
+
+    const attendeeCols = (
+      db.prepare("PRAGMA table_info(event_attendees)").all() as {
+        name: string;
+      }[]
+    ).map((c) => c.name);
+    expect(attendeeCols).toEqual(
+      expect.arrayContaining([
+        "account",
+        "event_id",
+        "attendee_email",
+        "display_name",
+        "response_status",
+        "is_organizer",
+      ]),
+    );
+
+    const calAccountCols = (
+      db.prepare("PRAGMA table_info(calendar_accounts)").all() as {
+        name: string;
+      }[]
+    ).map((c) => c.name);
+    expect(calAccountCols).toEqual(
+      expect.arrayContaining([
+        "account",
+        "tenant_id",
+        "enabled",
+        "transcripts_enabled",
+        "enabled_at",
+      ]),
+    );
+  });
+
+  it("v16 migration is idempotent on re-apply", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    expect(() => applyMigrations(db)).not.toThrow();
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it("v16 migration adds events range-query indexes", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const indices = objectNames(db, "index");
+    expect(indices).toEqual(
+      expect.arrayContaining([
+        "idx_events_start_at",
+        "idx_events_account_start_at",
+      ]),
+    );
+    applyMigrations(db);
+    expect(objectNames(db, "index")).toEqual(
+      expect.arrayContaining([
+        "idx_events_start_at",
+        "idx_events_account_start_at",
+      ]),
+    );
+  });
+
+  it("v17 migration is a no-op marker bump", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+    expect(() => applyMigrations(db)).not.toThrow();
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it("v17 migration widens the rule_type CHECK to accept the two event-targeted types", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO steering_rules (rule_type, pattern, enabled, created_at)
+           VALUES (?, ?, 1, 0)`,
+        )
+        .run("event_organizer_email", "noisy@example.test"),
+    ).not.toThrow();
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO steering_rules (rule_type, pattern, enabled, created_at)
+           VALUES (?, ?, 1, 0)`,
+        )
+        .run("event_subject_contains", "standup"),
+    ).not.toThrow();
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO steering_rules (rule_type, pattern, enabled, created_at)
+           VALUES (?, ?, 1, 0)`,
+        )
+        .run("bogus_type", "x"),
+    ).toThrow();
+  });
+
+  it("v17 migration preserves existing steering_rules rows, ids, and indexes across the rebuild", () => {
+    // Simulate a pre-v17 database: only steering_rules exists, under the
+    // OLD (narrower) CHECK constraint, with a legacy row and user_version
+    // parked at 16 — applyMigrations only needs to run migrateV17 from
+    // there, since every `current < N` block below 17 is skipped.
+    const db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE steering_rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        rule_type TEXT NOT NULL CHECK(rule_type IN
+          ('sender_email','sender_domain','thread_id','thread_name_contains','body_contains')),
+        pattern TEXT NOT NULL,
+        source TEXT,
+        account TEXT,
+        reason TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL
+      );
+      PRAGMA user_version = 16;
+    `);
+    const inserted = db
+      .prepare(
+        `INSERT INTO steering_rules (rule_type, pattern, enabled, created_at)
+         VALUES ('sender_email', 'legacy@example.test', 1, 12345)`,
+      )
+      .run();
+    const legacyId = Number(inserted.lastInsertRowid);
+
+    applyMigrations(db);
+
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+    const row = db
+      .prepare("SELECT * FROM steering_rules WHERE id = ?")
+      .get(legacyId) as {
+      id: number;
+      rule_type: string;
+      pattern: string;
+      enabled: number;
+      created_at: number;
+    };
+    expect(row).toEqual({
+      id: legacyId,
+      rule_type: "sender_email",
+      pattern: "legacy@example.test",
+      source: null,
+      account: null,
+      reason: null,
+      enabled: 1,
+      created_at: 12345,
+    });
+    expect(objectNames(db, "index")).toEqual(
+      expect.arrayContaining(["idx_steering_enabled_type", "idx_steering_dedupe"]),
+    );
+    db.close();
+  });
+
+  it("v18 migration creates transcripts and transcript_segments tables with expected columns", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+
+    const tables = objectNames(db, "table");
+    expect(tables).toEqual(
+      expect.arrayContaining(["transcripts", "transcript_segments"]),
+    );
+
+    const transcriptCols = (
+      db.prepare("PRAGMA table_info(transcripts)").all() as { name: string }[]
+    ).map((c) => c.name);
+    expect(transcriptCols).toEqual(
+      expect.arrayContaining([
+        "account",
+        "event_id",
+        "transcript_id",
+        "fetched_at",
+        "vtt_bytes",
+        "segment_count",
+        "status",
+        "raw_json",
+      ]),
+    );
+
+    const segmentCols = (
+      db.prepare("PRAGMA table_info(transcript_segments)").all() as {
+        name: string;
+      }[]
+    ).map((c) => c.name);
+    expect(segmentCols).toEqual(
+      expect.arrayContaining([
+        "account",
+        "event_id",
+        "transcript_id",
+        "sequence",
+        "speaker_email",
+        "speaker_display_name",
+        "start_offset_ms",
+        "end_offset_ms",
+        "text",
+      ]),
+    );
+  });
+
+  it("v18 migration is idempotent on re-apply", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    expect(() => applyMigrations(db)).not.toThrow();
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it("v18 migration adds the segments-by-event index", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    expect(objectNames(db, "index")).toContain("idx_segments_event");
+  });
+
+  it("deleting an event cascades to its transcripts and transcript_segments", () => {
+    const db = new Database(":memory:");
+    db.pragma("foreign_keys = ON");
+    applyMigrations(db);
+    db.prepare(
+      `INSERT INTO events (account, event_id, start_at, end_at)
+       VALUES ('a@example.test', 'evt-1', '2026-04-13T10:00:00Z', '2026-04-13T11:00:00Z')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO transcripts
+         (account, event_id, transcript_id, fetched_at, segment_count, status)
+       VALUES ('a@example.test', 'evt-1', 'tr-1', '2026-04-13T11:05:00Z', 1, 'ok')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO transcript_segments
+         (account, event_id, transcript_id, sequence, start_offset_ms, end_offset_ms, text)
+       VALUES ('a@example.test', 'evt-1', 'tr-1', 0, 0, 1000, 'hello')`,
+    ).run();
+
+    db.prepare("DELETE FROM events WHERE account = ? AND event_id = ?").run(
+      "a@example.test",
+      "evt-1",
+    );
+
+    const transcripts = db.prepare("SELECT * FROM transcripts").all();
+    const segments = db.prepare("SELECT * FROM transcript_segments").all();
+    expect(transcripts).toEqual([]);
+    expect(segments).toEqual([]);
+  });
+
+  function insertEventAndTranscript(
+    db: Database.Database,
+    overrides: { eventId?: string; transcriptId?: string } = {},
+  ): { eventId: string; transcriptId: string } {
+    const eventId = overrides.eventId ?? "evt-1";
+    const transcriptId = overrides.transcriptId ?? "tr-1";
+    db.prepare(
+      `INSERT OR IGNORE INTO events (account, event_id, start_at, end_at)
+       VALUES ('a@example.test', ?, '2026-04-13T10:00:00Z', '2026-04-13T11:00:00Z')`,
+    ).run(eventId);
+    db.prepare(
+      `INSERT INTO transcripts
+         (account, event_id, transcript_id, fetched_at, segment_count, status)
+       VALUES ('a@example.test', ?, ?, '2026-04-13T11:05:00Z', 1, 'ok')`,
+    ).run(eventId, transcriptId);
+    return { eventId, transcriptId };
+  }
+
+  function insertSegmentRow(
+    db: Database.Database,
+    overrides: {
+      eventId: string;
+      transcriptId: string;
+      sequence: number;
+      text: string;
+    },
+  ): void {
+    db.prepare(
+      `INSERT INTO transcript_segments
+         (account, event_id, transcript_id, sequence, start_offset_ms, end_offset_ms, text)
+       VALUES ('a@example.test', ?, ?, ?, 0, 1000, ?)`,
+    ).run(overrides.eventId, overrides.transcriptId, overrides.sequence, overrides.text);
+  }
+
+  function ftsSegmentRowidsMatching(
+    db: Database.Database,
+    query: string,
+  ): number[] {
+    return (
+      db
+        .prepare(
+          "SELECT rowid FROM transcript_segments_fts WHERE transcript_segments_fts MATCH ?",
+        )
+        .all(query) as { rowid: number }[]
+    ).map((r) => r.rowid);
+  }
+
+  it("v19 migration creates transcript_segments_fts and ai/ad/au triggers", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+
+    const tables = objectNames(db, "table");
+    expect(tables).toContain("transcript_segments_fts");
+
+    const triggers = (
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name")
+        .all() as { name: string }[]
+    ).map((r) => r.name);
+    expect(triggers).toEqual(
+      expect.arrayContaining([
+        "transcript_segments_ai",
+        "transcript_segments_ad",
+        "transcript_segments_au",
+      ]),
+    );
+  });
+
+  it("v19 migration is idempotent on re-apply", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    expect(() => applyMigrations(db)).not.toThrow();
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it("insert trigger reflects new transcript segments into the FTS index", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const { eventId, transcriptId } = insertEventAndTranscript(db);
+    insertSegmentRow(db, { eventId, transcriptId, sequence: 0, text: "kangaroo platypus" });
+    expect(ftsSegmentRowidsMatching(db, "kangaroo")).toHaveLength(1);
+    expect(ftsSegmentRowidsMatching(db, "absent")).toHaveLength(0);
+  });
+
+  it("delete trigger removes rows from the FTS index", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const { eventId, transcriptId } = insertEventAndTranscript(db);
+    insertSegmentRow(db, { eventId, transcriptId, sequence: 0, text: "kangaroo platypus" });
+    db.prepare(
+      "DELETE FROM transcript_segments WHERE account = ? AND event_id = ? AND transcript_id = ? AND sequence = ?",
+    ).run("a@example.test", eventId, transcriptId, 0);
+    expect(ftsSegmentRowidsMatching(db, "kangaroo")).toHaveLength(0);
+  });
+
+  it("update trigger refreshes the FTS index when text changes", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const { eventId, transcriptId } = insertEventAndTranscript(db);
+    insertSegmentRow(db, { eventId, transcriptId, sequence: 0, text: "kangaroo platypus" });
+    db.prepare(
+      "UPDATE transcript_segments SET text = ? WHERE account = ? AND event_id = ? AND transcript_id = ? AND sequence = ?",
+    ).run("wombat echidna", "a@example.test", eventId, transcriptId, 0);
+    expect(ftsSegmentRowidsMatching(db, "kangaroo")).toHaveLength(0);
+    expect(ftsSegmentRowidsMatching(db, "wombat")).toHaveLength(1);
+  });
+
+  it("backfills existing transcript_segments rows when upgrading from v18 to v19", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    db.exec("PRAGMA user_version = 18");
+    db.exec("DROP TABLE transcript_segments_fts");
+    db.exec("DROP TRIGGER transcript_segments_ai");
+    db.exec("DROP TRIGGER transcript_segments_ad");
+    db.exec("DROP TRIGGER transcript_segments_au");
+    const { eventId, transcriptId } = insertEventAndTranscript(db, {
+      eventId: "evt-preexisting",
+      transcriptId: "tr-preexisting",
+    });
+    insertSegmentRow(db, {
+      eventId,
+      transcriptId,
+      sequence: 0,
+      text: "alpha bravo charlie",
+    });
+
+    applyMigrations(db);
+
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+    expect(ftsSegmentRowidsMatching(db, "bravo")).toHaveLength(1);
   });
 });

@@ -24,6 +24,11 @@ dist/
 build/
 *.tsbuildinfo
 
+# Stryker mutation-testing scratch + reports
+.stryker-tmp/
+reports/
+stryker.log
+
 # Editor / OS
 .vscode/settings.json
 .DS_Store

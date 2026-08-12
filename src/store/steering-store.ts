@@ -28,6 +28,8 @@ export function normalizePattern(
     case "sender_domain":
     case "thread_name_contains":
     case "body_contains":
+    case "event_organizer_email":
+    case "event_subject_contains":
       return trimmed.toLowerCase();
     case "thread_id":
       return trimmed;

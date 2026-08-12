@@ -41,10 +41,19 @@ REVIEW failure.
 
 ## What coverage does NOT replace
 
-- **Mutation testing** (Stryker) is the next-level check: for each line, flip
-  an operator or remove a branch and see if any test fails. If no test fails,
-  the line was "covered" but not actually *tested*. Target: add Stryker at
-  Weekend 3 once the unit suite exists. Minimum surviving-mutant rate: <20%.
+- **Mutation testing** (Stryker, added 2026-08-12 — see
+  [methodology.md §2.61](methodology.md) and
+  [../../stryker.config.mjs](../../stryker.config.mjs)) is the
+  next-level check: for each line, flip an operator or remove a branch
+  and see if any test fails. If no test fails, the line was "covered"
+  but not actually *tested*. Runs scoped to the current cycle's touched
+  files via `npx stryker run --mutate "<files>"`, part of every
+  `/tdd-cycle` (Step 10, between COVER and SECURITY SCAN). Minimum
+  surviving-mutant rate: <20% (break threshold 80% mutation score).
+  Survivors outside the current diff are pre-existing and out of scope
+  for that cycle, same as coverage or `npm audit` gaps elsewhere in the
+  codebase — don't retroactively chase the whole repo to 80%+ in one
+  slice.
 - **Manual smoke tests** against a real account. Automated coverage cannot
   catch "the token cache schema changed in a new MSAL version". Smoke-test
   once per weekend milestone.

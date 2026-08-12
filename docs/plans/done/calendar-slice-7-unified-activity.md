@@ -1,6 +1,6 @@
 # Calendar — Slice 7: unified `get_recent_activity` (heterogeneous feed)
 
-Parent: [calendar-overview.md](./calendar-overview.md). Predecessors:
+Parent: [calendar-overview.md](../calendar-overview.md). Predecessors:
 [slice 4](./calendar-slice-4-sync-and-scope.md),
 [slice 6](./calendar-slice-6-mcp-and-cli.md).
 
@@ -71,20 +71,20 @@ conversation locked in.
 
 ## Files to create / touch
 
-- [src/mcp/tools/get-recent-activity.ts](../../src/mcp/tools/get-recent-activity.ts)
+- [src/mcp/tools/get-recent-activity.ts](../../../src/mcp/tools/get-recent-activity.ts)
   — extend.
-- [src/mcp/tools/get-recent-activity.test.ts](../../src/mcp/tools/get-recent-activity.test.ts)
+- [src/mcp/tools/get-recent-activity.test.ts](../../../src/mcp/tools/get-recent-activity.test.ts)
   — extend.
-- [src/store/message-store.ts](../../src/store/message-store.ts) —
+- [src/store/message-store.ts](../../../src/store/message-store.ts) —
   add `getRecentItems`.
-- [src/store/message-store-contract.ts](../../src/store/message-store-contract.ts)
+- [src/store/message-store-contract.ts](../../../src/store/message-store-contract.ts)
   — tests.
-- [src/store/sqlite-message-store.ts](../../src/store/sqlite-message-store.ts)
+- [src/store/sqlite-message-store.ts](../../../src/store/sqlite-message-store.ts)
   — implement (UNION ALL).
 - (in-memory fake) — implement.
-- [src/mcp/mcp-server.ts](../../src/mcp/mcp-server.ts) — input schema
+- [src/mcp/mcp-server.ts](../../../src/mcp/mcp-server.ts) — input schema
   update if surfaced.
-- [src/mcp/e2e-http.test.ts](../../src/mcp/e2e-http.test.ts) — e2e.
+- [src/mcp/e2e-http.test.ts](../../../src/mcp/e2e-http.test.ts) — e2e.
 
 ## Seams involved
 
@@ -163,7 +163,7 @@ conversation locked in.
    callers to migrate. Today's only callers are Claude Desktop and
    the e2e test, both of which we control. **Tentative decision:**
    keep the branch in slice 7, mark it deprecated in
-   [docs/changelog.md](../../docs/changelog.md), and remove it as a
+   [docs/changelog.md](../../../docs/changelog.md), and remove it as a
    follow-up after one weekend of real use.
 3. **Open:** 500-item cap — picked to bound response size on a busy
    day. Pin during FRAME; tests assert the value.
@@ -189,6 +189,29 @@ conversation locked in.
   feed is correct but the framing isn't obvious. Mitigation: tool
   description names the new behaviour ("recent activity and
   upcoming meetings within the window").
+
+## Implementation notes (post-hoc)
+
+- **No `UNION ALL`.** `messages.sent_at` is stored as an INTEGER
+  (epoch ms) and `events.start_at` as a TEXT ISO string — genuinely
+  incompatible column types for a literal SQL union. `composeRecentItems`
+  (in [message-store.ts](../../../src/store/message-store.ts)) instead
+  calls the already-tested `getRecentMessages` and `findEvents` and
+  merges in JS: sort descending, cap at 500, re-sort ascending. Shared
+  by both `SqliteMessageStore` and `InMemoryMessageStore` — no
+  UNION-vs-fake divergence risk.
+- **No separate `attendees` field on event items.** `CalendarEvent`
+  already carries `attendees` inline (from slice 1), so the response
+  shape is `{kind: "event", at, event}` where `event.attendees` is the
+  full array — not the plan's sketched
+  `{kind: "event", at, event, attendees}` (redundant duplication).
+- Open question 1 resolved: message-before-event tie-break confirmed
+  via `compareByAtThenKind`, tested at the store contract layer.
+- Open question 2 resolved as tentatively decided: legacy branch kept,
+  selected only when `kinds` is the exact singleton `["message"]`.
+- Open question 3 resolved: 500-item cap (`RECENT_ITEMS_CAP`), tested
+  at both the MCP and store layers.
+- Open question 4 resolved: attendees inlined (see above).
 
 ## Out-of-scope follow-ups
 

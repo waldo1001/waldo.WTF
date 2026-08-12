@@ -1,7 +1,12 @@
 import type { Database, Statement } from "better-sqlite3";
 import {
+  composeRecentItems,
   DEFAULT_GET_THREAD_LIMIT,
   type DeleteResult,
+  type FindEventsOptions,
+  type FindEventsResult,
+  type GetRecentItemsOptions,
+  type GetRecentItemsResult,
   type GetRecentMessagesOptions,
   type GetRecentMessagesResult,
   type GetThreadOptions,
@@ -9,21 +14,37 @@ import {
   type MessageStore,
   type SearchMessagesOptions,
   type SearchMessagesResult,
+  type SearchTranscriptSegmentsResult,
+  type TranscriptWithSegments,
   type UpsertResult,
+  type UpsertTranscriptInput,
 } from "./message-store.js";
+import { escapeLikePattern } from "./like-pattern.js";
 import { applyMigrations } from "./schema.js";
-import { buildSteeringPredicate } from "./steering-filter.js";
+import {
+  buildSteeringPredicate,
+  type SteeringPredicate,
+} from "./steering-filter.js";
 import type { SteeringStore } from "./steering-store.js";
 import type {
   AccountRecord,
+  CalendarEvent,
   ChatCursorEntry,
   ChatType,
+  EventAttendee,
+  EventKey,
+  EventResponseStatus,
   Message,
   MessageSource,
   SyncLogEntry,
+  SyncLogSource,
   SyncStateEntry,
   SyncStatusRow,
   ThreadSummary,
+  Transcript,
+  TranscriptKey,
+  TranscriptSegment,
+  TranscriptStatus,
 } from "./types.js";
 
 interface MessageRow {
@@ -62,6 +83,56 @@ interface AccountRow {
   added_at: number;
 }
 
+interface EventRow {
+  account: string;
+  event_id: string;
+  tenant_id: string | null;
+  subject: string | null;
+  organizer_name: string | null;
+  organizer_email: string | null;
+  start_at: string;
+  end_at: string;
+  is_all_day: number;
+  is_cancelled: number;
+  chat_id: string | null;
+  online_meeting_url: string | null;
+  online_meeting_id: string | null;
+  last_modified_at: string | null;
+  raw_json: string | null;
+}
+
+interface EventAttendeeRow {
+  account: string;
+  event_id: string;
+  attendee_email: string;
+  display_name: string | null;
+  response_status: string;
+  is_organizer: number;
+}
+
+interface TranscriptRow {
+  account: string;
+  event_id: string;
+  transcript_id: string;
+  fetched_at: string;
+  vtt_bytes: number | null;
+  segment_count: number;
+  status: string;
+  raw_json: string | null;
+}
+
+interface TranscriptSegmentRow {
+  account: string;
+  event_id: string;
+  transcript_id: string;
+  sequence: number;
+  speaker_email: string | null;
+  speaker_display_name: string | null;
+  start_offset_ms: number;
+  end_offset_ms: number;
+  text: string;
+}
+
 const nullable = <T>(value: T | undefined): T | null =>
   value === undefined ? null : value;
 
@@ -88,6 +159,13 @@ export class SqliteMessageStore implements MessageStore {
   private readonly getChatCursorStmt: Statement<[string, string]>;
   private readonly setChatCursorStmt: Statement<[string, string, string]>;
   private readonly listChatCursorsStmt: Statement<[string]>;
+  private readonly upsertEventStmt: Statement<EventRow>;
+  private readonly deleteEventStmt: Statement<[string, string]>;
+  private readonly deleteAttendeesForEventStmt: Statement<[string, string]>;
+  private readonly insertAttendeeStmt: Statement<EventAttendeeRow>;
+  private readonly getEventsInRangeStmt: Statement<[string, string, string]>;
+  private readonly getAttendeesForEventStmt: Statement<[string, string]>;
+  private readonly getEventByKeyStmt: Statement<[string, string]>;
 
   constructor(
     private readonly db: Database,
@@ -165,6 +243,65 @@ export class SqliteMessageStore implements MessageStore {
     this.listChatCursorsStmt = db.prepare(
       "SELECT account, chat_id, cursor FROM chat_cursors WHERE account = ? ORDER BY chat_id ASC",
     );
+    this.upsertEventStmt = db.prepare(`
+      INSERT INTO events (
+        account, event_id, tenant_id, subject, organizer_name, organizer_email,
+        start_at, end_at, is_all_day, is_cancelled,
+        chat_id, online_meeting_url, online_meeting_id, last_modified_at, raw_json
+      ) VALUES (
+        @account, @event_id, @tenant_id, @subject, @organizer_name, @organizer_email,
+        @start_at, @end_at, @is_all_day, @is_cancelled,
+        @chat_id, @online_meeting_url, @online_meeting_id, @last_modified_at, @raw_json
+      )
+      ON CONFLICT(account, event_id) DO UPDATE SET
+        tenant_id = excluded.tenant_id,
+        subject = excluded.subject,
+        organizer_name = excluded.organizer_name,
+        organizer_email = excluded.organizer_email,
+        start_at = excluded.start_at,
+        end_at = excluded.end_at,
+        is_all_day = excluded.is_all_day,
+        is_cancelled = excluded.is_cancelled,
+        chat_id = excluded.chat_id,
+        online_meeting_url = excluded.online_meeting_url,
+        online_meeting_id = excluded.online_meeting_id,
+        last_modified_at = excluded.last_modified_at,
+        raw_json = excluded.raw_json
+    `);
+    this.deleteEventStmt = db.prepare(
+      "DELETE FROM events WHERE account = ? AND event_id = ?",
+    );
+    this.deleteAttendeesForEventStmt = db.prepare(
+      "DELETE FROM event_attendees WHERE account = ? AND event_id = ?",
+    );
+    this.insertAttendeeStmt = db.prepare(`
+      INSERT INTO event_attendees (
+        account, event_id, attendee_email, display_name, response_status, is_organizer
+      ) VALUES (
+        @account, @event_id, @attendee_email, @display_name, @response_status, @is_organizer
+      )
+    `);
+    this.getEventsInRangeStmt = db.prepare(`
+      SELECT account, event_id, tenant_id, subject, organizer_name, organizer_email,
+             start_at, end_at, is_all_day, is_cancelled,
+             chat_id, online_meeting_url, online_meeting_id, last_modified_at, raw_json
+      FROM events
+      WHERE account = ? AND start_at <= ? AND end_at >= ?
+      ORDER BY start_at ASC
+    `);
+    this.getAttendeesForEventStmt = db.prepare(`
+      SELECT account, event_id, attendee_email, display_name, response_status, is_organizer
+      FROM event_attendees
+      WHERE account = ? AND event_id = ?
+      ORDER BY attendee_email ASC
+    `);
+    this.getEventByKeyStmt = db.prepare(`
+      SELECT account, event_id, tenant_id, subject, organizer_name, organizer_email,
+             start_at, end_at, is_all_day, is_cancelled,
+             chat_id, online_meeting_url, online_meeting_id, last_modified_at, raw_json
+      FROM events
+      WHERE account = ? AND event_id = ?
+    `);
   }
 
   async upsertMessages(messages: readonly Message[]): Promise<UpsertResult> {
@@ -198,6 +335,276 @@ export class SqliteMessageStore implements MessageStore {
     });
 
     return run(ids);
+  }
+
+  async upsertEvents(events: readonly CalendarEvent[]): Promise<void> {
+    if (events.length === 0) return;
+
+    const run = this.db.transaction((rows: readonly CalendarEvent[]) => {
+      for (const e of rows) {
+        this.upsertEventStmt.run(eventToRow(e));
+        this.deleteAttendeesForEventStmt.run(e.account, e.eventId);
+        for (const a of e.attendees) {
+          this.insertAttendeeStmt.run(attendeeToRow(e.account, e.eventId, a));
+        }
+      }
+    });
+
+    run(events);
+  }
+
+  async deleteEvents(keys: readonly EventKey[]): Promise<void> {
+    if (keys.length === 0) return;
+
+    // Deletes attendees explicitly rather than relying on the
+    // event_attendees FK's ON DELETE CASCADE — not every caller opens the
+    // database with `PRAGMA foreign_keys = ON` (see openDatabase.ts), so
+    // cascade can't be trusted to fire in every context this store runs in.
+    const run = this.db.transaction((rows: readonly EventKey[]) => {
+      for (const k of rows) {
+        this.deleteAttendeesForEventStmt.run(k.account, k.eventId);
+        this.deleteEventStmt.run(k.account, k.eventId);
+      }
+    });
+
+    run(keys);
+  }
+
+  async getEventsInRange(
+    account: string,
+    from: Date,
+    to: Date,
+  ): Promise<readonly CalendarEvent[]> {
+    const rows = this.getEventsInRangeStmt.all(
+      account,
+      to.toISOString(),
+      from.toISOString(),
+    ) as EventRow[];
+    return rows.map((r) => this.eventRowToCalendarEvent(r));
+  }
+
+  async getEventByKey(key: EventKey): Promise<CalendarEvent | null> {
+    const row = this.getEventByKeyStmt.get(key.account, key.eventId) as
+      | EventRow
+      | undefined;
+    return row === undefined ? null : this.eventRowToCalendarEvent(row);
+  }
+
+  async findEvents(opts: FindEventsOptions): Promise<FindEventsResult> {
+    const clauses: string[] = ["e.start_at <= ?", "e.end_at >= ?"];
+    const params: (string | number)[] = [
+      opts.to.toISOString(),
+      opts.from.toISOString(),
+    ];
+    if (opts.accounts !== undefined && opts.accounts.length > 0) {
+      clauses.push(`e.account IN (${opts.accounts.map(() => "?").join(", ")})`);
+      params.push(...opts.accounts);
+    }
+    if (opts.subjectContains !== undefined) {
+      clauses.push("e.subject LIKE ? ESCAPE '\\' COLLATE NOCASE");
+      params.push(`%${escapeLikePattern(opts.subjectContains)}%`);
+    }
+    if (opts.attendee !== undefined) {
+      const pattern = `%${escapeLikePattern(opts.attendee)}%`;
+      clauses.push(`(
+        e.organizer_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+        OR e.organizer_email LIKE ? ESCAPE '\\' COLLATE NOCASE
+        OR EXISTS (
+          SELECT 1 FROM event_attendees ea
+          WHERE ea.account = e.account AND ea.event_id = e.event_id
+            AND (ea.display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+                 OR ea.attendee_email LIKE ? ESCAPE '\\' COLLATE NOCASE)
+        )
+      )`);
+      params.push(pattern, pattern, pattern, pattern);
+    }
+    const order = opts.order === "desc" ? "DESC" : "ASC";
+
+    const predicate = await this.loadEventPredicate(opts.includeMuted);
+    let mutedCount = 0;
+    if (predicate.sqlFragment !== null) {
+      const countSql = `
+        SELECT COUNT(*) AS n FROM events e
+        WHERE ${clauses.join(" AND ")} AND ${predicate.sqlFragment}
+      `;
+      const countRow = this.db
+        .prepare(countSql)
+        .get(...params, ...predicate.params) as { n: number };
+      mutedCount = countRow.n;
+    }
+
+    const dataClauses = [...clauses];
+    const dataParams = [...params];
+    if (predicate.sqlFragment !== null) {
+      dataClauses.push(`NOT ${predicate.sqlFragment}`);
+      dataParams.push(...predicate.params);
+    }
+    dataParams.push(opts.limit + 1);
+
+    const sql = `
+      SELECT e.account, e.event_id, e.tenant_id, e.subject, e.organizer_name, e.organizer_email,
+             e.start_at, e.end_at, e.is_all_day, e.is_cancelled,
+             e.chat_id, e.online_meeting_url, e.online_meeting_id, e.last_modified_at, e.raw_json
+      FROM events e
+      WHERE ${dataClauses.join(" AND ")}
+      ORDER BY e.start_at ${order}
+      LIMIT ?
+    `;
+    const rows = this.db.prepare(sql).all(...dataParams) as EventRow[];
+    const truncated = rows.length > opts.limit;
+    const sliced = truncated ? rows.slice(0, opts.limit) : rows;
+    return {
+      events: sliced.map((r) => this.eventRowToCalendarEvent(r)),
+      truncated,
+      mutedCount,
+    };
+  }
+
+  async getRecentItems(
+    opts: GetRecentItemsOptions,
+  ): Promise<GetRecentItemsResult> {
+    return composeRecentItems(this, opts);
+  }
+
+  async upsertTranscript(input: UpsertTranscriptInput): Promise<void> {
+    const { transcript: t, segments } = input;
+    const insertSegmentStmt = this.db.prepare(`
+      INSERT INTO transcript_segments (
+        account, event_id, transcript_id, sequence,
+        speaker_email, speaker_display_name, start_offset_ms, end_offset_ms, text
+      ) VALUES (
+        @account, @event_id, @transcript_id, @sequence,
+        @speaker_email, @speaker_display_name, @start_offset_ms, @end_offset_ms, @text
+      )
+    `);
+    const run = this.db.transaction(() => {
+      this.db
+        .prepare(
+          `
+        INSERT INTO transcripts (
+          account, event_id, transcript_id, fetched_at, vtt_bytes, segment_count, status, raw_json
+        ) VALUES (
+          @account, @event_id, @transcript_id, @fetched_at, @vtt_bytes, @segment_count, @status, @raw_json
+        )
+        ON CONFLICT (account, event_id, transcript_id) DO UPDATE SET
+          fetched_at = excluded.fetched_at,
+          vtt_bytes = excluded.vtt_bytes,
+          segment_count = excluded.segment_count,
+          status = excluded.status,
+          raw_json = excluded.raw_json
+      `,
+        )
+        .run(transcriptToRow(t));
+      this.db
+        .prepare(
+          "DELETE FROM transcript_segments WHERE account = ? AND event_id = ? AND transcript_id = ?",
+        )
+        .run(t.account, t.eventId, t.transcriptId);
+      for (const s of segments) {
+        insertSegmentStmt.run(segmentToRow(s));
+      }
+    });
+    run();
+  }
+
+  async getTranscriptByKey(
+    key: TranscriptKey,
+  ): Promise<TranscriptWithSegments | null> {
+    const row = this.db
+      .prepare(
+        `SELECT account, event_id, transcript_id, fetched_at, vtt_bytes, segment_count, status, raw_json
+         FROM transcripts WHERE account = ? AND event_id = ? AND transcript_id = ?`,
+      )
+      .get(key.account, key.eventId, key.transcriptId) as
+      | TranscriptRow
+      | undefined;
+    if (row === undefined) return null;
+    const segmentRows = this.db
+      .prepare(
+        `SELECT account, event_id, transcript_id, sequence,
+                speaker_email, speaker_display_name, start_offset_ms, end_offset_ms, text
+         FROM transcript_segments
+         WHERE account = ? AND event_id = ? AND transcript_id = ?
+         ORDER BY sequence ASC`,
+      )
+      .all(key.account, key.eventId, key.transcriptId) as TranscriptSegmentRow[];
+    return {
+      transcript: transcriptRowToTranscript(row),
+      segments: segmentRows.map(segmentRowToTranscriptSegment),
+    };
+  }
+
+  async listTranscriptsForEvent(
+    account: string,
+    eventId: string,
+  ): Promise<readonly Transcript[]> {
+    const rows = this.db
+      .prepare(
+        `SELECT account, event_id, transcript_id, fetched_at, vtt_bytes, segment_count, status, raw_json
+         FROM transcripts WHERE account = ? AND event_id = ?
+         ORDER BY fetched_at ASC`,
+      )
+      .all(account, eventId) as TranscriptRow[];
+    return rows.map(transcriptRowToTranscript);
+  }
+
+  async markTranscriptStatus(
+    key: TranscriptKey,
+    status: TranscriptStatus,
+    fetchedAt: Date,
+  ): Promise<void> {
+    const fetchedAtIso = fetchedAt.toISOString();
+    const result = this.db
+      .prepare(
+        `UPDATE transcripts SET status = ?, fetched_at = ?
+         WHERE account = ? AND event_id = ? AND transcript_id = ?`,
+      )
+      .run(status, fetchedAtIso, key.account, key.eventId, key.transcriptId);
+    if (result.changes > 0) return;
+    // No existing row for this key (e.g. the first check for a meeting that
+    // turned out to have no transcript at all) — insert a status-only
+    // marker row so the retry-cooldown policy (a later slice) has
+    // something to key off of without a real transcript ever existing.
+    this.db
+      .prepare(
+        `INSERT INTO transcripts (
+           account, event_id, transcript_id, fetched_at, vtt_bytes, segment_count, status, raw_json
+         ) VALUES (?, ?, ?, ?, NULL, 0, ?, NULL)`,
+      )
+      .run(key.account, key.eventId, key.transcriptId, fetchedAtIso, status);
+  }
+
+  private eventRowToCalendarEvent(row: EventRow): CalendarEvent {
+    const attendeeRows = this.getAttendeesForEventStmt.all(
+      row.account,
+      row.event_id,
+    ) as EventAttendeeRow[];
+    return {
+      account: row.account,
+      eventId: row.event_id,
+      ...(row.tenant_id !== null && { tenantId: row.tenant_id }),
+      ...(row.subject !== null && { subject: row.subject }),
+      ...(row.organizer_name !== null && { organizerName: row.organizer_name }),
+      ...(row.organizer_email !== null && {
+        organizerEmail: row.organizer_email,
+      }),
+      startAt: new Date(row.start_at),
+      endAt: new Date(row.end_at),
+      isAllDay: row.is_all_day === 1,
+      isCancelled: row.is_cancelled === 1,
+      ...(row.chat_id !== null && { chatId: row.chat_id }),
+      ...(row.online_meeting_url !== null && {
+        onlineMeetingUrl: row.online_meeting_url,
+      }),
+      ...(row.online_meeting_id !== null && {
+        onlineMeetingId: row.online_meeting_id,
+      }),
+      ...(row.last_modified_at !== null && {
+        lastModifiedAt: new Date(row.last_modified_at),
+      }),
+      ...(row.raw_json !== null && { rawJson: row.raw_json }),
+      attendees: attendeeRows.map(attendeeRowToEventAttendee),
+    };
   }
 
   async getSyncState(
@@ -420,12 +827,22 @@ export class SqliteMessageStore implements MessageStore {
 
   private async loadPredicate(
     includeMuted: boolean | undefined,
-  ): Promise<ReturnType<typeof buildSteeringPredicate>> {
+  ): Promise<SteeringPredicate<Message>> {
     if (includeMuted === true || this.steeringStore === undefined) {
-      return buildSteeringPredicate([]);
+      return buildSteeringPredicate([], "message");
     }
     const rules = await this.steeringStore.listRules();
-    return buildSteeringPredicate(rules);
+    return buildSteeringPredicate(rules, "message");
+  }
+
+  private async loadEventPredicate(
+    includeMuted: boolean | undefined,
+  ): Promise<SteeringPredicate<CalendarEvent>> {
+    if (includeMuted === true || this.steeringStore === undefined) {
+      return buildSteeringPredicate([], "event");
+    }
+    const rules = await this.steeringStore.listRules();
+    return buildSteeringPredicate(rules, "event");
   }
 
   async getSyncLogRecent(limit: number): Promise<readonly SyncLogEntry[]> {
@@ -448,7 +865,7 @@ export class SqliteMessageStore implements MessageStore {
     return rows.map((r) => ({
       ts: new Date(r.ts),
       account: r.account,
-      source: r.source as MessageSource,
+      source: r.source as SyncLogSource,
       status: r.status,
       ...(r.messages_added !== null && { messagesAdded: r.messages_added }),
       ...(r.error_message !== null && { errorMessage: r.error_message }),
@@ -503,7 +920,7 @@ export class SqliteMessageStore implements MessageStore {
       const status = r.last_status as "ok" | "error" | null;
       const row: SyncStatusRow = {
         account: r.account,
-        source: r.source as MessageSource,
+        source: r.source as SyncLogSource,
         ...(r.last_sync_at !== null && { lastSyncAt: new Date(r.last_sync_at) }),
         ...(r.last_ok_at !== null && { lastOkAt: new Date(r.last_ok_at) }),
         ...(status !== null && { lastStatus: status }),
@@ -600,6 +1017,39 @@ export class SqliteMessageStore implements MessageStore {
       mutedCount,
     };
   }
+
+  async searchTranscriptSegments(
+    query: string,
+    limit: number,
+  ): Promise<SearchTranscriptSegmentsResult> {
+    const phrase = toFts5Phrase(query);
+    if (phrase === null) return { hits: [] };
+    const rows = this.db
+      .prepare(
+        `
+        SELECT s.account, s.event_id, s.transcript_id, s.sequence,
+               s.speaker_email, s.speaker_display_name, s.start_offset_ms, s.end_offset_ms, s.text,
+               snippet(transcript_segments_fts, 0, '[', ']', '…', 16) AS snippet,
+               bm25(transcript_segments_fts) AS rank
+        FROM transcript_segments_fts
+        JOIN transcript_segments s ON s.rowid = transcript_segments_fts.rowid
+        WHERE transcript_segments_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+      `,
+      )
+      .all(phrase, limit) as (TranscriptSegmentRow & {
+      snippet: string;
+      rank: number;
+    })[];
+    return {
+      hits: rows.map((r) => ({
+        segment: segmentRowToTranscriptSegment(r),
+        snippet: r.snippet,
+        rank: r.rank,
+      })),
+    };
+  }
 }
 
 function buildStructuredFilterSql(
@@ -689,5 +1139,111 @@ function toRow(m: Message): MessageRow {
     reply_to_id: nullable(m.replyToId),
     mentions_json: m.mentions === undefined ? null : JSON.stringify(m.mentions),
     from_me: m.fromMe === true ? 1 : 0,
+  };
+}
+
+function eventToRow(e: CalendarEvent): EventRow {
+  return {
+    account: e.account,
+    event_id: e.eventId,
+    tenant_id: nullable(e.tenantId),
+    subject: nullable(e.subject),
+    organizer_name: nullable(e.organizerName),
+    organizer_email: nullable(e.organizerEmail),
+    start_at: e.startAt.toISOString(),
+    end_at: e.endAt.toISOString(),
+    is_all_day: e.isAllDay ? 1 : 0,
+    is_cancelled: e.isCancelled ? 1 : 0,
+    chat_id: nullable(e.chatId),
+    online_meeting_url: nullable(e.onlineMeetingUrl),
+    online_meeting_id: nullable(e.onlineMeetingId),
+    last_modified_at: e.lastModifiedAt === undefined
+      ? null
+      : e.lastModifiedAt.toISOString(),
+    raw_json: nullable(e.rawJson),
+  };
+}
+
+function attendeeToRow(
+  account: string,
+  eventId: string,
+  a: EventAttendee,
+): EventAttendeeRow {
+  return {
+    account,
+    event_id: eventId,
+    // Case-folded so the (account, event_id, attendee_email) primary key
+    // is reliable even when Graph sends mixed-case addresses.
+    attendee_email: a.email.toLowerCase(),
+    display_name: nullable(a.displayName),
+    response_status: a.responseStatus,
+    is_organizer: a.isOrganizer === true ? 1 : 0,
+  };
+}
+
+function attendeeRowToEventAttendee(row: EventAttendeeRow): EventAttendee {
+  return {
+    email: row.attendee_email,
+    ...(row.display_name !== null && { displayName: row.display_name }),
+    responseStatus: row.response_status as EventResponseStatus,
+    ...(row.is_organizer === 1 && { isOrganizer: true as const }),
+  };
+}
+
+function transcriptToRow(t: Transcript): TranscriptRow {
+  return {
+    account: t.account,
+    event_id: t.eventId,
+    transcript_id: t.transcriptId,
+    fetched_at: t.fetchedAt.toISOString(),
+    vtt_bytes: nullable(t.vttBytes),
+    segment_count: t.segmentCount,
+    status: t.status,
+    raw_json: nullable(t.rawJson),
+  };
+}
+
+function transcriptRowToTranscript(row: TranscriptRow): Transcript {
+  return {
+    account: row.account,
+    eventId: row.event_id,
+    transcriptId: row.transcript_id,
+    fetchedAt: new Date(row.fetched_at),
+    ...(row.vtt_bytes !== null && { vttBytes: row.vtt_bytes }),
+    segmentCount: row.segment_count,
+    status: row.status as TranscriptStatus,
+    ...(row.raw_json !== null && { rawJson: row.raw_json }),
+  };
+}
+
+function segmentToRow(s: TranscriptSegment): TranscriptSegmentRow {
+  return {
+    account: s.account,
+    event_id: s.eventId,
+    transcript_id: s.transcriptId,
+    sequence: s.sequence,
+    speaker_email: nullable(s.speakerEmail),
+    speaker_display_name: nullable(s.speakerDisplayName),
+    start_offset_ms: s.startOffsetMs,
+    end_offset_ms: s.endOffsetMs,
+    text: s.text,
+  };
+}
+
+function segmentRowToTranscriptSegment(
+  row: TranscriptSegmentRow,
+): TranscriptSegment {
+  return {
+    account: row.account,
+    eventId: row.event_id,
+    transcriptId: row.transcript_id,
+    sequence: row.sequence,
+    ...(row.speaker_email !== null && { speakerEmail: row.speaker_email }),
+    ...(row.speaker_display_name !== null && {
+      speakerDisplayName: row.speaker_display_name,
+    }),
+    startOffsetMs: row.start_offset_ms,
+    endOffsetMs: row.end_offset_ms,
+    text: row.text,
   };
 }

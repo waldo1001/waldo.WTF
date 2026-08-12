@@ -30,6 +30,21 @@ import {
   handleGetSteering,
 } from "./tools/get-steering.js";
 import {
+  FIND_EVENTS_TOOL,
+  handleFindEvents,
+  type FindEventsParams,
+} from "./tools/find-events.js";
+import {
+  GET_EVENT_TOOL,
+  handleGetEvent,
+  type GetEventParams,
+} from "./tools/get-event.js";
+import {
+  GET_EVENT_TRANSCRIPT_TOOL,
+  handleGetEventTranscript,
+  type GetEventTranscriptParams,
+} from "./tools/get-event-transcript.js";
+import {
   GET_SYNC_STATUS_TOOL,
   handleGetSyncStatus,
 } from "./tools/get-sync-status.js";
@@ -91,6 +106,9 @@ const TOOL_DESCRIPTORS = [
   ADD_STEERING_RULE_TOOL,
   REMOVE_STEERING_RULE_TOOL,
   SET_STEERING_ENABLED_TOOL,
+  GET_EVENT_TOOL,
+  GET_EVENT_TRANSCRIPT_TOOL,
+  FIND_EVENTS_TOOL,
 ] as const;
 
 const TOOL_HANDLERS: Record<string, ToolHandler> = {
@@ -116,6 +134,12 @@ const TOOL_HANDLERS: Record<string, ToolHandler> = {
       ctx.clock,
       args as RemoveSteeringRuleParams,
     ),
+  [GET_EVENT_TOOL.name]: (ctx, args) =>
+    handleGetEvent(ctx.store, ctx.clock, args as GetEventParams),
+  [GET_EVENT_TRANSCRIPT_TOOL.name]: (ctx, args) =>
+    handleGetEventTranscript(ctx.store, ctx.clock, args as GetEventTranscriptParams),
+  [FIND_EVENTS_TOOL.name]: (ctx, args) =>
+    handleFindEvents(ctx.store, ctx.clock, args as FindEventsParams),
   [SET_STEERING_ENABLED_TOOL.name]: (ctx, args) =>
     handleSetSteeringEnabled(
       ctx.steering,

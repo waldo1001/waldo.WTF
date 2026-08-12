@@ -25,7 +25,7 @@ effectively does not exist.
 ## 2. The cycle
 
 ```
-FRAME → RED list → PROVE RED → SCAFFOLD → GREEN → REFACTOR → COVER → SECURITY SCAN → UPDATE DOCS → REVIEW
+FRAME → RED list → PROVE RED → SCAFFOLD → GREEN → REFACTOR → COVER → MUTATE → SECURITY SCAN → UPDATE DOCS → REVIEW
 ```
 
 ### 2.0 FRAME — situate the step in the project (≤150 words)
@@ -135,6 +135,33 @@ Two checks, both required:
    Mechanical coverage without semantic coverage is how you end up 95%-covered
    on the wrong thing.
 
+### 2.61 MUTATE — coverage tells you a line ran, not that a test would catch it wrong
+
+After COVER, before the security scan, run Stryker mutation testing
+scoped to the files this cycle touched:
+
+```
+npx stryker run --mutate "<touched production files, comma-separated>"
+```
+
+Stryker rewrites individual operators/conditionals/literals in the
+touched code (`<` → `<=`, `&&` → `||`, a string literal to `""`, ...)
+and reruns the suite against each mutant. If no test fails, the
+"covered" line wasn't actually asserting on the behavior that line
+encodes — it was just executed.
+
+- Break threshold is 80% (mirrors the ≤20% surviving-mutant target in
+  [coverage-policy.md](coverage-policy.md)).
+- A survived mutant is either a real gap (write a test that kills it)
+  or genuinely equivalent (leave a one-line comment explaining why and
+  move on — never chase 100%).
+- Scope to the current diff. Pre-existing survivors in code you didn't
+  touch are out of scope for this cycle, same as pre-existing coverage
+  gaps or `npm audit` findings — note them, don't block on them.
+- Config: [stryker.config.mjs](../../stryker.config.mjs). On this dev
+  machine, default concurrency SIGSEGVs (`better-sqlite3` native addon
+  + concurrent worker processes) — the config pins `concurrency: 1`.
+
 ### 2.65 SECURITY SCAN — no leak, no exception
 
 Before docs, before review, run the `/security-scan` skill
@@ -169,6 +196,9 @@ message). "Yes" to every one, or go back:
 
 - [ ] Did I post the FRAME (≤150 words, all four questions) before anything
       else in this cycle?
+- [ ] Did I run Stryker scoped to this cycle's touched files and either
+      clear the 80% break threshold or justify every survivor as
+      equivalent?
 - [ ] Did I run `/security-scan` with a PASS result?
 - [ ] Did I run `/docs-update` and update the changelog (plus any user-visible
       sections) as the last step before this review?

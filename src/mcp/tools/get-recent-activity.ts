@@ -1,6 +1,11 @@
 import type { Clock } from "../../clock.js";
-import type { MessageStore } from "../../store/message-store.js";
-import type { ChatType, Message, MessageSource } from "../../store/types.js";
+import type { ActivityKind, MessageStore } from "../../store/message-store.js";
+import type {
+  CalendarEvent,
+  ChatType,
+  Message,
+  MessageSource,
+} from "../../store/types.js";
 
 export class InvalidParamsError extends Error {
   constructor(message: string) {
@@ -17,15 +22,22 @@ const KNOWN_SOURCES: ReadonlySet<MessageSource> = new Set([
   "viva-engage",
 ]);
 
+const KNOWN_KINDS: ReadonlySet<ActivityKind> = new Set(["message", "event"]);
+const DEFAULT_KINDS: readonly ActivityKind[] = ["message", "event"];
+
 const MAX_HOURS = 720;
 const DEFAULT_LIMIT = 200;
 const SNIPPET_MAX = 280;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_EVENT_WINDOW_FORWARD_DAYS = 7;
 
 export interface GetRecentActivityParams {
   readonly hours: number;
   readonly sources?: readonly MessageSource[];
   readonly accounts?: readonly string[];
   readonly include_muted?: boolean;
+  readonly kinds?: readonly ActivityKind[];
+  readonly to?: string;
 }
 
 export interface ProjectedMessage {
@@ -44,17 +56,35 @@ export interface ProjectedMessage {
   readonly replied?: boolean;
 }
 
-export interface GetRecentActivityResult {
+export type ProjectedItem =
+  | { readonly kind: "message"; readonly at: string; readonly message: ProjectedMessage }
+  | { readonly kind: "event"; readonly at: string; readonly event: CalendarEvent };
+
+export interface LegacyGetRecentActivityResult {
   readonly count: number;
   readonly messages: readonly ProjectedMessage[];
   readonly muted_count: number;
   readonly steering_hint?: string;
 }
 
+export interface UnifiedGetRecentActivityResult {
+  readonly items: readonly ProjectedItem[];
+  readonly muted_count: number;
+  readonly steering_hint?: string;
+}
+
+export type GetRecentActivityResult =
+  | LegacyGetRecentActivityResult
+  | UnifiedGetRecentActivityResult;
+
 export const GET_RECENT_ACTIVITY_TOOL = {
   name: "get_recent_activity",
   description: [
-    "Return recent messages from the lake within the last N hours, optionally filtered by source and/or account. Read-only.",
+    "Return recent activity from the lake within a time window — messages by default, plus upcoming/recent calendar events when kinds includes \"event\". Read-only.",
+    "",
+    "Default kinds is [\"message\", \"event\"]: a mixed, chronologically ordered feed of past messages and upcoming meetings within the window (\"what's on my plate\"). Pass kinds: [\"message\"] to get the original messages-only response shape unchanged.",
+    "",
+    "hours sets the lower bound (from = now - hours). to sets the upper bound; when kinds includes \"event\" it defaults to now + 7 days so upcoming meetings are covered — recent activity now includes things that haven't happened yet.",
     "",
     'Use this as the source-of-truth probe when you need to confirm whether a given source (outlook, teams, whatsapp, viva-engage) has any recent data. A single call with sources: ["whatsapp"] and a wide hours window is the correct way to verify presence — more reliable than inferring from get_sync_status.',
   ].join("\n"),
@@ -74,7 +104,7 @@ export const GET_RECENT_ACTIVITY_TOOL = {
           type: "string",
           enum: ["outlook", "teams", "teams-channel", "whatsapp", "viva-engage"],
         },
-        description: "Optional source filter.",
+        description: "Optional source filter. Only applies to message items.",
       },
       accounts: {
         type: "array",
@@ -85,6 +115,18 @@ export const GET_RECENT_ACTIVITY_TOOL = {
         type: "boolean",
         description:
           "If true, include messages matching steering rules. Default false (hard-exclude muted items).",
+      },
+      kinds: {
+        type: "array",
+        items: { type: "string", enum: ["message", "event"] },
+        minItems: 1,
+        description:
+          'Which item kinds to include. Default ["message", "event"]. Pass ["message"] to keep the original messages-only response shape.',
+      },
+      to: {
+        type: "string",
+        description:
+          "ISO datetime upper bound. Default now, or now + 7 days when kinds includes \"event\".",
       },
     },
     required: ["hours"],
@@ -118,27 +160,92 @@ export async function handleGetRecentActivity(
       }
     }
   }
+  const kinds = normalizeKinds(params.kinds);
 
   const since = new Date(clock.now().getTime() - hours * 3600 * 1000);
   const includeMuted = params.include_muted === true;
-  const { messages, mutedCount } = await store.getRecentMessages({
-    since,
+
+  if (kinds.length === 1 && kinds[0] === "message") {
+    const { messages, mutedCount } = await store.getRecentMessages({
+      since,
+      ...(params.sources !== undefined && { sources: params.sources }),
+      ...(params.accounts !== undefined && { accounts: params.accounts }),
+      limit: DEFAULT_LIMIT,
+      includeMuted,
+    });
+    const hint = mutedHint(includeMuted, mutedCount);
+    const repliedByThread = computeRepliedByThread(messages);
+    return {
+      count: messages.length,
+      messages: messages.map((m) => project(m, repliedByThread)),
+      muted_count: mutedCount,
+      ...(hint !== undefined && { steering_hint: hint }),
+    };
+  }
+
+  // Past the legacy-only branch above, kinds always includes "event" —
+  // the only other normalized shape is ["message", "event"] or ["event"].
+  const to =
+    params.to !== undefined
+      ? new Date(params.to)
+      : new Date(
+          clock.now().getTime() + DEFAULT_EVENT_WINDOW_FORWARD_DAYS * DAY_MS,
+        );
+
+  const { items, mutedCount } = await store.getRecentItems({
+    from: since,
+    to,
+    kinds,
     ...(params.sources !== undefined && { sources: params.sources }),
     ...(params.accounts !== undefined && { accounts: params.accounts }),
-    limit: DEFAULT_LIMIT,
     includeMuted,
   });
-  const hint =
-    !includeMuted && mutedCount > 0
-      ? `${mutedCount} message(s) hidden by steering rules. Pass include_muted=true to see them, or call get_steering to review active rules.`
-      : undefined;
-  const repliedByThread = computeRepliedByThread(messages);
+  const hint = mutedHint(includeMuted, mutedCount);
+  const messageItems = items
+    .filter((i): i is { kind: "message"; at: Date; message: Message } =>
+      i.kind === "message",
+    )
+    .map((i) => i.message);
+  const repliedByThread = computeRepliedByThread(messageItems);
+
   return {
-    count: messages.length,
-    messages: messages.map((m) => project(m, repliedByThread)),
+    items: items.map((item): ProjectedItem =>
+      item.kind === "message"
+        ? {
+            kind: "message",
+            at: item.at.toISOString(),
+            message: project(item.message, repliedByThread),
+          }
+        : {
+            kind: "event",
+            at: item.at.toISOString(),
+            event: item.event,
+          },
+    ),
     muted_count: mutedCount,
     ...(hint !== undefined && { steering_hint: hint }),
   };
+}
+
+function normalizeKinds(
+  kinds: readonly ActivityKind[] | undefined,
+): readonly ActivityKind[] {
+  if (kinds === undefined) return DEFAULT_KINDS;
+  if (kinds.length === 0) {
+    throw new InvalidParamsError("kinds must not be empty");
+  }
+  for (const k of kinds) {
+    if (!KNOWN_KINDS.has(k)) {
+      throw new InvalidParamsError(`unknown kind: ${k}`);
+    }
+  }
+  return kinds;
+}
+
+function mutedHint(includeMuted: boolean, mutedCount: number): string | undefined {
+  return !includeMuted && mutedCount > 0
+    ? `${mutedCount} message(s) hidden by steering rules. Pass include_muted=true to see them, or call get_steering to review active rules.`
+    : undefined;
 }
 
 // For each thread appearing in the result window, the annotation reflects the
