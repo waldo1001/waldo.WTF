@@ -11,6 +11,37 @@ skill.
 
 ---
 
+## 2026-08-16
+
+- Fixed a production incident on the first real `--calendar-enable`
+  account (`WAUTERI@ifacto.be`): calendar sync had 24 consecutive
+  failures, `UNIQUE constraint failed: event_attendees.account,
+  event_attendees.event_id, event_attendees.attendee_email`, stuck on
+  the same delta page every tick since the account was enabled — no
+  calendar events ever landed. Root cause:
+  `mapGraphEventToCalendarEvent`
+  ([src/sources/calendar.ts](../src/sources/calendar.ts)) built the
+  attendees array via a plain `.map()` with no dedup by email; real
+  Graph data (confirmed in production, not hypothetical) sends the same
+  attendee more than once for one event — same address, sometimes
+  different casing/response status — e.g. a distribution-list expansion
+  alongside a direct invite. `event_attendees`' PK is `(account,
+  event_id, attendee_email)`, so the second insert always threw, and
+  `upsertEvents` wraps the whole batch in one transaction, so the entire
+  page rolled back and the delta cursor never advanced — same page,
+  same failure, every retry. Fixed by keying attendees in a `Map` by
+  (lower-cased) email instead of appending to an array — later
+  occurrences overwrite earlier ones by value while keeping the first
+  occurrence's position, matching the existing organizer-merge policy
+  this function already had for the organizer-vs-attendee overlap case
+  (that path already deduped correctly; this was specifically the
+  plain-attendee-vs-plain-attendee gap). Two new tests reproduce the
+  exact failure shape and pin the last-write-wins semantics. Mutation
+  score 89.76% on the touched file.
+  Deployed straight to production (`waldomacmini1`) given the account
+  was actively stuck with zero calendar data; no separate local
+  deploy step.
+
 ## 2026-08-12
 
 - Calendar feature, slice 1 of 8 base + 6 transcript slices: schema v16

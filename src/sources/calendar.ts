@@ -107,35 +107,39 @@ export function mapGraphEventToCalendarEvent(
   account: string,
   tenantId?: string,
 ): CalendarEvent {
-  const attendees: EventAttendee[] = (graphEvent.attendees ?? []).map((a) => {
+  // Keyed by email (not appended to an array) — Graph does send the same
+  // attendee more than once for a real event (seen in production: a
+  // distribution list expansion alongside a direct invite, same address
+  // twice with different casing/response status). event_attendees' PK is
+  // (account, event_id, attendee_email), so a duplicate here throws a
+  // UNIQUE constraint violation on insert. Map.set on an existing key
+  // keeps that key's original position but overwrites its value — later
+  // occurrences win, matching the organizer-merge policy below.
+  const attendeesByEmail = new Map<string, EventAttendee>();
+  for (const a of graphEvent.attendees ?? []) {
     const email = (a.emailAddress?.address ?? "").toLowerCase();
-    return {
+    attendeesByEmail.set(email, {
       email,
       ...(a.emailAddress?.name !== undefined && {
         displayName: a.emailAddress.name,
       }),
       responseStatus: mapResponseStatus(a.status?.response),
-    };
-  });
+    });
+  }
 
   const organizerEmailRaw = graphEvent.organizer?.emailAddress?.address;
   const organizerEmail = organizerEmailRaw?.toLowerCase();
   if (organizerEmail !== undefined) {
-    const existing = attendees.findIndex((a) => a.email === organizerEmail);
-    const organizerAttendee: EventAttendee = {
+    attendeesByEmail.set(organizerEmail, {
       email: organizerEmail,
       ...(graphEvent.organizer?.emailAddress?.name !== undefined && {
         displayName: graphEvent.organizer.emailAddress.name,
       }),
       responseStatus: "organizer",
       isOrganizer: true,
-    };
-    if (existing >= 0) {
-      attendees[existing] = organizerAttendee;
-    } else {
-      attendees.push(organizerAttendee);
-    }
+    });
   }
+  const attendees = [...attendeesByEmail.values()];
 
   const onlineMeeting = graphEvent.onlineMeeting ?? undefined;
   const chatId = onlineMeeting?.chatInfo?.threadId;

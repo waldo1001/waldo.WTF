@@ -274,6 +274,51 @@ describe("mapGraphEventToCalendarEvent", () => {
     });
   });
 
+  it("mapGraphEventToCalendarEvent dedupes two attendees with the same email — real Graph data does contain this (production incident: UNIQUE constraint failed on event_attendees)", () => {
+    const g = graphEvent({
+      id: "evt-dup-attendee",
+      attendees: [
+        {
+          emailAddress: { name: "Kristof", address: "kristof@example.test" },
+          status: { response: "accepted" },
+        },
+        {
+          // Same person invited twice — e.g. once directly, once via a
+          // distribution list Graph expanded — same address, possibly
+          // different casing, and a different response status.
+          emailAddress: { name: "Kristof P.", address: "Kristof@Example.TEST" },
+          status: { response: "tentativelyAccepted" },
+        },
+      ],
+    });
+    const result = mapGraphEventToCalendarEvent(g, "a@example.test");
+    expect(result.attendees).toHaveLength(1);
+    expect(result.attendees.filter((a) => a.email === "kristof@example.test")).toHaveLength(1);
+  });
+
+  it("mapGraphEventToCalendarEvent keeps the LAST occurrence when the same attendee email repeats, mirroring the existing organizer-merge last-write semantics", () => {
+    const g = graphEvent({
+      id: "evt-dup-attendee-last-wins",
+      attendees: [
+        {
+          emailAddress: { name: "Kristof (old)", address: "kristof@example.test" },
+          status: { response: "declined" },
+        },
+        {
+          emailAddress: { name: "Kristof (latest)", address: "kristof@example.test" },
+          status: { response: "accepted" },
+        },
+      ],
+    });
+    const result = mapGraphEventToCalendarEvent(g, "a@example.test");
+    expect(result.attendees).toHaveLength(1);
+    expect(result.attendees[0]).toMatchObject({
+      email: "kristof@example.test",
+      displayName: "Kristof (latest)",
+      responseStatus: "accepted",
+    });
+  });
+
   it("mapGraphEventToCalendarEvent omits subject when Graph sends it as null", () => {
     const result = mapGraphEventToCalendarEvent(
       graphEvent({ id: "evt-null-subject", subject: null }),
