@@ -4,8 +4,10 @@ import type { Clock } from "../clock.js";
 import type { Logger } from "../logger.js";
 import { parseVtt } from "../sources/http-transcript-client.js";
 import {
+  TranscriptApiDisabledError,
   TranscriptNotAvailableError,
   TranscriptQuotaExhaustedError,
+  TranscriptSpeakerAttributionDisabledError,
   type TranscriptClient,
 } from "../sources/transcript.js";
 import type { MessageStore } from "../store/message-store.js";
@@ -77,6 +79,19 @@ function isEligible(rows: readonly Transcript[], now: Date): boolean {
     case "ok":
       return false;
   }
+}
+
+// Conditions that are about the tenant, not this meeting: recording them
+// as a per-event status would be a lie, and `not-available` is never
+// retried, so it would permanently poison every event checked while the
+// toggle happened to be off. Propagate instead — the scheduler turns it
+// into one actionable sync_log row per account per tick, and per-event
+// state stays clean for a retry once an admin fixes the setting.
+function isTenantTranscriptConfigError(err: unknown): boolean {
+  return (
+    err instanceof TranscriptApiDisabledError ||
+    err instanceof TranscriptSpeakerAttributionDisabledError
+  );
 }
 
 function statusForError(err: unknown): TranscriptStatus {
@@ -154,7 +169,9 @@ export async function syncTranscripts(
         onlineMeetingId,
       );
     } catch (err) {
-      if (isConsentRequiredError(err)) throw err;
+      if (isConsentRequiredError(err) || isTenantTranscriptConfigError(err)) {
+        throw err;
+      }
       await store.markTranscriptStatus(
         {
           account: account.username,
@@ -220,7 +237,9 @@ export async function syncTranscripts(
         });
         fetched++;
       } catch (err) {
-        if (isConsentRequiredError(err)) throw err;
+        if (isConsentRequiredError(err) || isTenantTranscriptConfigError(err)) {
+        throw err;
+      }
         await store.markTranscriptStatus(
           {
             account: account.username,

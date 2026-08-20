@@ -42,6 +42,25 @@ skill.
   `not-available`, would otherwise suppress a correct re-check forever)
   and backfills `chat_id` for existing rows. Data-only, no schema bump,
   idempotent, `--dry-run` supported.
+- **Live probe answered the plan's open question and found the real
+  blocker.** Resolution is NOT organizer-only: probing three of Eric's own
+  meetings returned `HTTP 200, matches: 1` with a real `MSp…` onlineMeeting
+  id — the joinUrl fix works end to end. The transcript call then returns
+  `403 GraphAccessToTranscriptsDisabled`: iFacto's tenant has Graph API
+  access to transcripts switched **off**, which Microsoft documents as the
+  default and as unbypassable *"regardless of app-level permissions"*.
+  Requires a Teams admin (`Set-CsTeamsMeetingConfiguration
+  -EnableGraphTranscriptAccess $true -EnableAttributedTranscripts $true`).
+- Hardened the 403 mapping as a result: `HttpTranscriptClient` now branches
+  on Graph's `innerError.code` (which Microsoft says to use instead of the
+  message text) and raises `TranscriptApiDisabledError` /
+  `TranscriptSpeakerAttributionDisabledError` for the two tenant-wide admin
+  toggles. `syncTranscripts` propagates both instead of writing a per-event
+  status. This matters: the old code collapsed every 403 into
+  `not-available`, which is never retried — so all 22 checked meetings
+  would have stayed permanently poisoned the moment an admin enabled the
+  setting. Both error messages name the exact toggle and cmdlet that fixes
+  them, and surface as one actionable `sync_log` row per account per tick.
 - Plan + verified Graph findings:
   [plans/done/transcripts-meeting-id-resolution.md](plans/done/transcripts-meeting-id-resolution.md).
   Open question recorded there: Microsoft documents attendee-token

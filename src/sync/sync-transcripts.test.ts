@@ -4,8 +4,10 @@ import { FakeClock } from "../testing/fake-clock.js";
 import { InMemoryMessageStore } from "../testing/in-memory-message-store.js";
 import { FakeTranscriptClient } from "../testing/fake-transcript-client.js";
 import {
+  TranscriptApiDisabledError,
   TranscriptNotAvailableError,
   TranscriptQuotaExhaustedError,
+  TranscriptSpeakerAttributionDisabledError,
   type TranscriptClient,
   type TranscriptHandle,
 } from "../sources/transcript.js";
@@ -313,6 +315,45 @@ describe("syncTranscripts", () => {
       clock: new FakeClock(new Date(NOW.getTime() + 3 * 60 * 60 * 1000)),
     });
     expect(client.calls).toHaveLength(1);
+  });
+
+  it("a tenant-wide TranscriptApiDisabledError propagates and records NO per-event status row", async () => {
+    // Regression guard for the 2026-08-20 production incident: the tenant
+    // toggle was off, every meeting 403'd, and collapsing that into a
+    // never-retried `not-available` would permanently poison each event
+    // the moment an admin flipped the toggle back on.
+    const store = new InMemoryMessageStore();
+    await store.upsertEvents([event({ eventId: "evt-1" })]);
+    const client = new ScriptedTranscriptClient({
+      "meeting-default": new TranscriptApiDisabledError(),
+    });
+    await expect(
+      syncTranscripts({ account, store, transcripts: client, clock: new FakeClock(NOW) }),
+    ).rejects.toBeInstanceOf(TranscriptApiDisabledError);
+    const got = await store.getTranscriptByKey({
+      account: "a@example.test",
+      eventId: "evt-1",
+      transcriptId: NO_TRANSCRIPT_FOUND_MARKER,
+    });
+    expect(got).toBeNull();
+  });
+
+  it("a tenant-wide TranscriptSpeakerAttributionDisabledError from fetchVttContent propagates and records NO status row", async () => {
+    const store = new InMemoryMessageStore();
+    await store.upsertEvents([event({ eventId: "evt-1" })]);
+    const client = new ScriptedTranscriptClient(
+      { "meeting-default": [handle({ transcriptId: "tr-1" })] },
+      { "tr-1": new TranscriptSpeakerAttributionDisabledError() },
+    );
+    await expect(
+      syncTranscripts({ account, store, transcripts: client, clock: new FakeClock(NOW) }),
+    ).rejects.toBeInstanceOf(TranscriptSpeakerAttributionDisabledError);
+    const got = await store.getTranscriptByKey({
+      account: "a@example.test",
+      eventId: "evt-1",
+      transcriptId: "tr-1",
+    });
+    expect(got).toBeNull();
   });
 
   it("a consent-required error from resolveOnlineMeetingId propagates and records no status row", async () => {

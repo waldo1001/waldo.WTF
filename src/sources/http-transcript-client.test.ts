@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GraphRateLimitedError, TokenExpiredError } from "./graph.js";
 import type { FetchLike, FetchLikeResponse } from "./http-graph-client.js";
 import {
+  TranscriptApiDisabledError,
   TranscriptNotAvailableError,
   TranscriptQuotaExhaustedError,
+  TranscriptSpeakerAttributionDisabledError,
 } from "./transcript.js";
 import { HttpTranscriptClient, parseVtt } from "./http-transcript-client.js";
 
@@ -354,6 +356,90 @@ describe("HttpTranscriptClient error mapping", () => {
     await expect(client.listTranscripts("a@example.test", "meeting-1")).rejects.toBeInstanceOf(
       TranscriptNotAvailableError,
     );
+  });
+
+  // Real payload observed in production 2026-08-20 against the ifacto
+  // tenant. Graph documents branching on innerError.code, not the message.
+  const GRAPH_DISABLED_BODY = JSON.stringify({
+    error: {
+      code: "Forbidden",
+      message: "Graph API access to transcripts is disabled for this tenant.",
+      innerError: { code: "GraphAccessToTranscriptsDisabled" },
+    },
+  });
+
+  const ATTRIBUTION_DISABLED_BODY = JSON.stringify({
+    error: {
+      code: "Forbidden",
+      message: "Speaker attribution is not allowed.",
+      innerError: { code: "SpeakerAttributionNotAllowed" },
+    },
+  });
+
+  it("403 with GraphAccessToTranscriptsDisabled surfaces as TranscriptApiDisabledError, not not-available", async () => {
+    const { fetch } = scriptFetch([
+      response({ status: 403, body: GRAPH_DISABLED_BODY }),
+    ]);
+    const client = new HttpTranscriptClient({ fetch, getAccessToken: tokenFor("t") });
+    const err = await client
+      .listTranscripts("a@example.test", "meeting-1")
+      .then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(TranscriptApiDisabledError);
+    // Must NOT be treated as a permanent per-meeting fact.
+    expect(err).not.toBeInstanceOf(TranscriptNotAvailableError);
+  });
+
+  it("403 with SpeakerAttributionNotAllowed surfaces as TranscriptSpeakerAttributionDisabledError", async () => {
+    const { fetch } = scriptFetch([
+      response({ status: 403, body: ATTRIBUTION_DISABLED_BODY }),
+    ]);
+    const client = new HttpTranscriptClient({ fetch, getAccessToken: tokenFor("t") });
+    const err = await client
+      .fetchVttContent("a@example.test", "meeting-1", {
+        transcriptId: "tr-1",
+        createdAt: "x",
+      })
+      .then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(TranscriptSpeakerAttributionDisabledError);
+    expect(err).not.toBeInstanceOf(TranscriptNotAvailableError);
+  });
+
+  it("both tenant-config errors name the admin toggle that fixes them", async () => {
+    for (const [body, needle] of [
+      [GRAPH_DISABLED_BODY, "EnableGraphTranscriptAccess"],
+      [ATTRIBUTION_DISABLED_BODY, "EnableAttributedTranscripts"],
+    ] as const) {
+      const { fetch } = scriptFetch([response({ status: 403, body })]);
+      const client = new HttpTranscriptClient({ fetch, getAccessToken: tokenFor("t") });
+      await expect(
+        client.listTranscripts("a@example.test", "meeting-1"),
+      ).rejects.toThrow(new RegExp(needle));
+    }
+  });
+
+  it("403 with an unrecognized innerError.code still surfaces as TranscriptNotAvailableError", async () => {
+    const { fetch } = scriptFetch([
+      response({
+        status: 403,
+        body: JSON.stringify({
+          error: { innerError: { code: "SomethingElseEntirely" } },
+        }),
+      }),
+    ]);
+    const client = new HttpTranscriptClient({ fetch, getAccessToken: tokenFor("t") });
+    await expect(
+      client.listTranscripts("a@example.test", "meeting-1"),
+    ).rejects.toBeInstanceOf(TranscriptNotAvailableError);
+  });
+
+  it("403 with a non-JSON body falls back to TranscriptNotAvailableError without throwing a parse error", async () => {
+    const { fetch } = scriptFetch([
+      response({ status: 403, body: "<html>gateway said no</html>" }),
+    ]);
+    const client = new HttpTranscriptClient({ fetch, getAccessToken: tokenFor("t") });
+    await expect(
+      client.listTranscripts("a@example.test", "meeting-1"),
+    ).rejects.toBeInstanceOf(TranscriptNotAvailableError);
   });
 
   it("404 surfaces as TranscriptNotAvailableError", async () => {

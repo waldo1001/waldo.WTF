@@ -1,6 +1,8 @@
 import {
+  TranscriptApiDisabledError,
   TranscriptNotAvailableError,
   TranscriptQuotaExhaustedError,
+  TranscriptSpeakerAttributionDisabledError,
   type TranscriptClient,
   type TranscriptHandle,
 } from "./transcript.js";
@@ -51,6 +53,21 @@ const DEFAULT_SCOPE =
 const RESOLVE_SCOPE = "https://graph.microsoft.com/OnlineMeetings.Read";
 const RETRY_BACKOFF_MS = [250, 750] as const;
 const TRANSIENT_STATUSES: ReadonlySet<number> = new Set([502, 503, 504]);
+
+// Graph nests the machine-readable reason at error.innerError.code.
+// Returns undefined for a body that isn't JSON, isn't shaped like a Graph
+// error, or carries no inner code — callers fall back to the generic
+// not-available mapping.
+function graphInnerErrorCode(body: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    const code = (parsed as { error?: { innerError?: { code?: unknown } } })
+      ?.error?.innerError?.code;
+    return typeof code === "string" ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export class HttpTranscriptClient implements TranscriptClient {
   readonly #fetch: FetchLike;
@@ -169,9 +186,21 @@ export class HttpTranscriptClient implements TranscriptClient {
 
       if (res.status === 401) throw new TokenExpiredError();
       if (res.status === 402) throw new TranscriptQuotaExhaustedError();
-      if (res.status === 403 || res.status === 404) {
-        throw new TranscriptNotAvailableError();
+      if (res.status === 403) {
+        // Two of Graph's 403s are tenant-wide admin toggles, not facts
+        // about this meeting; they must not become a permanent
+        // per-event `not-available`. Graph documents branching on
+        // innerError.code because the messages change.
+        switch (graphInnerErrorCode(await res.text())) {
+          case "GraphAccessToTranscriptsDisabled":
+            throw new TranscriptApiDisabledError();
+          case "SpeakerAttributionNotAllowed":
+            throw new TranscriptSpeakerAttributionDisabledError();
+          default:
+            throw new TranscriptNotAvailableError();
+        }
       }
+      if (res.status === 404) throw new TranscriptNotAvailableError();
       if (res.status === 429) {
         const header = res.headers.get("Retry-After");
         const parsed = header ? Number.parseInt(header, 10) : Number.NaN;
