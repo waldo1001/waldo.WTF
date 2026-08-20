@@ -79,6 +79,17 @@ export type RethreadWhatsAppImpl = (
   opts: RethreadWhatsAppCliOptions,
 ) => Promise<RethreadWhatsAppCliResult>;
 
+export interface RepairTranscriptLinkageResult {
+  readonly markersCleared: number;
+  readonly chatIdsBackfilled: number;
+  readonly chatIdsSkipped: number;
+}
+
+export type RepairTranscriptLinkageImpl = (
+  dbPath: string,
+  opts: { readonly dryRun?: boolean },
+) => Promise<RepairTranscriptLinkageResult>;
+
 export interface ImportWhatsAppCliResult {
   readonly files: number;
   readonly imported: number;
@@ -219,6 +230,7 @@ export interface RunCliOptions extends AddAccountOptions {
   readonly importWhatsAppImpl?: ImportWhatsAppImpl;
   readonly steerImpl?: SteerImpl;
   readonly rethreadWhatsAppImpl?: RethreadWhatsAppImpl;
+  readonly repairTranscriptLinkageImpl?: RepairTranscriptLinkageImpl;
   readonly vivaImpl?: VivaImpl;
   readonly teamsImpl?: TeamsImpl;
   readonly calendarAccountStore?: CalendarAccountStore;
@@ -235,6 +247,12 @@ export type RunCliResult =
       readonly mergedGroups: number;
       readonly rowsUpdated: number;
       readonly duplicatesDropped: number;
+    }
+  | {
+      readonly mode: "repair-transcript-linkage";
+      readonly markersCleared: number;
+      readonly chatIdsBackfilled: number;
+      readonly chatIdsSkipped: number;
     }
   | {
       readonly mode: "import-whatsapp";
@@ -276,6 +294,7 @@ const BOOLEAN_FLAGS = new Set([
   "--backfill-bodies",
   "--import-whatsapp",
   "--rethread-whatsapp",
+  "--repair-transcript-linkage",
   "--dry-run",
   "--steer-list",
   "--viva-list",
@@ -876,6 +895,30 @@ async function realRethreadWhatsApp(
     db.pragma("journal_mode = WAL");
     applyMigrations(db);
     const r = rethreadWhatsApp(
+      db,
+      opts.dryRun === true ? { dryRun: true } : {},
+    );
+    db.pragma("wal_checkpoint(TRUNCATE)");
+    return r;
+  } finally {
+    db.close();
+  }
+}
+
+async function realRepairTranscriptLinkage(
+  dbPath: string,
+  opts: { dryRun?: boolean },
+): Promise<RepairTranscriptLinkageResult> {
+  const { default: Database } = await import("better-sqlite3");
+  const { applyMigrations } = await import("./store/schema.js");
+  const { repairTranscriptLinkage } = await import(
+    "./store/repair-transcript-linkage.js"
+  );
+  const db = new Database(dbPath);
+  try {
+    db.pragma("journal_mode = WAL");
+    applyMigrations(db);
+    const r = repairTranscriptLinkage(
       db,
       opts.dryRun === true ? { dryRun: true } : {},
     );
@@ -2010,6 +2053,25 @@ export async function runCli(
       mergedGroups: result.mergedGroups,
       rowsUpdated: result.rowsUpdated,
       duplicatesDropped: result.duplicatesDropped,
+    };
+  }
+  if (parsed.boolean.has("--repair-transcript-linkage")) {
+    const env = resolveEnv(opts);
+    const config = loadConfig(env);
+    /* c8 ignore next -- default console.log only in production */
+    const print: PrintFn = opts.print ?? ((m) => console.log(m));
+    const impl =
+      opts.repairTranscriptLinkageImpl ?? realRepairTranscriptLinkage;
+    const dryRun = parsed.boolean.has("--dry-run");
+    const result = await impl(config.dbPath, { dryRun });
+    print(
+      `repair-transcript-linkage ${dryRun ? "(dry-run) " : ""}complete: ${result.markersCleared} bogus marker(s) cleared, ${result.chatIdsBackfilled} chat_id(s) backfilled, ${result.chatIdsSkipped} skipped`,
+    );
+    return {
+      mode: "repair-transcript-linkage",
+      markersCleared: result.markersCleared,
+      chatIdsBackfilled: result.chatIdsBackfilled,
+      chatIdsSkipped: result.chatIdsSkipped,
     };
   }
   if (parsed.boolean.has("--backfill-bodies")) {

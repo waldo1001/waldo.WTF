@@ -26,6 +26,8 @@ const account: Account = {
 const NOW = new Date("2026-08-12T12:00:00Z");
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+const DEFAULT_JOIN_URL = "https://join/default";
+
 function event(
   overrides: Partial<CalendarEvent> & Pick<CalendarEvent, "eventId">,
 ): CalendarEvent {
@@ -35,7 +37,12 @@ function event(
     endAt: new Date(NOW.getTime() - 60 * 60 * 1000),
     isAllDay: false,
     isCancelled: false,
-    onlineMeetingId: "meeting-default",
+    onlineMeetingUrl: DEFAULT_JOIN_URL,
+    // Deliberately present AND deliberately wrong: this column holds the
+    // audio dial-in number, which 404s against the transcript API. Keeping
+    // it in the default fixture means every test would catch a regression
+    // back to gating/keying on it.
+    onlineMeetingId: "dial-in-99999",
     attendees: [],
     ...overrides,
   };
@@ -49,6 +56,7 @@ function handle(
 
 class ScriptedTranscriptClient implements TranscriptClient {
   readonly calls: Array<
+    | { method: "resolveOnlineMeetingId"; joinWebUrl: string }
     | { method: "listTranscripts"; onlineMeetingId: string }
     | { method: "fetchVttContent"; onlineMeetingId: string; transcriptId: string }
   > = [];
@@ -60,7 +68,27 @@ class ScriptedTranscriptClient implements TranscriptClient {
     private readonly contentResults: Readonly<
       Record<string, { vtt: string } | Error>
     > = {},
+    // Default maps the fixture joinUrl to the meeting id the listResults
+    // keys use, so tests that don't care about resolution stay readable.
+    private readonly resolveResults: Readonly<
+      Record<string, string | null | Error>
+    > = { [DEFAULT_JOIN_URL]: "meeting-default" },
   ) {}
+
+  async resolveOnlineMeetingId(
+    _account: string,
+    joinWebUrl: string,
+  ): Promise<string | null> {
+    this.calls.push({ method: "resolveOnlineMeetingId", joinWebUrl });
+    const result = this.resolveResults[joinWebUrl];
+    if (result === undefined) {
+      throw new Error(
+        `ScriptedTranscriptClient: no resolve script for ${joinWebUrl}`,
+      );
+    }
+    if (result instanceof Error) throw result;
+    return result;
+  }
 
   async listTranscripts(
     _account: string,
@@ -109,6 +137,7 @@ describe("syncTranscripts", () => {
     const client = new FakeTranscriptClient({
       transcriptsByMeeting: { "meeting-default": [handle({ transcriptId: "tr-1" })] },
       vttByTranscriptId: { "tr-1": SAMPLE_VTT },
+      meetingIdByJoinUrl: { [DEFAULT_JOIN_URL]: "meeting-default" },
     });
     const result = await syncTranscripts({ account, store, transcripts: client, clock });
     expect(result).toEqual({ fetched: 1 });
@@ -140,6 +169,7 @@ describe("syncTranscripts", () => {
     const client = new FakeTranscriptClient({
       transcriptsByMeeting: { "meeting-default": [handle({ transcriptId: "tr-1" })] },
       vttByTranscriptId: { "tr-1": vtt },
+      meetingIdByJoinUrl: { [DEFAULT_JOIN_URL]: "meeting-default" },
     });
     await syncTranscripts({ account, store, transcripts: client, clock });
 
@@ -168,6 +198,7 @@ describe("syncTranscripts", () => {
     const client = new FakeTranscriptClient({
       transcriptsByMeeting: { "meeting-default": [handle({ transcriptId: "tr-1" })] },
       vttByTranscriptId: { "tr-1": vtt },
+      meetingIdByJoinUrl: { [DEFAULT_JOIN_URL]: "meeting-default" },
     });
     await syncTranscripts({ account, store, transcripts: client, clock });
 
@@ -180,16 +211,128 @@ describe("syncTranscripts", () => {
     expect(got?.segments[0]).not.toHaveProperty("speakerDisplayName");
   });
 
-  it("skips events without an online_meeting_id", async () => {
+  it("an event with a joinUrl but no onlineMeetingId is eligible (the id column is the wrong identifier)", async () => {
+    // Production reality: 401 of ~1264 ifacto events carry a joinUrl,
+    // only 9 carry a conferenceId. Gating on the id made the feature dead.
     const store = new InMemoryMessageStore();
     await store.upsertEvents([
-      event({ eventId: "evt-no-meeting", onlineMeetingId: undefined }),
+      event({ eventId: "evt-url-only", onlineMeetingId: undefined }),
+    ]);
+    const clock = new FakeClock(NOW);
+    const client = new ScriptedTranscriptClient({
+      "meeting-default": [handle({ transcriptId: "tr-1" })],
+    }, { "tr-1": { vtt: SAMPLE_VTT } });
+    const result = await syncTranscripts({ account, store, transcripts: client, clock });
+    expect(result).toEqual({ fetched: 1 });
+  });
+
+  it("an event without a joinUrl is skipped even if it has an onlineMeetingId", async () => {
+    const store = new InMemoryMessageStore();
+    await store.upsertEvents([
+      event({
+        eventId: "evt-no-url",
+        onlineMeetingUrl: undefined,
+        onlineMeetingId: "dial-in-12345",
+      }),
     ]);
     const clock = new FakeClock(NOW);
     const client = new ScriptedTranscriptClient({});
     const result = await syncTranscripts({ account, store, transcripts: client, clock });
     expect(result).toEqual({ fetched: 0 });
     expect(client.calls).toEqual([]);
+  });
+
+  it("the resolved onlineMeeting id, not events.online_meeting_id, is passed to listTranscripts and fetchVttContent", async () => {
+    // The regression this whole fix exists for: the stored column must
+    // never reach the transcript endpoints.
+    const store = new InMemoryMessageStore();
+    await store.upsertEvents([
+      event({
+        eventId: "evt-1",
+        onlineMeetingUrl: "https://join/real",
+        onlineMeetingId: "dial-in-99999",
+      }),
+    ]);
+    const clock = new FakeClock(NOW);
+    const client = new ScriptedTranscriptClient(
+      { "MSp-resolved-id": [handle({ transcriptId: "tr-1" })] },
+      { "tr-1": { vtt: SAMPLE_VTT } },
+      { "https://join/real": "MSp-resolved-id" },
+    );
+    await syncTranscripts({ account, store, transcripts: client, clock });
+
+    expect(client.calls).toEqual([
+      { method: "resolveOnlineMeetingId", joinWebUrl: "https://join/real" },
+      { method: "listTranscripts", onlineMeetingId: "MSp-resolved-id" },
+      {
+        method: "fetchVttContent",
+        onlineMeetingId: "MSp-resolved-id",
+        transcriptId: "tr-1",
+      },
+    ]);
+    const seenIds = client.calls.map((c) =>
+      "onlineMeetingId" in c ? c.onlineMeetingId : undefined,
+    );
+    expect(seenIds).not.toContain("dial-in-99999");
+  });
+
+  it("a joinUrl that resolves to null records a not-available marker and never lists transcripts", async () => {
+    const store = new InMemoryMessageStore();
+    await store.upsertEvents([event({ eventId: "evt-1" })]);
+    const clock = new FakeClock(NOW);
+    const client = new ScriptedTranscriptClient({}, {}, {
+      [DEFAULT_JOIN_URL]: null,
+    });
+    const result = await syncTranscripts({ account, store, transcripts: client, clock });
+    expect(result).toEqual({ fetched: 0 });
+    expect(client.calls).toEqual([
+      { method: "resolveOnlineMeetingId", joinWebUrl: DEFAULT_JOIN_URL },
+    ]);
+    const got = await store.getTranscriptByKey({
+      account: "a@example.test",
+      eventId: "evt-1",
+      transcriptId: NO_TRANSCRIPT_FOUND_MARKER,
+    });
+    expect(got?.transcript.status).toBe("not-available");
+  });
+
+  it("a resolution-null marker is not retried on a later tick", async () => {
+    const store = new InMemoryMessageStore();
+    await store.upsertEvents([event({ eventId: "evt-1" })]);
+    const client = new ScriptedTranscriptClient({}, {}, {
+      [DEFAULT_JOIN_URL]: null,
+    });
+    await syncTranscripts({ account, store, transcripts: client, clock: new FakeClock(NOW) });
+    expect(client.calls).toHaveLength(1);
+
+    // Still inside the eligibility window, so only the marker can stop it.
+    await syncTranscripts({
+      account,
+      store,
+      transcripts: client,
+      clock: new FakeClock(new Date(NOW.getTime() + 3 * 60 * 60 * 1000)),
+    });
+    expect(client.calls).toHaveLength(1);
+  });
+
+  it("a consent-required error from resolveOnlineMeetingId propagates and records no status row", async () => {
+    const store = new InMemoryMessageStore();
+    await store.upsertEvents([event({ eventId: "evt-1" })]);
+    const consentError = new Error(
+      "AADSTS65001: user or admin has not consented",
+    );
+    const client = new ScriptedTranscriptClient({}, {}, {
+      [DEFAULT_JOIN_URL]: consentError,
+    });
+    await expect(
+      syncTranscripts({ account, store, transcripts: client, clock: new FakeClock(NOW) }),
+    ).rejects.toThrow(consentError);
+    const got = await store.getTranscriptByKey({
+      account: "a@example.test",
+      eventId: "evt-1",
+      transcriptId: NO_TRANSCRIPT_FOUND_MARKER,
+    });
+    expect(got).toBeNull();
   });
 
   it("skips events that haven't ended yet", async () => {
@@ -260,13 +403,19 @@ describe("syncTranscripts", () => {
     const client = new FakeTranscriptClient({
       transcriptsByMeeting: { "meeting-boundary": [] },
       vttByTranscriptId: {},
+      meetingIdByJoinUrl: { [DEFAULT_JOIN_URL]: "meeting-default" },
     });
     await syncTranscripts({ account, store, transcripts: client, clock });
     expect(client.calls).toEqual([
       {
+        method: "resolveOnlineMeetingId",
+        account: "a@example.test",
+        joinWebUrl: DEFAULT_JOIN_URL,
+      },
+      {
         method: "listTranscripts",
         account: "a@example.test",
-        onlineMeetingId: "meeting-boundary",
+        onlineMeetingId: "meeting-default",
       },
     ]);
   });
@@ -276,7 +425,7 @@ describe("syncTranscripts", () => {
     const events = Array.from({ length: MAX_TRANSCRIPT_EVENTS_PER_TICK + 5 }, (_, i) =>
       event({
         eventId: `evt-${i}`,
-        onlineMeetingId: `meeting-${i}`,
+        onlineMeetingUrl: `https://join/${i}`,
         startAt: new Date(NOW.getTime() - (i + 2) * 60 * 60 * 1000),
         endAt: new Date(NOW.getTime() - (i + 1) * 60 * 60 * 1000),
       }),
@@ -284,10 +433,18 @@ describe("syncTranscripts", () => {
     await store.upsertEvents(events);
     const clock = new FakeClock(NOW);
     const listResults: Record<string, readonly TranscriptHandle[]> = {};
-    for (let i = 0; i < events.length; i++) listResults[`meeting-${i}`] = [];
-    const client = new ScriptedTranscriptClient(listResults);
+    const resolveResults: Record<string, string> = {};
+    for (let i = 0; i < events.length; i++) {
+      listResults[`meeting-${i}`] = [];
+      resolveResults[`https://join/${i}`] = `meeting-${i}`;
+    }
+    const client = new ScriptedTranscriptClient(listResults, {}, resolveResults);
     await syncTranscripts({ account, store, transcripts: client, clock });
-    expect(client.calls).toHaveLength(MAX_TRANSCRIPT_EVENTS_PER_TICK);
+    // One resolve + one list per capped event.
+    expect(client.calls).toHaveLength(MAX_TRANSCRIPT_EVENTS_PER_TICK * 2);
+    expect(
+      client.calls.filter((c) => c.method === "listTranscripts"),
+    ).toHaveLength(MAX_TRANSCRIPT_EVENTS_PER_TICK);
   });
 
   it("persists a not-available marker row when Graph reports zero transcripts", async () => {
@@ -297,6 +454,7 @@ describe("syncTranscripts", () => {
     const client = new FakeTranscriptClient({
       transcriptsByMeeting: { "meeting-default": [] },
       vttByTranscriptId: {},
+      meetingIdByJoinUrl: { [DEFAULT_JOIN_URL]: "meeting-default" },
     });
     await syncTranscripts({ account, store, transcripts: client, clock });
     const got = await store.getTranscriptByKey({
@@ -313,19 +471,19 @@ describe("syncTranscripts", () => {
     const clock = new FakeClock(NOW);
     const client = new ScriptedTranscriptClient({ "meeting-default": [] });
     await syncTranscripts({ account, store, transcripts: client, clock });
-    expect(client.calls).toHaveLength(1);
+    expect(client.calls).toHaveLength(2); // resolve + list
 
     // A few hours later — event is still well inside the 60-day
     // eligibility window, so this exercises isEligible's actual
     // not-available branch rather than the event just aging out.
     const laterClock = new FakeClock(new Date(NOW.getTime() + 3 * 60 * 60 * 1000));
     await syncTranscripts({ account, store, transcripts: client, clock: laterClock });
-    expect(client.calls).toHaveLength(1);
+    expect(client.calls).toHaveLength(2);
 
     // Much later still (past the window entirely) — still never retried.
     const muchLaterClock = new FakeClock(new Date(NOW.getTime() + 100 * DAY_MS));
     await syncTranscripts({ account, store, transcripts: client, clock: muchLaterClock });
-    expect(client.calls).toHaveLength(1);
+    expect(client.calls).toHaveLength(2);
   });
 
   it("persists quota-exhausted status and retries only after the 7-day cooldown", async () => {
@@ -346,7 +504,7 @@ describe("syncTranscripts", () => {
       transcriptId: NO_TRANSCRIPT_FOUND_MARKER,
     });
     expect(got?.transcript.status).toBe("quota-exhausted");
-    expect(client.calls).toHaveLength(1);
+    expect(client.calls).toHaveLength(2); // resolve + list
 
     // Before the cooldown: not retried.
     await syncTranscripts({
@@ -355,7 +513,7 @@ describe("syncTranscripts", () => {
       transcripts: client,
       clock: new FakeClock(new Date(NOW.getTime() + 6 * DAY_MS)),
     });
-    expect(client.calls).toHaveLength(1);
+    expect(client.calls).toHaveLength(2); // unchanged: still in cooldown
 
     // After the cooldown: retried.
     await syncTranscripts({
@@ -364,7 +522,7 @@ describe("syncTranscripts", () => {
       transcripts: client,
       clock: new FakeClock(new Date(NOW.getTime() + 7 * DAY_MS)),
     });
-    expect(client.calls).toHaveLength(2);
+    expect(client.calls).toHaveLength(4); // resolve + list again
   });
 
   it("persists fetch-failed status and retries only after the 24h cooldown", async () => {
@@ -392,7 +550,7 @@ describe("syncTranscripts", () => {
       transcripts: client,
       clock: new FakeClock(new Date(NOW.getTime() + 23 * 60 * 60 * 1000)),
     });
-    expect(client.calls).toHaveLength(1);
+    expect(client.calls).toHaveLength(2); // unchanged: still in cooldown
 
     await syncTranscripts({
       account,
@@ -400,7 +558,7 @@ describe("syncTranscripts", () => {
       transcripts: client,
       clock: new FakeClock(new Date(NOW.getTime() + 24 * 60 * 60 * 1000)),
     });
-    expect(client.calls).toHaveLength(2);
+    expect(client.calls).toHaveLength(4); // cooldown elapsed: resolve + list again
   });
 
   it("when multiple rows exist for one event, the most-recently-fetched row governs even if it wasn't inserted last", async () => {
@@ -425,7 +583,7 @@ describe("syncTranscripts", () => {
     // cooldown has already elapsed, so it must be retried.
     const result = await syncTranscripts({ account, store, transcripts: client, clock: new FakeClock(NOW) });
     expect(result).toEqual({ fetched: 0 });
-    expect(client.calls).toHaveLength(1);
+    expect(client.calls).toHaveLength(2); // resolve + list
   });
 
   it("an event with an OLDER ok row is permanently done even when a NEWER row for it isn't ok", async () => {
@@ -457,9 +615,10 @@ describe("syncTranscripts", () => {
     const client = new FakeTranscriptClient({
       transcriptsByMeeting: { "meeting-default": [handle({ transcriptId: "tr-1" })] },
       vttByTranscriptId: { "tr-1": SAMPLE_VTT },
+      meetingIdByJoinUrl: { [DEFAULT_JOIN_URL]: "meeting-default" },
     });
     await syncTranscripts({ account, store, transcripts: client, clock: new FakeClock(NOW) });
-    expect(client.calls).toHaveLength(2); // list + fetch content
+    expect(client.calls).toHaveLength(3); // resolve + list + fetch content
 
     await syncTranscripts({
       account,
@@ -467,7 +626,7 @@ describe("syncTranscripts", () => {
       transcripts: client,
       clock: new FakeClock(new Date(NOW.getTime() + 100 * DAY_MS)),
     });
-    expect(client.calls).toHaveLength(2); // unchanged — not re-checked
+    expect(client.calls).toHaveLength(3); // unchanged — not re-checked
   });
 
   it("marks the real transcriptId (not the marker) when content fetch fails for a listed transcript", async () => {

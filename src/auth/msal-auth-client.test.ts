@@ -115,11 +115,25 @@ describe("MsalAuthClient", () => {
     expect(CALENDAR_SCOPES as readonly string[]).not.toContain("Chat.Read");
   });
 
-  it("TRANSCRIPT_SCOPES equals exactly OnlineMeetingTranscript.Read.All and is never merged into SCOPES or CALENDAR_SCOPES", () => {
-    expect(TRANSCRIPT_SCOPES).toEqual(["OnlineMeetingTranscript.Read.All"]);
+  it("TRANSCRIPT_SCOPES includes OnlineMeetings.Read for joinUrl→id resolution", () => {
+    // Reading a transcript needs two grants: OnlineMeetings.Read to turn a
+    // calendar joinUrl into an onlineMeeting id, then
+    // OnlineMeetingTranscript.Read.All to read that meeting's transcript.
+    // Both are delegated; OnlineMeetings.Read needs no admin consent.
+    expect(TRANSCRIPT_SCOPES as readonly string[]).toContain(
+      "OnlineMeetings.Read",
+    );
+  });
+
+  it("TRANSCRIPT_SCOPES equals exactly the two transcript grants and is never merged into SCOPES or CALENDAR_SCOPES", () => {
+    expect(TRANSCRIPT_SCOPES).toEqual([
+      "OnlineMeetings.Read",
+      "OnlineMeetingTranscript.Read.All",
+    ]);
     expect(SCOPES as readonly string[]).not.toContain(
       "OnlineMeetingTranscript.Read.All",
     );
+    expect(SCOPES as readonly string[]).not.toContain("OnlineMeetings.Read");
     expect(CALENDAR_SCOPES as readonly string[]).not.toContain(
       "OnlineMeetingTranscript.Read.All",
     );

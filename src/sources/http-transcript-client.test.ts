@@ -64,6 +64,136 @@ function recordSleep(): {
   return { sleep, sleeps };
 }
 
+describe("HttpTranscriptClient.resolveOnlineMeetingId", () => {
+  // Production joinUrl shape (tenant/oid digits zeroed).
+  const JOIN_URL =
+    "https://teams.microsoft.com/l/meetup-join/19%3ameeting_ABC%40thread.v2/0?context=%7b%22Tid%22%3a%22ff451c7f-0000%22%7d";
+
+  it("resolveOnlineMeetingId returns the onlineMeeting id for a joinWebUrl", async () => {
+    const { fetch, calls } = scriptFetch([
+      response({
+        status: 200,
+        body: JSON.stringify({ value: [{ id: "MSp0ZXN0-meeting-id" }] }),
+      }),
+    ]);
+    const client = new HttpTranscriptClient({ fetch, getAccessToken: tokenFor("tok-1") });
+    const id = await client.resolveOnlineMeetingId("a@example.test", JOIN_URL);
+    expect(id).toBe("MSp0ZXN0-meeting-id");
+    expect(calls[0]!.headers["Authorization"]).toBe("Bearer tok-1");
+    expect(calls[0]!.headers["Accept"]).toBe("application/json");
+  });
+
+  it("resolveOnlineMeetingId returns null when Graph matches no meeting", async () => {
+    const { fetch } = scriptFetch([
+      response({ status: 200, body: JSON.stringify({ value: [] }) }),
+    ]);
+    const client = new HttpTranscriptClient({ fetch, getAccessToken: tokenFor("t") });
+    expect(
+      await client.resolveOnlineMeetingId("a@example.test", JOIN_URL),
+    ).toBeNull();
+  });
+
+  it("resolveOnlineMeetingId maps 404 to null rather than throwing", async () => {
+    // The shared #request maps 404 → TranscriptNotAvailableError; for
+    // resolution "no such meeting" is a normal answer, not a failure.
+    const { fetch } = scriptFetch([response({ status: 404 })]);
+    const client = new HttpTranscriptClient({ fetch, getAccessToken: tokenFor("t") });
+    expect(
+      await client.resolveOnlineMeetingId("a@example.test", JOIN_URL),
+    ).toBeNull();
+  });
+
+  it("resolveOnlineMeetingId URL-encodes the joinWebUrl filter and escapes single quotes", async () => {
+    const { fetch, calls } = scriptFetch([
+      response({ status: 200, body: JSON.stringify({ value: [] }) }),
+    ]);
+    const client = new HttpTranscriptClient({ fetch, getAccessToken: tokenFor("t") });
+    // A single quote in the URL would otherwise terminate the OData
+    // string literal — doubled per OData, then percent-encoded.
+    await client.resolveOnlineMeetingId(
+      "a@example.test",
+      "https://teams.microsoft.com/l/meetup-join/it's",
+    );
+    const url = calls[0]!.url;
+    expect(url).toContain("/me/onlineMeetings?$filter=");
+    expect(url).toContain(encodeURIComponent("it''s"));
+    // The raw (unencoded) quote must not survive into the query string.
+    expect(url).not.toContain("it's");
+  });
+
+  it("resolveOnlineMeetingId requests a token for the OnlineMeetings.Read scope", async () => {
+    const tokenCalls: { account: string; scope: string; forceRefresh: boolean }[] = [];
+    const { fetch } = scriptFetch([
+      response({ status: 200, body: JSON.stringify({ value: [] }) }),
+    ]);
+    const client = new HttpTranscriptClient({
+      fetch,
+      getAccessToken: async (account, scope, forceRefresh) => {
+        tokenCalls.push({ account, scope, forceRefresh });
+        return "t";
+      },
+    });
+    await client.resolveOnlineMeetingId("a@example.test", JOIN_URL);
+    // NOT the transcript scope — resolution is a separate grant.
+    expect(tokenCalls).toEqual([
+      {
+        account: "a@example.test",
+        scope: "https://graph.microsoft.com/OnlineMeetings.Read",
+        forceRefresh: false,
+      },
+    ]);
+  });
+
+  it("resolveOnlineMeetingId retries once with a forced-refresh token on 401", async () => {
+    const tokenCalls: boolean[] = [];
+    const { fetch, calls } = scriptFetch([
+      response({ status: 401 }),
+      response({ status: 200, body: JSON.stringify({ value: [{ id: "m-1" }] }) }),
+    ]);
+    const client = new HttpTranscriptClient({
+      fetch,
+      getAccessToken: async (_a, _s, forceRefresh) => {
+        tokenCalls.push(forceRefresh);
+        return forceRefresh ? "fresh" : "stale";
+      },
+    });
+    const id = await client.resolveOnlineMeetingId("a@example.test", JOIN_URL);
+    expect(id).toBe("m-1");
+    expect(tokenCalls).toEqual([false, true]);
+    expect(calls[1]!.headers["Authorization"]).toBe("Bearer fresh");
+  });
+
+  it("resolveOnlineMeetingId maps 429 to GraphRateLimitedError", async () => {
+    const { fetch } = scriptFetch([
+      response({ status: 429, headers: { "Retry-After": "17" } }),
+    ]);
+    const client = new HttpTranscriptClient({ fetch, getAccessToken: tokenFor("t") });
+    await expect(
+      client.resolveOnlineMeetingId("a@example.test", JOIN_URL),
+    ).rejects.toBeInstanceOf(GraphRateLimitedError);
+  });
+
+  it("resolveOnlineMeetingId redacts the bearer token from error messages", async () => {
+    const { fetch } = scriptFetch([
+      response({ status: 500, body: "boom super-secret-token boom" }),
+      response({ status: 500, body: "boom super-secret-token boom" }),
+      response({ status: 500, body: "boom super-secret-token boom" }),
+    ]);
+    const client = new HttpTranscriptClient({
+      fetch,
+      getAccessToken: tokenFor("super-secret-token"),
+      sleep: async () => {},
+      random: () => 0,
+    });
+    await expect(
+      client.resolveOnlineMeetingId("a@example.test", JOIN_URL),
+    ).rejects.toThrow(/\[redacted\]/);
+    await expect(
+      client.resolveOnlineMeetingId("a@example.test", JOIN_URL),
+    ).rejects.not.toThrow(/super-secret-token/);
+  });
+});
+
 describe("HttpTranscriptClient.listTranscripts", () => {
   it("requests /me/onlineMeetings/{id}/transcripts with a bearer token", async () => {
     const { fetch, calls } = scriptFetch([

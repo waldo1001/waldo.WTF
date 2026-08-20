@@ -19,10 +19,13 @@ export interface TranscriptHandle {
  * `onlineMeetingId` — tokens are per-user-account, not per-meeting, so the
  * real HTTP implementation needs the account to resolve one (mirrors
  * `CalendarViewDeltaInput.account`, which exists for the identical reason).
- * `onlineMeetingId` (from `events.online_meeting_id`, populated by
- * calendar slice 5) identifies which meeting's transcripts to fetch — that's
- * what `GET /me/onlineMeetings/{onlineMeetingId}/transcripts` actually takes,
- * not `eventId`.
+ * `onlineMeetingId` identifies which meeting's transcripts to fetch —
+ * that's what `GET /me/onlineMeetings/{onlineMeetingId}/transcripts`
+ * actually takes, not `eventId`. **It is NOT
+ * `events.online_meeting_id`**: that column holds Graph's
+ * `onlineMeeting.conferenceId`, which is the audio dial-in number
+ * (short, numeric) and 404s against this API. Callers get a real
+ * onlineMeeting resource id from `resolveOnlineMeetingId` below.
  *
  * Error mapping is the real HTTP implementation's concern (a later slice):
  * 401 refreshes the token and retries once, 402 (the metered-content-fetch
@@ -32,6 +35,16 @@ export interface TranscriptHandle {
  * client in this codebase.
  */
 export interface TranscriptClient {
+  // Turns a calendar event's joinUrl into the onlineMeeting resource id
+  // the transcript endpoints require, via Graph's documented alternate-key
+  // lookup (`GET /me/onlineMeetings?$filter=JoinWebUrl eq '...'`,
+  // delegated OnlineMeetings.Read). `null` means Graph matched no meeting
+  // — expired past Teams' retention, or not visible to this account —
+  // which is a normal answer, not an error.
+  resolveOnlineMeetingId(
+    account: string,
+    joinWebUrl: string,
+  ): Promise<string | null>;
   listTranscripts(
     account: string,
     onlineMeetingId: string,

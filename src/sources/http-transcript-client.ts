@@ -36,10 +36,19 @@ interface GraphTranscriptListResponse {
   readonly value: readonly GraphTranscriptListEntry[];
 }
 
+interface GraphOnlineMeetingLookupResponse {
+  readonly value: readonly { readonly id: string }[];
+}
+
 const DEFAULT_BASE_URL = "https://graph.microsoft.com/v1.0";
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_SCOPE =
   "https://graph.microsoft.com/OnlineMeetingTranscript.Read.All";
+// joinUrl → onlineMeeting-id resolution is a separate Graph permission from
+// reading transcript content, so it needs its own token. MSAL mints both
+// from the same refresh token; asking for one combined token would fail on
+// tenants that consented them separately.
+const RESOLVE_SCOPE = "https://graph.microsoft.com/OnlineMeetings.Read";
 const RETRY_BACKOFF_MS = [250, 750] as const;
 const TRANSIENT_STATUSES: ReadonlySet<number> = new Set([502, 503, 504]);
 
@@ -61,6 +70,33 @@ export class HttpTranscriptClient implements TranscriptClient {
       opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.#random = opts.random ?? Math.random;
     this.#maxRetries = opts.maxRetries ?? DEFAULT_MAX_RETRIES;
+  }
+
+  async resolveOnlineMeetingId(
+    account: string,
+    joinWebUrl: string,
+  ): Promise<string | null> {
+    // OData string literals escape a single quote by doubling it; the whole
+    // filter value is then percent-encoded, per the Graph doc's explicit
+    // "joinWebUrl must be URL encoded" note.
+    const literal = joinWebUrl.split("'").join("''");
+    const url = `${this.#baseUrl}/me/onlineMeetings?$filter=JoinWebUrl%20eq%20'${encodeURIComponent(literal)}'`;
+    let raw: GraphOnlineMeetingLookupResponse;
+    try {
+      raw = await this.#requestWithTokenRetry<GraphOnlineMeetingLookupResponse>(
+        url,
+        account,
+        "application/json",
+        RESOLVE_SCOPE,
+      );
+    } catch (err) {
+      // #request collapses 403/404 into TranscriptNotAvailableError. For a
+      // lookup, "no such meeting" is an answer, not a failure — the sync
+      // job records its own not-available marker from the null.
+      if (err instanceof TranscriptNotAvailableError) return null;
+      throw err;
+    }
+    return raw.value[0]?.id ?? null;
   }
 
   async listTranscripts(
@@ -105,13 +141,14 @@ export class HttpTranscriptClient implements TranscriptClient {
     url: string,
     account: string,
     accept: "application/json" | "text/vtt",
+    scope: string = this.#scope,
   ): Promise<T> {
-    const token = await this.#getAccessToken(account, this.#scope, false);
+    const token = await this.#getAccessToken(account, scope, false);
     try {
       return await this.#request<T>(url, token, accept);
     } catch (err) {
       if (!(err instanceof TokenExpiredError)) throw err;
-      const freshToken = await this.#getAccessToken(account, this.#scope, true);
+      const freshToken = await this.#getAccessToken(account, scope, true);
       return this.#request<T>(url, freshToken, accept);
     }
   }

@@ -1072,7 +1072,7 @@ describe("SyncScheduler", () => {
         endAt: new Date("2026-04-13T10:00:00Z"),
         isAllDay: false,
         isCancelled: false,
-        onlineMeetingId: "meeting-1",
+        onlineMeetingUrl: "https://join/meeting-1",
         attendees: [],
       },
     ]);
@@ -1083,6 +1083,7 @@ describe("SyncScheduler", () => {
       vttByTranscriptId: {
         "t-1": "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello",
       },
+      meetingIdByJoinUrl: { "https://join/meeting-1": "meeting-1" },
     });
     const auth = new FakeAuthClient({
       accounts: [a1, a2, a3],
@@ -1203,7 +1204,7 @@ describe("SyncScheduler", () => {
         endAt: new Date("2026-04-13T10:00:00Z"),
         isAllDay: false,
         isCancelled: false,
-        onlineMeetingId: "meeting-1",
+        onlineMeetingUrl: "https://join/meeting-1",
         attendees: [],
       },
     ]);
@@ -1212,9 +1213,14 @@ describe("SyncScheduler", () => {
     );
     const transcripts = {
       calls: [] as { account: string }[],
-      async listTranscripts(account: string) {
+      // Resolution is now the first Graph call the sync job makes, so a
+      // missing consent surfaces here rather than at listTranscripts.
+      async resolveOnlineMeetingId(account: string) {
         this.calls.push({ account });
         throw consentError;
+      },
+      async listTranscripts() {
+        throw new Error("unreachable");
       },
       async fetchVttContent() {
         throw new Error("unreachable");

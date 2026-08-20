@@ -13,6 +13,50 @@ function handle(
 }
 
 describe("FakeTranscriptClient", () => {
+  it("resolveOnlineMeetingId returns the fixture id and records the call", async () => {
+    const client = new FakeTranscriptClient({
+      transcriptsByMeeting: {},
+      vttByTranscriptId: {},
+      meetingIdByJoinUrl: { "https://join/1": "meeting-1" },
+    });
+    const id = await client.resolveOnlineMeetingId(
+      "a@example.test",
+      "https://join/1",
+    );
+    expect(id).toBe("meeting-1");
+    expect(client.calls).toEqual([
+      {
+        method: "resolveOnlineMeetingId",
+        account: "a@example.test",
+        joinWebUrl: "https://join/1",
+      },
+    ]);
+  });
+
+  it("resolveOnlineMeetingId returns null for a joinUrl scripted as unresolvable", async () => {
+    // null models Graph matching no meeting — expired, or not visible to
+    // this account — which the sync job treats as not-available, not error.
+    const client = new FakeTranscriptClient({
+      transcriptsByMeeting: {},
+      vttByTranscriptId: {},
+      meetingIdByJoinUrl: { "https://join/gone": null },
+    });
+    expect(
+      await client.resolveOnlineMeetingId("a@example.test", "https://join/gone"),
+    ).toBeNull();
+  });
+
+  it("resolveOnlineMeetingId throws on an unscripted joinUrl so loop bugs surface early", async () => {
+    const client = new FakeTranscriptClient({
+      transcriptsByMeeting: {},
+      vttByTranscriptId: {},
+      meetingIdByJoinUrl: {},
+    });
+    await expect(
+      client.resolveOnlineMeetingId("a@example.test", "https://join/bogus"),
+    ).rejects.toThrow(UnknownTranscriptMeetingError);
+  });
+
   it("listTranscripts returns the scripted handles for a known onlineMeetingId", async () => {
     const h = handle({ transcriptId: "tr-1" });
     const client = new FakeTranscriptClient({

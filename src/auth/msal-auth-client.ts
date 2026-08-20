@@ -27,7 +27,15 @@ export const CALENDAR_SCOPES = ["Calendars.Read"] as const;
 // (incremental delegated consent — Entra treats the combined re-request
 // as one grant). Never merged into CALENDAR_SCOPES — an account can have
 // calendar without transcripts.
-export const TRANSCRIPT_SCOPES = ["OnlineMeetingTranscript.Read.All"] as const;
+// Two grants, both delegated: OnlineMeetings.Read turns a calendar event's
+// joinUrl into the onlineMeeting resource id the transcript endpoints
+// require (calendarView never returns that id), and
+// OnlineMeetingTranscript.Read.All reads the transcript itself. Only the
+// latter needs tenant-admin consent.
+export const TRANSCRIPT_SCOPES = [
+  "OnlineMeetings.Read",
+  "OnlineMeetingTranscript.Read.All",
+] as const;
 
 export function vivaAuthorityFor(tenantId: string): string {
   return `https://login.microsoftonline.com/${tenantId}/`;

@@ -102,6 +102,35 @@ function mapResponseStatus(response: string | undefined): EventResponseStatus {
   }
 }
 
+// Graph's calendarView payload rarely carries `onlineMeeting.chatInfo`
+// (production: 470 of ~480 joinUrl-bearing events had none), so the
+// meeting-chat join from slice 5 was null almost everywhere. The joinUrl
+// itself embeds the chat thread id as its meetup-join path segment:
+//   https://teams.microsoft.com/l/meetup-join/19%3ameeting_XXX%40thread.v2/0?context=...
+// Decoding that segment yields exactly the `19:...@thread.v2` chat id
+// Teams sync already stores, at no extra Graph call.
+export function chatIdFromJoinUrl(
+  joinUrl: string | undefined,
+): string | undefined {
+  // Mutation note: both guards below survive mutation as equivalent —
+  // without them a missing joinUrl stringifies to "undefined" and fails
+  // the match, and a null match throws inside the try and is caught. They
+  // stay because relying on either accident would be fragile.
+  if (joinUrl === undefined) return undefined;
+  const match = /\/l\/meetup-join\/([^/?]+)/.exec(joinUrl);
+  if (match === null) return undefined;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(match[1]!);
+  } catch {
+    // Malformed percent-encoding — never let one odd invite kill a tick.
+    return undefined;
+  }
+  // Anything that isn't a 19:...-shaped thread id (live-event broadcast
+  // links, external-tenant oddities) would join to nothing; drop it.
+  return decoded.startsWith("19:") ? decoded : undefined;
+}
+
 export function mapGraphEventToCalendarEvent(
   graphEvent: GraphCalendarEvent,
   account: string,
@@ -142,7 +171,9 @@ export function mapGraphEventToCalendarEvent(
   const attendees = [...attendeesByEmail.values()];
 
   const onlineMeeting = graphEvent.onlineMeeting ?? undefined;
-  const chatId = onlineMeeting?.chatInfo?.threadId;
+  const chatId =
+    onlineMeeting?.chatInfo?.threadId ??
+    chatIdFromJoinUrl(onlineMeeting?.joinUrl);
   const onlineMeetingUrl = onlineMeeting?.joinUrl;
   const onlineMeetingId = onlineMeeting?.conferenceId;
 

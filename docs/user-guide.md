@@ -538,7 +538,8 @@ already be calendar-enabled (§5d) — it errors with a pointer to
 ```sh
 # Enable transcripts for one account. Requires --calendar-enable to
 # have been run for that account first. Prompts a device-code login
-# requesting OnlineMeetingTranscript.Read.All alongside the account's
+# requesting OnlineMeetings.Read + OnlineMeetingTranscript.Read.All
+# alongside the account's
 # existing scopes (Entra treats this as one combined consent grant —
 # it does not re-prompt for Mail.Read/Chat.Read/Calendars.Read). If the
 # tenant requires admin consent, the command fails with a message
@@ -958,6 +959,8 @@ to `waldo-nas.<tailnet>.ts.net:8765`.
 | `--viva-discover` shows "no viva communities" despite having communities | Yammer API returned suggested groups (empty for guests in external networks) | Fixed in 2026-04-23 deploy — upgrade and re-run `--viva-discover` |
 | `--teams-discover` prints `admin-consent required` and returns no channels | Tenant has not consented `ChannelMessage.Read.All` for the app | Ask tenant admin to grant consent, or use a different account; other sources keep working |
 | `sync_log` shows `admin-consent-required` rows for a teams-channel account every tick | Same as above — scheduler degrades cleanly per-account | Either grant the consent or `--teams-unsubscribe` the affected channels to silence the rows |
+| `get_event_transcript` returns `transcript: null` for every meeting, and `transcripts` sync_log rows say `ok` with 0 fetched | Before the 2026-08-20 fix, transcripts were looked up with the audio dial-in id and always 404'd | Deploy 2026-08-20 or later, re-run `--transcripts-enable <account>` (adds `OnlineMeetings.Read`), then run the [repair-transcript-linkage](../docs/migrations/repair-transcript-linkage.md) migration to clear the false markers |
+| Transcript exists in Teams but the lake says `not-available` | Meeting expired past Teams' retention, or it resolves only for the organizer (see the open question in the plan) | Check `find_events` shows the meeting; transcripts are only fetchable for meetings that ended within the last 60 days |
 | MCP tool error surfaces `<ErrorClass>: <message>` (e.g. `SqliteError: database is locked`) | The handler threw; the message is the first line of the underlying exception, secrets-redacted | Treat the class as the diagnosis; full stack is in NAS container stderr (`docker logs <ctr>`) — grep for `[mcp tool handler]` |
 
 ## 10. What NOT to do

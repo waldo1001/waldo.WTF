@@ -11,6 +11,44 @@ skill.
 
 ---
 
+## 2026-08-20
+
+- **Fixed the bug that made meeting transcripts unreachable in
+  production.** `events.online_meeting_id` was populated from Graph's
+  `onlineMeeting.conferenceId` — the audio **dial-in number**, not an
+  onlineMeeting resource id — so every transcript lookup 404'd. Live
+  lake showed the damage: only 9 of 1,264 ifacto events even carried a
+  conferenceId, and the single lookup that ran produced a false
+  `not-available` marker. Graph's calendarView never returns the id the
+  transcript endpoints need; it has to be resolved from the meeting's
+  join URL via `GET /me/onlineMeetings?$filter=JoinWebUrl eq '...'`
+  (delegated `OnlineMeetings.Read`, **no admin consent**). New
+  `TranscriptClient.resolveOnlineMeetingId`, implemented in
+  [http-transcript-client.ts](../src/sources/http-transcript-client.ts)
+  with the same 401-retry / 429 / redaction shape as its siblings;
+  `syncTranscripts` now gates candidates on the joinUrl instead of the
+  id, lifting the real candidate pool from 1 meeting to ~46.
+  `TRANSCRIPT_SCOPES` gains `OnlineMeetings.Read`, so **both opted-in
+  accounts must re-run `--transcripts-enable`**.
+- Fixed the same root cause for meeting **chat** links: slice 5 read
+  `onlineMeeting.chatInfo.threadId`, which Graph omits on nearly every
+  event (470 of ~480 in the lake had a joinUrl but NULL `chat_id`), so
+  `get_event.linkedChat` was null almost everywhere. New
+  `chatIdFromJoinUrl` derives the `19:…@thread.v2` chat id from the
+  joinUrl's meetup-join segment — zero extra Graph calls.
+- New `--repair-transcript-linkage` CLI flag + migration recipe
+  ([repair-transcript-linkage](migrations/repair-transcript-linkage.md)):
+  deletes the false `__no-transcript-found__` markers (which, being
+  `not-available`, would otherwise suppress a correct re-check forever)
+  and backfills `chat_id` for existing rows. Data-only, no schema bump,
+  idempotent, `--dry-run` supported.
+- Plan + verified Graph findings:
+  [plans/done/transcripts-meeting-id-resolution.md](plans/done/transcripts-meeting-id-resolution.md).
+  Open question recorded there: Microsoft documents attendee-token
+  support for the by-id onlineMeeting GET but is silent for the
+  JoinWebUrl filter, so resolution may work only for meetings the
+  account organized — probed during rollout.
+
 ## 2026-08-16
 
 - Fixed a production incident on the first real `--calendar-enable`

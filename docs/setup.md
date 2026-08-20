@@ -66,14 +66,19 @@ One-time, per developer. Required for MSAL device code flow.
      tenant to hand to your admin, and the account's opt-in row is not
      written.
    - For meeting transcripts (optional, per-account opt-in, requires
-     calendar already enabled for that account): delegated
-     `OnlineMeetingTranscript.Read.All`. Requested via
+     calendar already enabled for that account): **two** delegated
+     scopes, `OnlineMeetings.Read` and
+     `OnlineMeetingTranscript.Read.All`. Both are requested together by
      `--transcripts-enable <account>` — no second app registration and
-     no app-only/client-secret auth needed; it's one more delegated
-     scope on the same device-code flow as calendar. Like
-     `Calendars.Read`, this typically requires **admin consent**; on
-     rejection `--transcripts-enable` fails with a message naming the
-     scope, and the account's `transcripts_enabled` flag is not set.
+     no app-only/client-secret auth needed; they're two more delegated
+     scopes on the same device-code flow as calendar.
+     `OnlineMeetings.Read` is needed because Graph's calendar payload
+     never returns the onlineMeeting id the transcript endpoints
+     require; it has to be looked up from the meeting's join URL. It
+     needs **no admin consent**. `OnlineMeetingTranscript.Read.All`
+     typically does require **admin consent**; on rejection
+     `--transcripts-enable` fails with a message naming the scopes, and
+     the account's `transcripts_enabled` flag is not set.
      Two things to know before enabling:
      - **Metering.** Fetching transcript *content* (not just listing
        transcripts) is a metered Graph API: evaluation mode gives
@@ -89,8 +94,8 @@ One-time, per developer. Required for MSAL device code flow.
 
    `--add-account` requests only the two base Graph scopes (`Mail.Read`,
    `Chat.Read`) in one device-code prompt. The Teams channel scopes,
-   the Yammer scope, `Calendars.Read`, and
-   `OnlineMeetingTranscript.Read.All` are all requested separately on
+   the Yammer scope, `Calendars.Read`, and the two transcript scopes
+   (`OnlineMeetings.Read` + `OnlineMeetingTranscript.Read.All`) are all requested separately on
    first use (`--teams-discover` / `--viva-discover` /
    `--calendar-enable` / `--transcripts-enable`), via MSAL's
    incremental-consent / multi-resource token chain — enabling calendar

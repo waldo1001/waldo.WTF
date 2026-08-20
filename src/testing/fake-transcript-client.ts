@@ -14,6 +14,11 @@ export class UnknownTranscriptContentError extends Error {}
 
 export type FakeTranscriptClientCall =
   | {
+      readonly method: "resolveOnlineMeetingId";
+      readonly account: string;
+      readonly joinWebUrl: string;
+    }
+  | {
       readonly method: "listTranscripts";
       readonly account: string;
       readonly onlineMeetingId: string;
@@ -32,6 +37,9 @@ export interface FakeTranscriptClientOptions {
   >;
   // Keyed by transcriptId.
   readonly vttByTranscriptId: Readonly<Record<string, string>>;
+  // Keyed by joinWebUrl. `null` scripts "Graph matched no meeting".
+  // Omitted entirely when a test never resolves (defaults to {}).
+  readonly meetingIdByJoinUrl?: Readonly<Record<string, string | null>>;
 }
 
 export class FakeTranscriptClient implements TranscriptClient {
@@ -40,10 +48,28 @@ export class FakeTranscriptClient implements TranscriptClient {
     Record<string, readonly TranscriptHandle[]>
   >;
   private readonly vttByTranscriptId: Readonly<Record<string, string>>;
+  private readonly meetingIdByJoinUrl: Readonly<
+    Record<string, string | null>
+  >;
 
   constructor(opts: FakeTranscriptClientOptions) {
     this.transcriptsByMeeting = opts.transcriptsByMeeting;
     this.vttByTranscriptId = opts.vttByTranscriptId;
+    this.meetingIdByJoinUrl = opts.meetingIdByJoinUrl ?? {};
+  }
+
+  async resolveOnlineMeetingId(
+    account: string,
+    joinWebUrl: string,
+  ): Promise<string | null> {
+    this.calls.push({ method: "resolveOnlineMeetingId", account, joinWebUrl });
+    const id = this.meetingIdByJoinUrl[joinWebUrl];
+    if (id === undefined) {
+      throw new UnknownTranscriptMeetingError(
+        `FakeTranscriptClient: no scripted onlineMeeting id for joinWebUrl "${joinWebUrl}"`,
+      );
+    }
+    return id;
   }
 
   async listTranscripts(

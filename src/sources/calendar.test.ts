@@ -1,10 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
+  chatIdFromJoinUrl,
   mapGraphEventToCalendarEvent,
   type CalendarClient,
   type CalendarViewDeltaPage,
   type GraphCalendarEvent,
 } from "./calendar.js";
+
+// Structure mirrors a real production calendarView payload — Graph gives a
+// joinUrl but NO chatInfo on the vast majority of events (470 of ~480 in
+// the live lake) — with every identifier replaced by a synthetic one.
+const SAMPLE_JOIN_URL =
+  "https://teams.microsoft.com/l/meetup-join/19%3ameeting_U1lOVEhFVElDLUZJWFRVUkUtTk9ULVJFQUwtTUVFVElORw%40thread.v2/0?context=%7b%22Tid%22%3a%22ff451c7f-0000-0000-0000-000000000000%22%2c%22Oid%22%3a%2239f11b70-0000-0000-0000-000000000000%22%7d";
+const SAMPLE_JOIN_URL_THREAD_ID =
+  "19:meeting_U1lOVEhFVElDLUZJWFRVUkUtTk9ULVJFQUwtTUVFVElORw@thread.v2";
 
 function graphEvent(
   overrides: Partial<GraphCalendarEvent> & Pick<GraphCalendarEvent, "id">,
@@ -34,7 +43,69 @@ describe("CalendarClient interface", () => {
   });
 });
 
+describe("chatIdFromJoinUrl", () => {
+  it("chatIdFromJoinUrl decodes the meetup-join segment to a Teams chat thread id", () => {
+    expect(chatIdFromJoinUrl(SAMPLE_JOIN_URL)).toBe(SAMPLE_JOIN_URL_THREAD_ID);
+  });
+
+  it("chatIdFromJoinUrl returns undefined for a URL that is not a meetup-join link", () => {
+    expect(
+      chatIdFromJoinUrl("https://teams.microsoft.com/l/channel/19%3aabc/General"),
+    ).toBeUndefined();
+    expect(chatIdFromJoinUrl("https://example.test/nothing-to-see")).toBeUndefined();
+  });
+
+  it("chatIdFromJoinUrl returns undefined (does not throw) on malformed percent-encoding", () => {
+    // A lone '%' is not valid percent-encoding — decodeURIComponent throws
+    // URIError on it. The helper must swallow that, not crash a sync tick.
+    expect(() =>
+      chatIdFromJoinUrl("https://teams.microsoft.com/l/meetup-join/19%3ameeting_%zz/0"),
+    ).not.toThrow();
+    expect(
+      chatIdFromJoinUrl("https://teams.microsoft.com/l/meetup-join/19%3ameeting_%zz/0"),
+    ).toBeUndefined();
+  });
+
+  it("chatIdFromJoinUrl returns undefined when there is no joinUrl", () => {
+    expect(chatIdFromJoinUrl(undefined)).toBeUndefined();
+  });
+
+  it("chatIdFromJoinUrl rejects a decoded segment that is not a 19: thread id", () => {
+    // Guards against exotic join links (live events, external tenants)
+    // silently producing a bogus chat_id that would never join to anything.
+    expect(
+      chatIdFromJoinUrl("https://teams.microsoft.com/l/meetup-join/broadcast%3aabc/0"),
+    ).toBeUndefined();
+  });
+});
+
 describe("mapGraphEventToCalendarEvent", () => {
+  it("mapGraphEventToCalendarEvent derives chatId from joinUrl when Graph omits chatInfo (production shape)", () => {
+    const result = mapGraphEventToCalendarEvent(
+      graphEvent({
+        id: "evt-no-chatinfo",
+        onlineMeeting: { joinUrl: SAMPLE_JOIN_URL },
+      }),
+      "a@example.test",
+    );
+    expect(result.chatId).toBe(SAMPLE_JOIN_URL_THREAD_ID);
+    expect(result.onlineMeetingUrl).toBe(SAMPLE_JOIN_URL);
+  });
+
+  it("mapGraphEventToCalendarEvent prefers an explicit chatInfo.threadId over deriving one from joinUrl", () => {
+    const result = mapGraphEventToCalendarEvent(
+      graphEvent({
+        id: "evt-both",
+        onlineMeeting: {
+          joinUrl: SAMPLE_JOIN_URL,
+          chatInfo: { threadId: "19:explicit-wins@thread.v2" },
+        },
+      }),
+      "a@example.test",
+    );
+    expect(result.chatId).toBe("19:explicit-wins@thread.v2");
+  });
+
   it("mapGraphEventToCalendarEvent lowers a typical event with attendees", () => {
     const g = graphEvent({
       id: "evt-1",

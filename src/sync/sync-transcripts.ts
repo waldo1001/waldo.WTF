@@ -108,7 +108,12 @@ export async function syncTranscripts(
 
   const eligibleEvents = [];
   for (const event of candidates) {
-    if (event.onlineMeetingId === undefined) continue;
+    // Gate on the joinUrl, NOT events.online_meeting_id: that column holds
+    // Graph's `onlineMeeting.conferenceId` (the audio dial-in number),
+    // which is absent on almost every event and 404s against the
+    // transcript API when present. The joinUrl is reliably populated and
+    // resolves to a real onlineMeeting id below.
+    if (event.onlineMeetingUrl === undefined) continue;
     if (event.endAt.getTime() >= now.getTime()) continue;
     const rows = await store.listTranscriptsForEvent(
       account.username,
@@ -121,7 +126,27 @@ export async function syncTranscripts(
 
   let fetched = 0;
   for (const event of eligibleEvents) {
-    const onlineMeetingId = event.onlineMeetingId!;
+    // calendarView never returns the onlineMeeting resource id, so trade
+    // the joinUrl for one. A null means Graph matched no meeting (expired
+    // past Teams' retention, or not visible to this account) — same
+    // permanent "nothing here" as a meeting with zero transcripts.
+    const onlineMeetingId = await transcripts.resolveOnlineMeetingId(
+      account.username,
+      event.onlineMeetingUrl!,
+    );
+    if (onlineMeetingId === null) {
+      await store.markTranscriptStatus(
+        {
+          account: account.username,
+          eventId: event.eventId,
+          transcriptId: NO_TRANSCRIPT_FOUND_MARKER,
+        },
+        "not-available",
+        now,
+      );
+      continue;
+    }
+
     let handles;
     try {
       handles = await transcripts.listTranscripts(

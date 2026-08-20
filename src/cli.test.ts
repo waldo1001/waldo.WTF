@@ -652,6 +652,43 @@ describe("runCli", () => {
     expect(prints.some((p) => p.includes("42"))).toBe(true);
   });
 
+  it("dispatches --repair-transcript-linkage to the injected impl and prints counts", async () => {
+    const prints: string[] = [];
+    let captured: { dbPath: string; dryRun: boolean } | undefined;
+    const result = await runCli(["--repair-transcript-linkage"], {
+      env: ENV,
+      loadDotenv: false,
+      print: (m) => prints.push(m),
+      repairTranscriptLinkageImpl: async (dbPath, opts) => {
+        captured = { dbPath, dryRun: opts.dryRun === true };
+        return { markersCleared: 1, chatIdsBackfilled: 470, chatIdsSkipped: 3 };
+      },
+    });
+    expect(result).toEqual({
+      mode: "repair-transcript-linkage",
+      markersCleared: 1,
+      chatIdsBackfilled: 470,
+      chatIdsSkipped: 3,
+    });
+    expect(captured?.dbPath).toMatch(/lake\.db$/);
+    expect(captured?.dryRun).toBe(false);
+    expect(prints.some((p) => p.includes("470") && p.includes("3"))).toBe(true);
+  });
+
+  it("dispatches --repair-transcript-linkage --dry-run and passes dryRun:true", async () => {
+    let captured: { dryRun: boolean } | undefined;
+    await runCli(["--repair-transcript-linkage", "--dry-run"], {
+      env: ENV,
+      loadDotenv: false,
+      print: () => {},
+      repairTranscriptLinkageImpl: async (_dbPath, opts) => {
+        captured = { dryRun: opts.dryRun === true };
+        return { markersCleared: 0, chatIdsBackfilled: 0, chatIdsSkipped: 0 };
+      },
+    });
+    expect(captured?.dryRun).toBe(true);
+  });
+
   it("dispatches --rethread-whatsapp to the injected impl and prints counts", async () => {
     const prints: string[] = [];
     let captured: { dbPath: string; dryRun: boolean } | undefined;
