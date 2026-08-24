@@ -661,7 +661,12 @@ describe("runCli", () => {
       print: (m) => prints.push(m),
       repairTranscriptLinkageImpl: async (dbPath, opts) => {
         captured = { dbPath, dryRun: opts.dryRun === true };
-        return { markersCleared: 1, chatIdsBackfilled: 470, chatIdsSkipped: 3 };
+        return {
+          markersCleared: 1,
+          chatIdsBackfilled: 470,
+          chatIdsSkipped: 3,
+          cancelledTranscriptsRemoved: 2,
+        };
       },
     });
     expect(result).toEqual({
@@ -669,6 +674,7 @@ describe("runCli", () => {
       markersCleared: 1,
       chatIdsBackfilled: 470,
       chatIdsSkipped: 3,
+      cancelledTranscriptsRemoved: 2,
     });
     expect(captured?.dbPath).toMatch(/lake\.db$/);
     expect(captured?.dryRun).toBe(false);
@@ -683,7 +689,12 @@ describe("runCli", () => {
       print: () => {},
       repairTranscriptLinkageImpl: async (_dbPath, opts) => {
         captured = { dryRun: opts.dryRun === true };
-        return { markersCleared: 0, chatIdsBackfilled: 0, chatIdsSkipped: 0 };
+        return {
+          markersCleared: 0,
+          chatIdsBackfilled: 0,
+          chatIdsSkipped: 0,
+          cancelledTranscriptsRemoved: 0,
+        };
       },
     });
     expect(captured?.dryRun).toBe(true);

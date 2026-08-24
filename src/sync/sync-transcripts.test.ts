@@ -228,6 +228,36 @@ describe("syncTranscripts", () => {
     expect(result).toEqual({ fetched: 1 });
   });
 
+  it("a cancelled meeting is never a transcript candidate", async () => {
+    // Production surfaced 2 of 12 fetched transcripts belonging to
+    // cancelled meetings ("Geannuleerd: ..."): the occurrence is dead but
+    // Graph still hands back the recurring series' transcript, which then
+    // pollutes results for a meeting that never happened.
+    const store = new InMemoryMessageStore();
+    await store.upsertEvents([
+      event({ eventId: "evt-cancelled", isCancelled: true }),
+    ]);
+    const clock = new FakeClock(NOW);
+    const client = new ScriptedTranscriptClient({});
+    const result = await syncTranscripts({ account, store, transcripts: client, clock });
+    expect(result).toEqual({ fetched: 0 });
+    expect(client.calls).toEqual([]);
+  });
+
+  it("a non-cancelled meeting is still a candidate (isCancelled guard is not over-broad)", async () => {
+    const store = new InMemoryMessageStore();
+    await store.upsertEvents([
+      event({ eventId: "evt-live", isCancelled: false }),
+    ]);
+    const clock = new FakeClock(NOW);
+    const client = new ScriptedTranscriptClient(
+      { "meeting-default": [handle({ transcriptId: "tr-1" })] },
+      { "tr-1": { vtt: SAMPLE_VTT } },
+    );
+    const result = await syncTranscripts({ account, store, transcripts: client, clock });
+    expect(result).toEqual({ fetched: 1 });
+  });
+
   it("an event without a joinUrl is skipped even if it has an onlineMeetingId", async () => {
     const store = new InMemoryMessageStore();
     await store.upsertEvents([

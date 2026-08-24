@@ -126,6 +126,43 @@ describe("repairTranscriptLinkage", () => {
     expect(row.chat_id).toBeNull();
   });
 
+  it("removes transcript rows belonging to cancelled meetings", () => {
+    // Pre-fix, syncTranscripts had no isCancelled guard, so cancelled
+    // occurrences got the recurring series' transcripts attached.
+    const db = freshDb();
+    insertEvent(db, { eventId: "evt-cancelled", onlineMeetingUrl: JOIN_URL });
+    db.prepare("UPDATE events SET is_cancelled = 1 WHERE event_id = 'evt-cancelled'").run();
+    insertTranscript(db, {
+      eventId: "evt-cancelled",
+      transcriptId: "tr-series",
+      status: "ok",
+    });
+
+    const result = repairTranscriptLinkage(db);
+
+    expect(result.cancelledTranscriptsRemoved).toBe(1);
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM transcripts").get() as { n: number }).n,
+    ).toBe(0);
+  });
+
+  it("leaves transcripts for meetings that are not cancelled", () => {
+    const db = freshDb();
+    insertEvent(db, { eventId: "evt-live", onlineMeetingUrl: JOIN_URL });
+    insertTranscript(db, {
+      eventId: "evt-live",
+      transcriptId: "tr-real",
+      status: "ok",
+    });
+
+    const result = repairTranscriptLinkage(db);
+
+    expect(result.cancelledTranscriptsRemoved).toBe(0);
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM transcripts").get() as { n: number }).n,
+    ).toBe(1);
+  });
+
   it("dry-run reports counts without writing", () => {
     const db = freshDb();
     insertEvent(db, { eventId: "evt-1", onlineMeetingUrl: JOIN_URL, chatId: null });
@@ -135,15 +172,23 @@ describe("repairTranscriptLinkage", () => {
       status: "not-available",
     });
 
+    db.prepare("UPDATE events SET is_cancelled = 1 WHERE event_id = 'evt-1'").run();
+    insertTranscript(db, {
+      eventId: "evt-1",
+      transcriptId: "tr-series",
+      status: "ok",
+    });
+
     const result = repairTranscriptLinkage(db, { dryRun: true });
 
     expect(result.markersCleared).toBe(1);
     expect(result.chatIdsBackfilled).toBe(1);
+    expect(result.cancelledTranscriptsRemoved).toBe(1);
     // ...but the lake is untouched.
     const transcripts = db
       .prepare("SELECT COUNT(*) AS n FROM transcripts")
       .get() as { n: number };
-    expect(transcripts.n).toBe(1);
+    expect(transcripts.n).toBe(2);
     const row = db
       .prepare("SELECT chat_id FROM events WHERE event_id = 'evt-1'")
       .get() as { chat_id: string | null };

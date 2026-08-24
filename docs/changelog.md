@@ -11,6 +11,39 @@ skill.
 
 ---
 
+## 2026-08-24
+
+- **Meeting transcripts are live.** After the ifacto tenant admin enabled
+  Graph transcript access, sync started fetching immediately: 12
+  transcripts / ~6,400 segments across 9 meetings, with speaker
+  attribution intact (the `<v Speaker>` VTT parsing works against real
+  data). Ticks steady at `25 ok, 0 error(s)`. The 148 `not-available`
+  rows are meetings that genuinely weren't recorded — marked once, never
+  retried.
+- Confirmed the ingestion boundary while answering a privacy question:
+  candidates come **only** from `/me/calendarView/delta` (your own
+  calendar, delegated token), then Graph independently enforces its own
+  entitlement check. There is no tenant-wide sweep; reading other
+  people's meetings would need app-only permissions plus an application
+  access policy, which this project deliberately doesn't use.
+- Fixed: cancelled meetings were being ingested (2 of the first 12
+  fetched transcripts). Graph returns a recurring series' transcripts
+  even for an occurrence that was called off, so
+  [sync-transcripts.ts](../src/sync/sync-transcripts.ts) now skips
+  `isCancelled` events. `--repair-transcript-linkage` gained a third
+  operation to delete transcripts (and their segments) already attached
+  to cancelled meetings; its counter deliberately excludes marker rows so
+  it stays disjoint from `markersCleared`.
+- Known limitation, not yet addressed: recurring-series meetings get the
+  same series transcripts attributed to several occurrence dates (six
+  "Dev Lead Meeting" rows share an identical 211/497 segment split), so
+  "what was said on date X" is unreliable for recurring meetings.
+  Deliberately not patched blind — needs real data across more
+  occurrences before designing a fix.
+- Also noted: `event_attendees` carries no row for the signed-in user, so
+  filtering by your own RSVP (e.g. "skip meetings I declined") isn't
+  possible today without changing calendar sync first.
+
 ## 2026-08-20
 
 - **Fixed the bug that made meeting transcripts unreachable in

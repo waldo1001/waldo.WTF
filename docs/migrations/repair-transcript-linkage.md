@@ -19,7 +19,13 @@ production lake:
    marker row. `not-available` is deliberately never retried, so those
    markers would suppress a correct re-check *forever* once the code fix
    lands. They must be deleted.
-2. **NULL `chat_id` on ~470 events.** Slice 5 read
+2. **Transcripts on cancelled meetings.** `syncTranscripts` had no
+   `isCancelled` guard, and Graph returns a recurring series' transcripts
+   even for an occurrence that was called off — so the lake ended up with
+   transcripts describing meetings that never happened. Fixed in the sync
+   path 2026-08-24; this recipe removes the rows already written (and
+   their segments).
+3. **NULL `chat_id` on ~470 events.** Slice 5 read
    `onlineMeeting.chatInfo.threadId`, which Graph omits on nearly every
    calendarView event, so `get_event.linkedChat` was null almost
    everywhere. The joinUrl embeds the chat thread id and is reliably

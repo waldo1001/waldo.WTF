@@ -129,6 +129,10 @@ export async function syncTranscripts(
     // transcript API when present. The joinUrl is reliably populated and
     // resolves to a real onlineMeeting id below.
     if (event.onlineMeetingUrl === undefined) continue;
+    // A cancelled occurrence never happened, but Graph still returns the
+    // recurring series' transcripts against it — which then shows up as
+    // "what was said in the meeting that was called off". Skip it.
+    if (event.isCancelled) continue;
     if (event.endAt.getTime() >= now.getTime()) continue;
     const rows = await store.listTranscriptsForEvent(
       account.username,

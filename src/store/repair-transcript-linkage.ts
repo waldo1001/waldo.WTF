@@ -16,6 +16,7 @@ export interface RepairTranscriptLinkageResult {
   readonly markersCleared: number;
   readonly chatIdsBackfilled: number;
   readonly chatIdsSkipped: number;
+  readonly cancelledTranscriptsRemoved: number;
 }
 
 /**
@@ -29,6 +30,10 @@ export interface RepairTranscriptLinkageResult {
  *    the next tick re-check with a properly resolved meeting id.
  * 2. `events.chat_id` is NULL wherever Graph omitted `onlineMeeting.chatInfo`
  *    (almost everywhere). It is derivable from the stored joinUrl.
+ * 3. Transcripts attached to CANCELLED meetings: syncTranscripts had no
+ *    isCancelled guard, and Graph hands back a recurring series'
+ *    transcripts even for an occurrence that was called off, so those rows
+ *    describe a meeting that never happened.
  */
 export function repairTranscriptLinkage(
   db: Database,
@@ -53,6 +58,19 @@ export function repairTranscriptLinkage(
     online_meeting_url: string;
   }[];
 
+  // Excludes marker rows so this count and `markersCleared` stay disjoint
+  // — a cancelled event can carry both, and reporting it under two
+  // headings would overstate what was removed.
+  const cancelled = db
+    .prepare(
+      `SELECT COUNT(*) AS n
+       FROM transcripts t
+       JOIN events e ON e.account = t.account AND e.event_id = t.event_id
+       WHERE e.is_cancelled = 1 AND t.transcript_id != ?`,
+    )
+    .get(NO_TRANSCRIPT_FOUND_MARKER) as { n: number };
+  const cancelledTranscriptsRemoved = cancelled.n;
+
   const derivable: { account: string; eventId: string; chatId: string }[] = [];
   let chatIdsSkipped = 0;
   for (const row of candidates) {
@@ -71,11 +89,28 @@ export function repairTranscriptLinkage(
     const setChatId = db.prepare(
       "UPDATE events SET chat_id = ? WHERE account = ? AND event_id = ?",
     );
+    // transcript_segments FK-cascades off transcripts, but not every
+    // connection in this codebase enables PRAGMA foreign_keys, so delete
+    // the children explicitly (same reasoning as deleteEvents).
+    const dropCancelledSegments = db.prepare(
+      `DELETE FROM transcript_segments
+       WHERE (account, event_id) IN (
+         SELECT account, event_id FROM events WHERE is_cancelled = 1
+       )`,
+    );
+    const dropCancelledTranscripts = db.prepare(
+      `DELETE FROM transcripts
+       WHERE (account, event_id) IN (
+         SELECT account, event_id FROM events WHERE is_cancelled = 1
+       )`,
+    );
     db.transaction(() => {
       clearMarkers.run(NO_TRANSCRIPT_FOUND_MARKER);
       for (const d of derivable) {
         setChatId.run(d.chatId, d.account, d.eventId);
       }
+      dropCancelledSegments.run();
+      dropCancelledTranscripts.run();
     })();
   }
 
@@ -83,5 +118,6 @@ export function repairTranscriptLinkage(
     markersCleared,
     chatIdsBackfilled: derivable.length,
     chatIdsSkipped,
+    cancelledTranscriptsRemoved,
   };
 }

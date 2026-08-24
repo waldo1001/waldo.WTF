@@ -83,6 +83,7 @@ export interface RepairTranscriptLinkageResult {
   readonly markersCleared: number;
   readonly chatIdsBackfilled: number;
   readonly chatIdsSkipped: number;
+  readonly cancelledTranscriptsRemoved: number;
 }
 
 export type RepairTranscriptLinkageImpl = (
@@ -253,6 +254,7 @@ export type RunCliResult =
       readonly markersCleared: number;
       readonly chatIdsBackfilled: number;
       readonly chatIdsSkipped: number;
+      readonly cancelledTranscriptsRemoved: number;
     }
   | {
       readonly mode: "import-whatsapp";
@@ -2065,13 +2067,14 @@ export async function runCli(
     const dryRun = parsed.boolean.has("--dry-run");
     const result = await impl(config.dbPath, { dryRun });
     print(
-      `repair-transcript-linkage ${dryRun ? "(dry-run) " : ""}complete: ${result.markersCleared} bogus marker(s) cleared, ${result.chatIdsBackfilled} chat_id(s) backfilled, ${result.chatIdsSkipped} skipped`,
+      `repair-transcript-linkage ${dryRun ? "(dry-run) " : ""}complete: ${result.markersCleared} bogus marker(s) cleared, ${result.chatIdsBackfilled} chat_id(s) backfilled, ${result.chatIdsSkipped} skipped, ${result.cancelledTranscriptsRemoved} cancelled-meeting transcript(s) removed`,
     );
     return {
       mode: "repair-transcript-linkage",
       markersCleared: result.markersCleared,
       chatIdsBackfilled: result.chatIdsBackfilled,
       chatIdsSkipped: result.chatIdsSkipped,
+      cancelledTranscriptsRemoved: result.cancelledTranscriptsRemoved,
     };
   }
   if (parsed.boolean.has("--backfill-bodies")) {
