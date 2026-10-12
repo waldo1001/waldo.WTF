@@ -40,6 +40,41 @@ export interface OAuthTokenPair {
   readonly accessExpiresAt: Date;
   readonly refreshExpiresAt: Date;
   readonly createdAt: Date;
+  /** Start of the consent this pair descends from; caps its total lifetime. */
+  readonly grantCreatedAt: Date;
+}
+
+/**
+ * What the store returns for a token lookup. Deliberately carries no token
+ * values: the store keeps only their hashes, so it cannot return them.
+ */
+export interface OAuthGrant {
+  readonly clientId: string;
+  readonly scope: string;
+  readonly accessExpiresAt: Date;
+  readonly refreshExpiresAt: Date;
+  readonly createdAt: Date;
+  readonly grantCreatedAt: Date;
+}
+
+export interface RefreshRequest {
+  readonly refreshToken: string;
+  readonly now: Date;
+  readonly newAccessToken: string;
+  readonly accessTtlMs: number;
+  readonly refreshTtlMs: number;
+  /** Absolute cap measured from grantCreatedAt; sliding never extends past it. */
+  readonly maxGrantMs: number;
+  /** When given and different from the grant's client, behaves like an unknown token. */
+  readonly expectedClientId?: string;
+}
+
+export interface OAuthClientStats {
+  readonly client: OAuthClientRecord;
+  /** Grants whose refresh token has not expired. */
+  readonly activeGrants: number;
+  /** Most recent grantCreatedAt among the client's tokens, if any. */
+  readonly lastGrantAt?: Date;
 }
 
 export interface AuthStore {
@@ -52,6 +87,10 @@ export interface AuthStore {
    * tokens (abandoned DCR registrations). Returns the number deleted.
    */
   pruneUnusedClients(olderThan: Date): Promise<number>;
+  /** Operator view (CLI): per client, how many grants are still refreshable at `now`. */
+  listClientsWithStats(now: Date): Promise<readonly OAuthClientStats[]>;
+  /** Deletes the client and all its tokens and codes. False if it did not exist. */
+  revokeClient(clientId: string): Promise<boolean>;
 
   /** Also deletes codes already expired at `record.createdAt`. */
   saveAuthCode(record: OAuthAuthCodeRecord): Promise<void>;
@@ -60,26 +99,14 @@ export interface AuthStore {
     now: Date,
   ): Promise<OAuthAuthCodeRecord | undefined>;
 
+  /** Also deletes token rows whose refresh expiry is at or before `pair.createdAt`. */
   saveTokenPair(pair: OAuthTokenPair): Promise<void>;
-  getAccessToken(
-    accessToken: string,
-    now: Date,
-  ): Promise<OAuthTokenPair | undefined>;
+  getAccessToken(accessToken: string, now: Date): Promise<OAuthGrant | undefined>;
   /**
-   * Non-rotating refresh: if `refreshToken` exists and has not passed its
-   * refresh expiry at `now`, replace its access token with `newAccessToken`
-   * (the old access token stops validating), slide `accessExpiresAt` and
-   * `refreshExpiresAt`, and keep the SAME refresh token. Returns the updated
-   * pair, or `undefined` for an unknown/expired refresh token (leaving the
-   * stored row untouched in that case). When `expectedClientId` is given and
-   * differs from the grant's client, behaves like an unknown token.
+   * Non-rotating refresh: replaces the access token (the old one stops
+   * validating), keeps the SAME refresh token, and slides both expiries by
+   * their TTLs — clamped to grantCreatedAt + maxGrantMs. Returns undefined
+   * (row untouched) for an unknown, expired, wrong-client or past-cap grant.
    */
-  refreshAccessToken(
-    refreshToken: string,
-    now: Date,
-    newAccessToken: string,
-    accessExpiresAt: Date,
-    refreshExpiresAt: Date,
-    expectedClientId?: string,
-  ): Promise<OAuthTokenPair | undefined>;
+  refreshAccessToken(req: RefreshRequest): Promise<OAuthGrant | undefined>;
 }

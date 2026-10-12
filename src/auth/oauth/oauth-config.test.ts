@@ -146,4 +146,26 @@ describe("loadOAuthConfig", () => {
       ).toThrow(OAuthConfigError);
     }
   });
+
+  it("maxGrantDays defaults to 180", () => {
+    expect(loadOAuthConfig({ WALDO_PUBLIC_URL: "https://nas.example.ts.net" }).maxGrantDays).toBe(180);
+  });
+
+  it("WALDO_OAUTH_MAX_GRANT_DAYS overrides maxGrantDays and must be a positive integer", () => {
+    expect(
+      loadOAuthConfig({
+        WALDO_PUBLIC_URL: "https://nas.example.ts.net",
+        WALDO_OAUTH_MAX_GRANT_DAYS: "90",
+      }).maxGrantDays,
+    ).toBe(90);
+    for (const bad of ["0", "x", "-3", "2.5"]) {
+      expect(() =>
+        loadOAuthConfig({
+          WALDO_PUBLIC_URL: "https://nas.example.ts.net",
+          WALDO_OAUTH_MAX_GRANT_DAYS: bad,
+        }),
+      ).toThrow(OAuthConfigError);
+    }
+  });
 });
+

@@ -1,6 +1,6 @@
 # Security hardening — umbrella plan
 
-Status: **PROPOSED — awaiting approval.** No FRAME, RED or code until approved.
+Status: **DONE 2026-10-12** — S1–S4 committed on `security/hardening`; not deployed (operator steps below).
 Branch: `security/hardening` (no deploy; stop when green + `/local-smoke` + committed).
 
 ## Why
@@ -52,10 +52,10 @@ are consent phishing (#1) and a leaked bearer (#2), so those go first.
 
 | Slice | Sub-plan | Covers | Why this order |
 |---|---|---|---|
-| S1 | [done/security-hardening-s1-oauth-flow-integrity.md](done/security-hardening-s1-oauth-flow-integrity.md) ✅ | #1, #5a/b/c | The only realistic remote takeover path. #5 is folded in because it touches the same handlers and pages. A separate slice would churn the same files twice. |
-| S2 | [done/security-hardening-s2-static-bearer-off-public-path.md](done/security-hardening-s2-static-bearer-off-public-path.md) ✅ | #2 | Removes the non-expiring credential from the internet. Needs a coordinated Jarvis env change. |
-| S3 | [done/security-hardening-s3-abuse-limits.md](done/security-hardening-s3-abuse-limits.md) ✅ | #3 + new crash finding | DoS / resource exhaustion |
-| S4 | [security-hardening-s4-token-storage-lifetime.md](security-hardening-s4-token-storage-lifetime.md) | #4 + revoke CLI | Schema migration; the riskiest change, so it goes last when everything else is green |
+| S1 | [security-hardening-s1-oauth-flow-integrity.md](security-hardening-s1-oauth-flow-integrity.md) ✅ | #1, #5a/b/c | The only realistic remote takeover path. #5 is folded in because it touches the same handlers and pages. A separate slice would churn the same files twice. |
+| S2 | [security-hardening-s2-static-bearer-off-public-path.md](security-hardening-s2-static-bearer-off-public-path.md) ✅ | #2 | Removes the non-expiring credential from the internet. Needs a coordinated Jarvis env change. |
+| S3 | [security-hardening-s3-abuse-limits.md](security-hardening-s3-abuse-limits.md) ✅ | #3 + new crash finding | DoS / resource exhaustion |
+| S4 | [security-hardening-s4-token-storage-lifetime.md](security-hardening-s4-token-storage-lifetime.md) ✅ | #4 + revoke CLI | Schema migration; the riskiest change, so it goes last when everything else is green |
 | — | (docs, inside each slice's `/docs-update`) | #6 | Not a code slice |
 
 Each slice: FRAME → RED → … → COVER (≥90%) → `/security-scan` → `/docs-update` → REVIEW → commit on the branch.
@@ -81,8 +81,12 @@ Order matters. The internal listener only exists after the deploy, so Jarvis
 switches **right after** it (Jarvis misses at most one sweep, and fails loudly
 rather than silently, per Jarvis spec 605):
 
+0. **Backup first** (the v20 migration hashes tokens one-way):
+   `sudo launchctl kickstart system/com.waldo.wtf.backup` and wait for `backup.log`.
 1. **waldo.WTF `.env`**: add `WALDO_INTERNAL_PORT=8766` (check `lsof -i :8766` is free first).
-2. **Deploy** with `/deploy-local` (it runs the S4 migration via `--migrate oauth-token-hashing`).
+   Optional: `WALDO_OAUTH_MAX_GRANT_DAYS` (default 180), `WALDO_OAUTH_MAX_CLIENTS` (default 50).
+2. **Deploy** with `/deploy-local`. The S4 schema migration (v19 → v20) runs **automatically
+   at boot**; pre/post-verify in [oauth-token-hashing](../../migrations/oauth-token-hashing.md).
    Log shows `internal MCP listener (static bearer only) on http://127.0.0.1:8766`.
    **Then Jarvis** (`.env.jarvis` on the Mac mini): set
    `JARVIS_WTF_MCP_URL=http://127.0.0.1:8766/mcp` and restart it via pm2.
@@ -90,18 +94,21 @@ rather than silently, per Jarvis spec 605):
    - `BEARER_TOKEN=$(openssl rand -hex 32)`, and put the same value in Jarvis's `JARVIS_WTF_MCP_TOKEN`
    - `WALDO_ADMIN_PASSWORD=$(openssl rand -hex 24)`
    - `sudo launchctl kickstart -k system/com.waldo.wtf.server`, then `pm2 restart` the Jarvis processes
-4. **Revoke strays**: `--list-oauth-clients` → `--revoke-oauth-client <id>` for anything
-   not yours, especially any client whose redirect URI isn't on the allowlist.
-5. **Clients**:
-   - claude.ai web / mobile / Desktop: **no action expected.** S4 hashes existing
-     tokens in place, and S1 keeps claude.ai's callback on the allowlist. If tools
-     error, use the remove/re-add flow in `docs/oauth.md §6.1` once on claude.ai;
-     it covers all three.
-   - Claude Code (Jarvis repo): `/mcp` → re-authenticate if prompted.
-   - The **admin-password rotation** doesn't invalidate tokens. Revoking a client does.
-6. **Verify**: `curl https://<host>.ts.net/health` → 200; `/mcp` without auth → 401;
+4. **Clients (one action, recommended):** the connector keeps working after deploy
+   (tokens are hashed in place), but pre-S4 NAS backups still contain those same
+   tokens in plaintext. Make them useless:
+   - `npx tsx src/cli.ts --list-oauth-clients` → note the current client id(s).
+   - claude.ai → Settings → Connectors → **remove and re-add** waldo-wtf, approve
+     the consent (now showing "sent to: https://claude.ai"). This one consent
+     covers claude.ai web, Claude mobile **and** Claude Desktop (all use the same
+     connector). Desktop: quit with Cmd+Q and relaunch afterwards ([oauth.md §6.1](../../oauth.md)).
+   - `--revoke-oauth-client <old id>` for the old registration(s) and anything else you
+     don't recognise (especially a redirect host that isn't claude.ai/claude.com/loopback).
+   - Claude Code in the Jarvis repo: `/mcp` → re-authenticate if prompted.
+   - From then on: re-add the connector about every 180 days (the grant cap).
+5. **Verify**: `curl https://<host>.ts.net/health` → 200; `/mcp` without auth → 401;
    `/mcp` with the **static bearer** over the ts.net URL → **401** (proves S2);
-   Jarvis sweep succeeds.
+   a Jarvis sweep succeeds; a tool call from your phone works.
 
 ## Out of scope
 

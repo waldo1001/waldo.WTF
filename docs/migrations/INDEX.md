@@ -22,6 +22,7 @@ remove an obsolete recipe — mark its `Status` as `obsolete` or
 | [body-backfill](body-backfill.md) | 2026-04-15 | active | Derives plain `body` from `body_html` in place + rebuilds FTS5 so mail content is searchable. Schema v5 → v6 marker. |
 | [whatsapp-rethread](whatsapp-rethread.md) | 2026-04-21 | active | Heals bifurcated WhatsApp threads by normalizing `thread_id`, rewriting `thread_name` (latest-imported wins), and recomputing message `id` on the normalized chat. No schema change. |
 | [repair-transcript-linkage](repair-transcript-linkage.md) | 2026-08-20 | active | Clears the false `__no-transcript-found__` markers left by the conferenceId bug (they would suppress re-checks forever) and backfills `events.chat_id` from the stored joinUrl. Data-only, no schema bump. |
+| [oauth-token-hashing](oauth-token-hashing.md) | 2026-10-12 | active | Schema v19 → v20. Hashes OAuth access/refresh tokens + auth codes in place (SHA-256) and adds `grant_created_at` for the 180-day grant cap. Runs automatically at boot; recipe covers backup, pre/post-verify, the one-time connector re-add, and rollback. |
 | [sent-items-schema](sent-items-schema.md) | 2026-04-21 | active | Schema v10 → v11. Adds `messages.from_me` and widens `sync_state` PK to `(account, source, folder)` so Outlook Sent Items tracks its own delta cursor. Runs automatically at boot; recipe documents pre/post-verify and rollback. |
 
 ## Obsolete / deprecated

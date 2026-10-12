@@ -15,6 +15,7 @@ This document covers setting up the OAuth 2.1 surface so claude.ai or Claude mob
 | `WALDO_DISABLE_STATIC_BEARER` | Optional | `true` = don't start the internal listener, i.e. no static-bearer access at all. |
 | `WALDO_OAUTH_REDIRECT_ALLOWLIST` | Optional | Comma-separated https callback URIs a client may register/use. See §1.1. |
 | `WALDO_OAUTH_MAX_CLIENTS` | Optional | Max registered clients (default 50). See §1.2. |
+| `WALDO_OAUTH_MAX_GRANT_DAYS` | Optional | Absolute lifetime of a consent in days (default 180); refresh never extends past it. See §5.1. |
 
 Add to `.env` (or the container environment):
 
@@ -183,7 +184,7 @@ curl -s -X POST https://waldo-nas.your-tailnet.ts.net/oauth/token \
   -d "refresh_token=<refresh_token>" | jq .
 ```
 
-Refresh is **non-rotating**: the same refresh token is reused, a fresh access token is minted (the previous access token stops validating), and the refresh token's 30-day expiry slides forward. The refresh token therefore stays valid for retries — a lost refresh response no longer bricks the client. An unknown or already-expired refresh token returns `400 invalid_grant` and leaves stored state untouched.
+Refresh is **non-rotating**: the same refresh token is reused, a fresh access token is minted (the previous access token stops validating), and the refresh token's 30-day expiry slides forward — capped at `WALDO_OAUTH_MAX_GRANT_DAYS` (default 180) after the original consent (§5.1). The refresh token therefore stays valid for retries — a lost refresh response no longer bricks the client. An unknown or already-expired refresh token returns `400 invalid_grant` and leaves stored state untouched.
 
 ---
 
@@ -201,44 +202,45 @@ Refresh is **non-rotating**: the same refresh token is reused, a fresh access to
 
 Set a new `WALDO_ADMIN_PASSWORD` in `.env` (or the container environment) and restart the server.
 
-- The password is hashed at startup (scrypt N=16384); old tokens remain valid until they expire (access: 24 h, refresh: 30 days).
+- The password is hashed at startup (scrypt N=16384); old tokens remain valid until they expire (access: 24 h, refresh: 30 days sliding, max 180 days per grant).
 - Existing clients do not need to re-register — they just re-authorize next time their access token expires.
 - If you want to force all clients to re-authorize immediately, see §5.
 
 ---
 
-## 5. Client revocation (manual)
+## 5. Listing and revoking clients
 
-The CLI `--list-oauth-clients` / `--revoke-oauth-client` subcommands are deferred. In the meantime, use SQLite directly.
-
-**List registered clients**
-
-```bash
-sqlite3 data/lake.db \
-  "SELECT client_id, client_name, created_at FROM oauth_clients ORDER BY created_at;"
-```
-
-**List active tokens**
+Run on the server host (the CLI opens `lake.db` directly; safe alongside the
+running daemon thanks to WAL):
 
 ```bash
-sqlite3 data/lake.db \
-  "SELECT client_id, access_token, access_expires_at FROM oauth_access_tokens;"
+npx tsx src/cli.ts --list-oauth-clients
+# c-1a2b…  name=Claude  redirect=https://claude.ai  created=2026-06-22T…  active_grants=1  last_grant=2026-06-22T…
+# c-3c4d…  name=-       redirect=http://127.0.0.1:53682  created=…  active_grants=0  last_grant=never
+
+npx tsx src/cli.ts --revoke-oauth-client <client_id>
+# revoked OAuth client <client_id> (its tokens and codes are deleted)
 ```
 
-**Revoke a single client** (deletes the client registration; any existing access/refresh tokens are left to expire naturally)
+- `active_grants` counts grants whose refresh token is still valid;
+  `last_grant` is when the newest consent happened. Token values are never
+  printed (the store only has their hashes).
+- Revoking deletes the client **and** its tokens and pending codes in one
+  transaction; its access token is rejected (`401`) on the next request.
+- Revoke anything you don't recognise, especially clients whose `redirect`
+  host is not claude.ai / claude.com / your own loopback.
 
-```bash
-# Stop server first, or use WAL mode's locking
-sqlite3 data/lake.db \
-  "DELETE FROM oauth_clients WHERE client_id = '<id>';"
-```
+## 5.1. Token storage and lifetime
 
-**Revoke all tokens for a client**
-
-```bash
-sqlite3 data/lake.db \
-  "DELETE FROM oauth_access_tokens WHERE client_id = '<id>';"
-```
+- Access tokens, refresh tokens and auth codes are stored as **SHA-256
+  hashes** (schema v20, [migration recipe](migrations/oauth-token-hashing.md)).
+  A copy of `lake.db` holds no usable credential.
+- Access token: 24 h. Refresh token: 30 days, sliding on each refresh, but
+  **never past `WALDO_OAUTH_MAX_GRANT_DAYS` (default 180) after the original
+  consent**. After that the client must go through the consent page again
+  (remove/re-add the connector, §6.1). `expires_in` is shortened accordingly
+  near the cap.
+- Rows whose refresh token has expired are pruned automatically.
 
 ---
 
@@ -258,6 +260,7 @@ sqlite3 data/lake.db \
 | `redirect_uri_mismatch` on register | Supplied `redirect_uri` not in client's registered list | Re-register or fix the redirect URI |
 | `POST /oauth/register` → 503 `temporarily_unavailable` | Client cap reached (§1.2) | Revoke unused clients (§5) or raise `WALDO_OAUTH_MAX_CLIENTS` |
 | OAuth route → 429 `rate_limited` | Too many attempts from one IP or globally (§1.2) | Wait `Retry-After` seconds; repeated 429s on authorize mean someone is guessing the admin password — check the log |
+| Connector stops working ~180 days after it was added; token endpoint → `invalid_grant` | Absolute grant lifetime reached (§5.1) | Remove and re-add the connector (§6.1) |
 | OAuth route → 413 | Body over 64 KB | Client bug or abuse; legitimate clients send < 2 KB |
 | `POST /oauth/register` → 400 `invalid_redirect_uri` | Callback not on the allowlist (§1.1) | Check the `oauth_dcr_redirect_rejected` log line; add the URI to `WALDO_OAUTH_REDIRECT_ALLOWLIST` if legitimate |
 | Consent page → 400 "redirect_uri is not registered for this client or not allowed" | Client registered before the allowlist with a callback that is no longer allowed | Remove/re-add the connector (fresh DCR) |

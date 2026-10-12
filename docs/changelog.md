@@ -13,7 +13,7 @@ skill.
 
 ## 2026-10-12
 
-- **Security hardening S1 — OAuth flow integrity** ([plan](plans/done/security-hardening-s1-oauth-flow-integrity.md), umbrella [security-hardening.md](plans/security-hardening.md)). Production is reachable via Tailscale **Funnel**, so consent phishing was a live path: DCR accepted any https callback and the consent POST minted a code for whatever it was sent.
+- **Security hardening S1 — OAuth flow integrity** ([plan](plans/done/security-hardening-s1-oauth-flow-integrity.md), umbrella [security-hardening.md](plans/done/security-hardening.md)). Production is reachable via Tailscale **Funnel**, so consent phishing was a live path: DCR accepted any https callback and the consent POST minted a code for whatever it was sent.
 - DCR now only accepts redirect URIs on an allowlist (`WALDO_OAUTH_REDIRECT_ALLOWLIST`, default claude.ai + claude.com callbacks) plus http loopback for Claude Desktop / Claude Code; `client_name` is capped at 64 chars. Rejections log `oauth_dcr_redirect_rejected` so a new legitimate callback is easy to spot.
 - `GET` and `POST /oauth/authorize` share one validator (client exists, redirect registered **and** allowlisted, S256, well-formed challenge); the POST validates before the scrypt password check. Clients registered earlier with non-allowlisted callbacks are now refused at authorize time.
 - The consent page shows the destination host prominently and labels the client name as self-declared; error pages no longer reflect submitted input; HTML responses carry `X-Frame-Options: DENY`, a strict CSP with `frame-ancestors 'none'`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`. OAuth JSON responses are `no-store`.
@@ -26,6 +26,10 @@ skill.
 - OAuth endpoints are rate-limited per client IP and globally (register 10/h, authorize POST 10/min — checked **before** scrypt — token 60/min) → `429` + `Retry-After`. Behind Funnel the client IP is the left-most `X-Forwarded-For`, trusted only when the socket peer is loopback ([client-ip.ts](../src/mcp/client-ip.ts)).
 - New `WALDO_OAUTH_MAX_CLIENTS` (default 50) caps DCR registrations; clients unused for 24 h are pruned first, otherwise `503 temporarily_unavailable`. Expired auth codes are pruned on every save.
 - Fixed: any error inside an HTTP route (e.g. a duplicate client id or a SQLite error) was an unhandled promise rejection that could hang the request or kill the process. Every route now runs through `runSafely` → logged `http_handler_failed` + `500`.
+- **Security hardening S4 — token storage and lifetime** ([plan](plans/done/security-hardening-s4-token-storage-lifetime.md)). Schema v20 stores OAuth access/refresh tokens and auth codes as SHA-256 hashes, hashing existing rows **in place** at boot so live connectors keep working ([migration recipe](migrations/oauth-token-hashing.md)).
+- Sliding refresh is now capped at `WALDO_OAUTH_MAX_GRANT_DAYS` (default 180) after the original consent; `expires_in` is clamped near the cap and expired token rows are pruned. Store lookups return grant metadata only — never token values.
+- New CLI: `--list-oauth-clients` (redirect host, active grants, last consent; no secrets) and `--revoke-oauth-client <id>` (deletes the client with its tokens and codes) — replaces the raw-SQL recipe in [oauth.md §5](oauth.md).
+- Security hardening complete (S1–S4, [umbrella plan](plans/done/security-hardening.md)); branch `security/hardening`, not yet deployed.
 - Docs: [deploy-macmini.md](deploy-macmini.md) corrected — production is exposed via **Funnel**, not tailnet-only Serve; `/deploy-local` now re-asserts Funnel. Full tailnet hostnames in docs replaced with `<host>.<tailnet>.ts.net` placeholders.
 
 ## 2026-08-24

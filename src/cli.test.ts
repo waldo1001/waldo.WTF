@@ -38,6 +38,7 @@ import { AuthError, type AccessToken, type Account } from "./auth/types.js";
 import { SqliteSteeringStore } from "./store/steering-store.js";
 import type { AddSteeringRuleInput, SteeringRule } from "./store/types.js";
 import { FakeClock } from "./testing/fake-clock.js";
+import { InMemoryAuthStore } from "./testing/in-memory-auth-store.js";
 import { YAMMER_SCOPE } from "./auth/msal-auth-client.js";
 import { InMemoryFileSystem } from "./testing/in-memory-file-system.js";
 import { InMemoryCalendarAccountStore } from "./testing/in-memory-calendar-account-store.js";
@@ -3931,5 +3932,97 @@ describe("realTeams (default Teams Channels impl wired in cli.ts)", () => {
       expect(urls).toHaveLength(1);
       expect(urls[0]?.tenantId).toBe("tenant-shared");
     });
+  });
+});
+
+describe("runCli OAuth client admin (--list-oauth-clients / --revoke-oauth-client)", () => {
+  const NOW = new Date("2026-04-20T00:00:00Z");
+
+  const seeded = async (): Promise<InMemoryAuthStore> => {
+    const store = new InMemoryAuthStore();
+    await store.registerClient({
+      clientId: "c-claude",
+      clientName: "Claude",
+      redirectUris: ["https://claude.ai/api/mcp/auth_callback"],
+      createdAt: new Date("2026-04-01T00:00:00Z"),
+    });
+    await store.registerClient({
+      clientId: "c-desktop",
+      redirectUris: ["http://127.0.0.1:53682/callback"],
+      createdAt: new Date("2026-04-02T00:00:00Z"),
+    });
+    await store.saveTokenPair({
+      accessToken: "secret-at",
+      refreshToken: "secret-rt",
+      clientId: "c-claude",
+      scope: "mcp",
+      accessExpiresAt: new Date("2026-04-21T00:00:00Z"),
+      refreshExpiresAt: new Date("2026-05-20T00:00:00Z"),
+      createdAt: new Date("2026-04-05T00:00:00Z"),
+      grantCreatedAt: new Date("2026-04-05T00:00:00Z"),
+    });
+    return store;
+  };
+
+  const run = async (argv: string[], authStore: InMemoryAuthStore) => {
+    const lines: string[] = [];
+    const result = await runCli(argv, {
+      env: ENV,
+      loadDotenv: false,
+      print: (m) => lines.push(m),
+      clock: new FakeClock(NOW),
+      authStore,
+    });
+    return { result, lines };
+  };
+
+  it("--list-oauth-clients prints one line per client with redirect host, active grants and last grant — never token values", async () => {
+    const { result, lines } = await run(["--list-oauth-clients"], await seeded());
+    expect(result.mode).toBe("oauth-clients");
+    expect(lines).toEqual([
+      "c-claude  name=Claude  redirect=https://claude.ai  created=2026-04-01T00:00:00.000Z  active_grants=1  last_grant=2026-04-05T00:00:00.000Z",
+      "c-desktop  name=-  redirect=http://127.0.0.1:53682  created=2026-04-02T00:00:00.000Z  active_grants=0  last_grant=never",
+    ]);
+    expect(lines.join("\n")).not.toContain("secret-");
+  });
+
+  it("--list-oauth-clients shows '?' for an unparsable redirect and '-' for none, and dedupes origins", async () => {
+    const store = new InMemoryAuthStore();
+    await store.registerClient({
+      clientId: "odd",
+      redirectUris: ["not a url", "http://localhost:1/a", "http://localhost:1/b"],
+      createdAt: NOW,
+    });
+    await store.registerClient({ clientId: "none", redirectUris: [], createdAt: NOW });
+    const { lines } = await run(["--list-oauth-clients"], store);
+    // same createdAt → ordered by client id: "none" before "odd"
+    expect(lines[0]).toContain("redirect=-  ");
+    expect(lines[1]).toContain("redirect=?,http://localhost:1  ");
+  });
+
+  it("--list-oauth-clients on an empty store says so", async () => {
+    const { lines } = await run(["--list-oauth-clients"], new InMemoryAuthStore());
+    expect(lines).toEqual(["no OAuth clients registered"]);
+  });
+
+  it("--revoke-oauth-client <id> deletes the client and its tokens", async () => {
+    const store = await seeded();
+    const { result, lines } = await run(["--revoke-oauth-client", "c-claude"], store);
+    expect(result).toEqual({ mode: "oauth-revoke", clientId: "c-claude" });
+    expect(lines).toEqual(["revoked OAuth client c-claude (its tokens and codes are deleted)"]);
+    expect(await store.getClient("c-claude")).toBeUndefined();
+    expect(await store.getAccessToken("secret-at", NOW)).toBeUndefined();
+  });
+
+  it("--revoke-oauth-client with an unknown id is a usage error", async () => {
+    await expect(
+      run(["--revoke-oauth-client", "nope"], await seeded()),
+    ).rejects.toThrow(/no OAuth client "nope"/);
+  });
+
+  it("--revoke-oauth-client without a value is a usage error", async () => {
+    await expect(run(["--revoke-oauth-client"], await seeded())).rejects.toThrow(
+      /requires a value/,
+    );
   });
 });

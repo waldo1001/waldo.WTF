@@ -13,7 +13,10 @@ export interface OAuthConfig {
   readonly adminPassword?: string;
   readonly redirectAllowlist: readonly string[];
   readonly maxClients: number;
+  readonly maxGrantDays: number;
 }
+
+export const DEFAULT_MAX_GRANT_DAYS = 180;
 
 export const DEFAULT_MAX_OAUTH_CLIENTS = 50;
 
@@ -75,12 +78,14 @@ const parseRedirectAllowlist = (raw: string | undefined): readonly string[] => {
   return entries;
 };
 
-const parseMaxClients = (raw: string | undefined): number => {
-  if (!present(raw)) return DEFAULT_MAX_OAUTH_CLIENTS;
+const parsePositiveIntVar = (
+  name: string,
+  raw: string | undefined,
+  fallback: number,
+): number => {
+  if (!present(raw)) return fallback;
   if (!/^\d+$/.test(raw) || Number(raw) <= 0) {
-    throw new OAuthConfigError(
-      `WALDO_OAUTH_MAX_CLIENTS must be a positive integer, got "${raw}"`,
-    );
+    throw new OAuthConfigError(`${name} must be a positive integer, got "${raw}"`);
   }
   return Number(raw);
 };
@@ -103,7 +108,16 @@ export function loadOAuthConfig(env: Env): OAuthConfig {
     publicUrl,
     disableStaticBearer,
     redirectAllowlist,
-    maxClients: parseMaxClients(env.WALDO_OAUTH_MAX_CLIENTS),
+    maxClients: parsePositiveIntVar(
+      "WALDO_OAUTH_MAX_CLIENTS",
+      env.WALDO_OAUTH_MAX_CLIENTS,
+      DEFAULT_MAX_OAUTH_CLIENTS,
+    ),
+    maxGrantDays: parsePositiveIntVar(
+      "WALDO_OAUTH_MAX_GRANT_DAYS",
+      env.WALDO_OAUTH_MAX_GRANT_DAYS,
+      DEFAULT_MAX_GRANT_DAYS,
+    ),
     ...(adminPassword !== undefined ? { adminPassword } : {}),
   };
 }

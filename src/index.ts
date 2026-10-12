@@ -310,6 +310,7 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
             hasher: scryptPasswordHasher,
             redirectAllowlist: oauthConfig.redirectAllowlist,
             maxClients: oauthConfig.maxClients,
+            maxGrantDays: oauthConfig.maxGrantDays,
             disableStaticBearer: oauthConfig.disableStaticBearer,
           };
         })()

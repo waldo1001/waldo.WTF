@@ -2,6 +2,8 @@
 
 Parent: [security-hardening.md](security-hardening.md)
 
+Status: **DONE 2026-10-12** (branch `security/hardening`). Note: store reads return grant metadata (no token values); migration v20 is automatic at boot (no `--migrate` flag); Stryker could not measure `schema.ts`/`token-hash.ts` (pre-existing better-sqlite3 SIGSEGV under Stryker).
+
 ## Goal
 A copy of `lake.db` (nightly NAS backup) yields no usable tokens. No refresh
 token lives forever. The operator can list and revoke clients without raw SQL.

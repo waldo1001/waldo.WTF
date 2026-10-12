@@ -13,6 +13,8 @@ const makeChallenge = (verifier: string): string =>
 const VERIFIER = "my-pkce-verifier-long-enough-for-rfc7636-minimum-43-chars";
 const CHALLENGE = makeChallenge(VERIFIER);
 const NOW = new Date("2026-04-20T10:00:00Z");
+const DAY_MS = 24 * 3600 * 1000;
+const MAX_GRANT_MS = 180 * DAY_MS;
 const EXPIRES_IN_10 = new Date(NOW.getTime() + 10 * 60 * 1000);
 
 let idCounter = 0;
@@ -47,6 +49,7 @@ describe("handleTokenRequest – authorization_code grant", () => {
       store,
       ids: seqIds,
       clock,
+      maxGrantMs: MAX_GRANT_MS,
       body: {
         grant_type: "authorization_code",
         code: "auth-code-1",
@@ -76,6 +79,7 @@ describe("handleTokenRequest – authorization_code grant", () => {
       store,
       ids: seqIds,
       clock,
+      maxGrantMs: MAX_GRANT_MS,
       body: {
         grant_type: "authorization_code",
         code: "auth-code-1",
@@ -93,6 +97,7 @@ describe("handleTokenRequest – authorization_code grant", () => {
       store,
       ids: seqIds,
       clock,
+      maxGrantMs: MAX_GRANT_MS,
       body: {
         grant_type: "authorization_code",
         code: "no-such-code",
@@ -130,6 +135,7 @@ describe("handleTokenRequest – authorization_code grant", () => {
       store,
       ids: seqIds,
       clock,
+      maxGrantMs: MAX_GRANT_MS,
       body: {
         grant_type: "authorization_code",
         code: "auth-code-1",
@@ -147,6 +153,7 @@ describe("handleTokenRequest – authorization_code grant", () => {
       store,
       ids: seqIds,
       clock,
+      maxGrantMs: MAX_GRANT_MS,
       body: {
         grant_type: "authorization_code",
         code: "auth-code-1",
@@ -159,6 +166,7 @@ describe("handleTokenRequest – authorization_code grant", () => {
       store,
       ids: seqIds,
       clock,
+      maxGrantMs: MAX_GRANT_MS,
       body: {
         grant_type: "authorization_code",
         code: "auth-code-1",
@@ -203,6 +211,7 @@ describe("handleTokenRequest – client binding", () => {
       store,
       ids: seqIds,
       clock,
+      maxGrantMs: MAX_GRANT_MS,
       body: {
         grant_type: "authorization_code",
         code: "auth-code-1",
@@ -237,6 +246,7 @@ describe("handleTokenRequest – client binding", () => {
       store,
       ids: seqIds,
       clock,
+      maxGrantMs: MAX_GRANT_MS,
       body: {
         grant_type: "refresh_token",
         refresh_token: String(issued.body.refresh_token),
@@ -256,6 +266,7 @@ describe("handleTokenRequest – client binding", () => {
       store,
       ids: seqIds,
       clock,
+      maxGrantMs: MAX_GRANT_MS,
       body: {
         grant_type: "refresh_token",
         refresh_token: String(issued.body.refresh_token),
@@ -291,6 +302,7 @@ describe("handleTokenRequest – refresh_token grant", () => {
       store,
       ids: seqIds,
       clock,
+      maxGrantMs: MAX_GRANT_MS,
       body: {
         grant_type: "authorization_code",
         code: "auth-code-1",
@@ -306,6 +318,7 @@ describe("handleTokenRequest – refresh_token grant", () => {
       store,
       ids: seqIds,
       clock,
+      maxGrantMs: MAX_GRANT_MS,
       body: {
         grant_type: "refresh_token",
         refresh_token: "token-2",
@@ -326,6 +339,7 @@ describe("handleTokenRequest – refresh_token grant", () => {
       store,
       ids: seqIds,
       clock,
+      maxGrantMs: MAX_GRANT_MS,
       body: {
         grant_type: "refresh_token",
         refresh_token: "token-2",
@@ -337,6 +351,7 @@ describe("handleTokenRequest – refresh_token grant", () => {
       store,
       ids: seqIds,
       clock,
+      maxGrantMs: MAX_GRANT_MS,
       body: {
         grant_type: "refresh_token",
         refresh_token: "token-2",
@@ -354,6 +369,7 @@ describe("handleTokenRequest – refresh_token grant", () => {
       store,
       ids: seqIds,
       clock,
+      maxGrantMs: MAX_GRANT_MS,
       body: {
         grant_type: "refresh_token",
         refresh_token: "token-2",
@@ -366,7 +382,7 @@ describe("handleTokenRequest – refresh_token grant", () => {
       String(res.body.access_token),
       NOW,
     );
-    expect(fresh?.accessToken).toBe(res.body.access_token);
+    expect(fresh?.clientId).toBe("client-1");
   });
 
   it("unknown refresh_token → 400 invalid_grant", async () => {
@@ -374,6 +390,7 @@ describe("handleTokenRequest – refresh_token grant", () => {
       store,
       ids: seqIds,
       clock,
+      maxGrantMs: MAX_GRANT_MS,
       body: {
         grant_type: "refresh_token",
         refresh_token: "no-such-refresh",
@@ -412,6 +429,7 @@ describe("handleTokenRequest – missing required fields", () => {
       store,
       ids: seqIds,
       clock,
+      maxGrantMs: MAX_GRANT_MS,
       body: {
         grant_type: "authorization_code",
         code: "",
@@ -429,6 +447,7 @@ describe("handleTokenRequest – missing required fields", () => {
       store,
       ids: seqIds,
       clock,
+      maxGrantMs: MAX_GRANT_MS,
       body: {
         grant_type: "refresh_token",
         refresh_token: "",
@@ -448,6 +467,7 @@ describe("handleTokenRequest – unsupported grant", () => {
       store,
       ids: seqIds,
       clock,
+      maxGrantMs: MAX_GRANT_MS,
       body: {
         grant_type: "client_credentials",
         client_id: "x",
@@ -464,9 +484,68 @@ describe("handleTokenRequest – unsupported grant", () => {
       store,
       ids: seqIds,
       clock,
+      maxGrantMs: MAX_GRANT_MS,
       body: {},
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_request");
   });
 });
+
+describe("handleTokenRequest – absolute grant lifetime", () => {
+  let store: InMemoryAuthStore;
+  let clock: FakeClock;
+
+  const call = (body: Record<string, unknown>) =>
+    handleTokenRequest({ store, ids: seqIds, clock, maxGrantMs: MAX_GRANT_MS, body });
+
+  beforeEach(async () => {
+    idCounter = 0;
+    store = new InMemoryAuthStore();
+    clock = new FakeClock(NOW);
+    await store.registerClient({ clientId: "client-1", redirectUris: ["https://claude.ai/cb"], createdAt: NOW });
+    await store.saveAuthCode({
+      code: "auth-code-1",
+      clientId: "client-1",
+      redirectUri: "https://claude.ai/cb",
+      scope: "mcp",
+      codeChallenge: CHALLENGE,
+      expiresAt: EXPIRES_IN_10,
+      createdAt: NOW,
+    });
+    await call({
+      grant_type: "authorization_code",
+      code: "auth-code-1",
+      redirect_uri: "https://claude.ai/cb",
+      code_verifier: VERIFIER,
+    });
+  });
+
+  it("the authorization_code exchange starts the grant clock at the exchange time", async () => {
+    expect((await store.getAccessToken("token-1", NOW))?.grantCreatedAt).toEqual(NOW);
+  });
+
+  it("a refresh close to the cap reports expires_in clamped to the grant's remaining lifetime", async () => {
+    // Keep the refresh token alive by refreshing every 20 days up to day 179.5.
+    for (let day = 20; day < 180; day += 20) {
+      clock.set(new Date(NOW.getTime() + day * DAY_MS));
+      expect((await call({ grant_type: "refresh_token", refresh_token: "token-2" })).status).toBe(200);
+    }
+    clock.set(new Date(NOW.getTime() + MAX_GRANT_MS - 3600 * 1000));
+    const res = await call({ grant_type: "refresh_token", refresh_token: "token-2" });
+    expect(res.status).toBe(200);
+    expect(res.body.expires_in).toBe(3600);
+  });
+
+  it("a refresh at or after the cap is refused with invalid_grant", async () => {
+    for (let day = 20; day < 180; day += 20) {
+      clock.set(new Date(NOW.getTime() + day * DAY_MS));
+      await call({ grant_type: "refresh_token", refresh_token: "token-2" });
+    }
+    clock.set(new Date(NOW.getTime() + MAX_GRANT_MS));
+    const res = await call({ grant_type: "refresh_token", refresh_token: "token-2" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_grant");
+  });
+});
+

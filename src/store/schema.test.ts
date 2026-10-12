@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import { CURRENT_SCHEMA_VERSION, applyMigrations } from "./schema.js";
+import { hashToken } from "../auth/oauth/token-hash.js";
 
 function userVersion(db: Database.Database): number {
   const row = db.prepare("PRAGMA user_version").get() as { user_version: number };
@@ -23,7 +24,7 @@ describe("schema / applyMigrations", () => {
     expect(userVersion(db)).toBe(0);
     applyMigrations(db);
     expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
-    expect(CURRENT_SCHEMA_VERSION).toBe(19);
+    expect(CURRENT_SCHEMA_VERSION).toBe(20);
   });
 
   it("creates all four tables and expected indices", () => {
@@ -1079,7 +1080,7 @@ describe("schema / teams_channel_subscriptions tenant_id (migration 15)", () => 
     applyMigrations(db);
 
     expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
-    expect(CURRENT_SCHEMA_VERSION).toBe(19);
+    expect(CURRENT_SCHEMA_VERSION).toBe(20);
     expect(hasColumn(db, "teams_channel_subscriptions", "tenant_id")).toBe(
       true,
     );
@@ -1523,3 +1524,81 @@ describe("schema / teams_channel_subscriptions tenant_id (migration 15)", () => 
     expect(ftsSegmentRowidsMatching(db, "bravo")).toHaveLength(1);
   });
 });
+
+describe("schema / OAuth token hashing + grant lifetime (migration 20)", () => {
+  const T = 1_776_000_000_000;
+
+  const seedV19 = (db: Database.Database): void => {
+    applyMigrations(db);
+    db.exec("PRAGMA user_version = 19");
+    // Recreate the table in its pre-v20 shape (MIGRATION_9 DDL). Not
+    // ALTER TABLE DROP COLUMN: that native table rebuild reproducibly
+    // SIGSEGVs better-sqlite3 inside the Stryker test-runner child.
+    db.exec(`
+      DROP TABLE oauth_access_tokens;
+      CREATE TABLE oauth_access_tokens (
+        access_token TEXT PRIMARY KEY,
+        refresh_token TEXT NOT NULL,
+        client_id TEXT NOT NULL REFERENCES oauth_clients(client_id),
+        scope TEXT NOT NULL DEFAULT 'mcp',
+        access_expires_at INTEGER NOT NULL,
+        refresh_expires_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_oauth_access_tokens_refresh ON oauth_access_tokens(refresh_token);
+    `);
+    db.prepare(
+      "INSERT INTO oauth_clients (client_id, client_name, redirect_uris_json, created_at) VALUES ('c1', NULL, '[]', ?)",
+    ).run(T);
+    db.prepare(
+      "INSERT INTO oauth_access_tokens (access_token, refresh_token, client_id, scope, access_expires_at, refresh_expires_at, created_at) VALUES ('plain-at', 'plain-rt', 'c1', 'mcp', ?, ?, ?)",
+    ).run(T + 1, T + 2, T);
+    db.prepare(
+      "INSERT INTO oauth_auth_codes (code, client_id, redirect_uri, scope, code_challenge, state, expires_at, created_at) VALUES ('plain-code', 'c1', 'x', 'mcp', 'ch', NULL, ?, ?)",
+    ).run(T + 3, T);
+  };
+
+  it("a fresh db has a NOT NULL grant_created_at column on oauth_access_tokens", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const col = (
+      db.prepare("PRAGMA table_info(oauth_access_tokens)").all() as {
+        name: string;
+        notnull: number;
+      }[]
+    ).find((c) => c.name === "grant_created_at");
+    expect(col?.notnull).toBe(1);
+  });
+
+  it("v19 → v20 hashes existing access/refresh tokens and auth codes in place and backfills grant_created_at", () => {
+    const db = new Database(":memory:");
+    seedV19(db);
+
+    applyMigrations(db);
+
+    expect(userVersion(db)).toBe(CURRENT_SCHEMA_VERSION);
+    const tok = db.prepare("SELECT * FROM oauth_access_tokens").get() as Record<string, unknown>;
+    expect(tok.access_token).toBe(hashToken("plain-at"));
+    expect(tok.refresh_token).toBe(hashToken("plain-rt"));
+    expect(tok.grant_created_at).toBe(T);
+    expect(tok.access_expires_at).toBe(T + 1);
+    const code = db.prepare("SELECT code FROM oauth_auth_codes").get() as { code: string };
+    expect(code.code).toBe(hashToken("plain-code"));
+    expect(JSON.stringify(db.prepare("SELECT * FROM oauth_access_tokens").all())).not.toContain("plain-");
+  });
+
+  it("re-applying v20 on an already-migrated db does not hash twice", () => {
+    const db = new Database(":memory:");
+    seedV19(db);
+    applyMigrations(db);
+    db.exec("PRAGMA user_version = 19");
+
+    applyMigrations(db);
+
+    const tok = db.prepare("SELECT access_token FROM oauth_access_tokens").get() as { access_token: string };
+    expect(tok.access_token).toBe(hashToken("plain-at"));
+    const code = db.prepare("SELECT code FROM oauth_auth_codes").get() as { code: string };
+    expect(code.code).toBe(hashToken("plain-code"));
+  });
+});
+

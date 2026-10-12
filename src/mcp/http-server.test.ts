@@ -576,6 +576,7 @@ describe("createMcpHttpServer + OAuth resource guard", () => {
       accessExpiresAt: ACCESS_EXPIRES,
       refreshExpiresAt: REFRESH_EXPIRES,
       createdAt: NOW,
+      grantCreatedAt: NOW,
     });
     await authStore.saveTokenPair({
       accessToken: "expired-access-token",
@@ -585,6 +586,7 @@ describe("createMcpHttpServer + OAuth resource guard", () => {
       accessExpiresAt: new Date(NOW.getTime() - 1),
       refreshExpiresAt: REFRESH_EXPIRES,
       createdAt: NOW,
+      grantCreatedAt: NOW,
     });
 
     server = createMcpHttpServer({

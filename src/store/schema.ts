@@ -1,6 +1,7 @@
 import type { Database } from "better-sqlite3";
+import { hashToken } from "../auth/oauth/token-hash.js";
 
-export const CURRENT_SCHEMA_VERSION = 19;
+export const CURRENT_SCHEMA_VERSION = 20;
 
 const MIGRATION_1 = `
 CREATE TABLE IF NOT EXISTS messages (
@@ -440,6 +441,46 @@ INSERT OR IGNORE INTO transcript_segments_fts(rowid, text)
   SELECT rowid, text FROM transcript_segments;
 `;
 
+// v20 (security hardening S4): OAuth secrets are stored as SHA-256 hashes,
+// and each token row records when its grant (the original consent) began so
+// sliding refresh can be capped at an absolute lifetime. Existing plaintext
+// rows are hashed IN PLACE, so live clients keep working (they still present
+// the plaintext; the store hashes on lookup) — no forced re-consent.
+// grant_created_at doubles as the "already migrated" marker: it is added in
+// the same transaction as the hashing, and this is the LATEST migration, so
+// the rewind-and-reapply tests re-run it — it must never hash twice.
+// NOT NULL DEFAULT 0 is fail-safe: a row that somehow escaped the backfill
+// counts as a grant from 1970, i.e. already past any cap.
+function migrateV20(db: Database): void {
+  const columns = db
+    .prepare("PRAGMA table_info(oauth_access_tokens)")
+    .all() as { name: string }[];
+  // Empty = table absent (partial test fixtures that start above v9).
+  if (columns.length === 0) return;
+  if (columns.some((c) => c.name === "grant_created_at")) return;
+
+  db.exec(
+    "ALTER TABLE oauth_access_tokens ADD COLUMN grant_created_at INTEGER NOT NULL DEFAULT 0",
+  );
+  db.exec("UPDATE oauth_access_tokens SET grant_created_at = created_at");
+
+  const tokens = db
+    .prepare("SELECT access_token, refresh_token FROM oauth_access_tokens")
+    .all() as { access_token: string; refresh_token: string }[];
+  const updateToken = db.prepare(
+    "UPDATE oauth_access_tokens SET access_token = ?, refresh_token = ? WHERE access_token = ?",
+  );
+  for (const t of tokens) {
+    updateToken.run(hashToken(t.access_token), hashToken(t.refresh_token), t.access_token);
+  }
+
+  const codes = db.prepare("SELECT code FROM oauth_auth_codes").all() as { code: string }[];
+  const updateCode = db.prepare("UPDATE oauth_auth_codes SET code = ? WHERE code = ?");
+  for (const c of codes) {
+    updateCode.run(hashToken(c.code), c.code);
+  }
+}
+
 export function applyMigrations(db: Database): void {
   const current = (
     db.prepare("PRAGMA user_version").get() as { user_version: number }
@@ -504,6 +545,9 @@ export function applyMigrations(db: Database): void {
     }
     if (current < 19) {
       db.exec(MIGRATION_19);
+    }
+    if (current < 20) {
+      migrateV20(db);
     }
     db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
   });

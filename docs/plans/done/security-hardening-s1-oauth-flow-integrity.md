@@ -1,6 +1,6 @@
 # S1 — OAuth flow integrity (consent phishing + small hardening)
 
-Parent: [security-hardening.md](../security-hardening.md)
+Parent: [security-hardening.md](security-hardening.md)
 
 Status: **DONE 2026-10-12** (branch `security/hardening`).
 

@@ -1,6 +1,6 @@
 # S2 — Take the static bearer off the public path
 
-Parent: [security-hardening.md](../security-hardening.md)
+Parent: [security-hardening.md](security-hardening.md)
 
 Status: **DONE 2026-10-12** (branch `security/hardening`).
 

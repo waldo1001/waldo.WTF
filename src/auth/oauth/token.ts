@@ -10,6 +10,8 @@ export interface TokenRequest {
   readonly store: AuthStore;
   readonly ids: RandomIdSource;
   readonly clock: Clock;
+  /** Absolute lifetime of a grant from its original consent; refresh never extends past it. */
+  readonly maxGrantMs: number;
   readonly body: Record<string, unknown>;
 }
 
@@ -24,6 +26,9 @@ const presentedClientId = (body: Record<string, unknown>): string | undefined =>
   typeof body.client_id === "string" && body.client_id !== ""
     ? body.client_id
     : undefined;
+
+const expiresInSeconds = (expiresAt: Date, now: Date): number =>
+  Math.floor((expiresAt.getTime() - now.getTime()) / 1000);
 
 const errorResponse = (
   status: number,
@@ -68,8 +73,13 @@ async function handleAuthorizationCode(
 
   const accessToken = req.ids.next();
   const refreshToken = req.ids.next();
-  const accessExpiresAt = new Date(now.getTime() + ACCESS_TOKEN_TTL_MS);
-  const refreshExpiresAt = new Date(now.getTime() + REFRESH_TOKEN_TTL_MS);
+  const grantEndMs = now.getTime() + req.maxGrantMs;
+  const accessExpiresAt = new Date(
+    Math.min(now.getTime() + ACCESS_TOKEN_TTL_MS, grantEndMs),
+  );
+  const refreshExpiresAt = new Date(
+    Math.min(now.getTime() + REFRESH_TOKEN_TTL_MS, grantEndMs),
+  );
 
   await req.store.saveTokenPair({
     accessToken,
@@ -79,6 +89,7 @@ async function handleAuthorizationCode(
     accessExpiresAt,
     refreshExpiresAt,
     createdAt: now,
+    grantCreatedAt: now,
   });
 
   return {
@@ -86,7 +97,7 @@ async function handleAuthorizationCode(
     body: {
       access_token: accessToken,
       token_type: "Bearer",
-      expires_in: Math.floor(ACCESS_TOKEN_TTL_MS / 1000),
+      expires_in: expiresInSeconds(accessExpiresAt, now),
       refresh_token: refreshToken,
       scope: authCode.scope,
     },
@@ -105,20 +116,21 @@ async function handleRefreshToken(
 
   const now = req.clock.now();
   const newAccess = req.ids.next();
-  const accessExpiresAt = new Date(now.getTime() + ACCESS_TOKEN_TTL_MS);
-  const refreshExpiresAt = new Date(now.getTime() + REFRESH_TOKEN_TTL_MS);
+  const expectedClientId = presentedClientId(body);
 
   // Non-rotating refresh: reuse the same refresh token, mint a fresh access
-  // token, slide the refresh expiry. A lost response can be retried safely
-  // because the presented refresh token stays valid.
-  const pair = await req.store.refreshAccessToken(
+  // token, slide the refresh expiry — but never past the grant's absolute
+  // cap. A lost response can be retried safely because the presented
+  // refresh token stays valid.
+  const pair = await req.store.refreshAccessToken({
     refreshToken,
     now,
-    newAccess,
-    accessExpiresAt,
-    refreshExpiresAt,
-    presentedClientId(body),
-  );
+    newAccessToken: newAccess,
+    accessTtlMs: ACCESS_TOKEN_TTL_MS,
+    refreshTtlMs: REFRESH_TOKEN_TTL_MS,
+    maxGrantMs: req.maxGrantMs,
+    ...(expectedClientId !== undefined ? { expectedClientId } : {}),
+  });
   if (!pair) {
     return errorResponse(400, "invalid_grant", "refresh token is invalid or expired");
   }
@@ -128,7 +140,7 @@ async function handleRefreshToken(
     body: {
       access_token: newAccess,
       token_type: "Bearer",
-      expires_in: Math.floor(ACCESS_TOKEN_TTL_MS / 1000),
+      expires_in: expiresInSeconds(pair.accessExpiresAt, now),
       refresh_token: refreshToken,
       scope: pair.scope,
     },

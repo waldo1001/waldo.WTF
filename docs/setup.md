@@ -139,6 +139,7 @@ BEARER_TOKEN=generate-a-long-random-hex-string
 # WALDO_INTERNAL_PORT=8766      # 127.0.0.1 only (ignores WALDO_BIND_HOST); for local headless clients (Jarvis)
 # WALDO_DISABLE_STATIC_BEARER=  # true = don't start the internal listener (no static-bearer access at all)
 # WALDO_OAUTH_MAX_CLIENTS=50    # cap on DCR-registered clients; unused-for-24h clients are pruned first
+# WALDO_OAUTH_MAX_GRANT_DAYS=180 # absolute lifetime of a connector consent; re-add the connector after it
 # WALDO_OAUTH_REDIRECT_ALLOWLIST=  # comma-separated https callbacks allowed at DCR/authorize.
 #   Default: https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback
 #   http://localhost / 127.0.0.1 / [::1] (any port) are always allowed for native clients.

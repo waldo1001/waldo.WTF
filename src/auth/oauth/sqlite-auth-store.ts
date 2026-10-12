@@ -4,9 +4,17 @@ import {
   type AuthStore,
   type OAuthAuthCodeRecord,
   type OAuthClientRecord,
+  type OAuthClientStats,
   type OAuthClientRegistration,
+  type OAuthGrant,
   type OAuthTokenPair,
+  type RefreshRequest,
 } from "./auth-store.js";
+import { hashToken } from "./token-hash.js";
+
+// Secrets at rest: access_token, refresh_token and oauth_auth_codes.code hold
+// hashToken(value), never the value itself (schema v20). Every method hashes
+// what the caller presents before touching SQL.
 
 interface ClientRow {
   client_id: string;
@@ -15,18 +23,16 @@ interface ClientRow {
   created_at: number;
 }
 
-interface TokenRow {
-  access_token: string;
-  refresh_token: string;
+interface GrantRow {
   client_id: string;
   scope: string;
   access_expires_at: number;
   refresh_expires_at: number;
   created_at: number;
+  grant_created_at: number;
 }
 
 interface AuthCodeRow {
-  code: string;
   client_id: string;
   redirect_uri: string;
   scope: string;
@@ -35,6 +41,9 @@ interface AuthCodeRow {
   expires_at: number;
   created_at: number;
 }
+
+const GRANT_COLUMNS =
+  "client_id, scope, access_expires_at, refresh_expires_at, created_at, grant_created_at";
 
 const rowToRecord = (row: ClientRow): OAuthClientRecord => {
   const redirectUris = JSON.parse(row.redirect_uris_json) as string[];
@@ -46,25 +55,13 @@ const rowToRecord = (row: ClientRow): OAuthClientRecord => {
   };
 };
 
-const rowToTokenPair = (row: TokenRow): OAuthTokenPair => ({
-  accessToken: row.access_token,
-  refreshToken: row.refresh_token,
+const rowToGrant = (row: GrantRow): OAuthGrant => ({
   clientId: row.client_id,
   scope: row.scope,
   accessExpiresAt: new Date(row.access_expires_at),
   refreshExpiresAt: new Date(row.refresh_expires_at),
   createdAt: new Date(row.created_at),
-});
-
-const rowToAuthCode = (row: AuthCodeRow): OAuthAuthCodeRecord => ({
-  code: row.code,
-  clientId: row.client_id,
-  redirectUri: row.redirect_uri,
-  scope: row.scope,
-  codeChallenge: row.code_challenge,
-  expiresAt: new Date(row.expires_at),
-  createdAt: new Date(row.created_at),
-  ...(row.state !== null ? { state: row.state } : {}),
+  grantCreatedAt: new Date(row.grant_created_at),
 });
 
 export class SqliteAuthStore implements AuthStore {
@@ -79,22 +76,18 @@ export class SqliteAuthStore implements AuthStore {
   private readonly insertAuthCodeStmt: Statement<
     [string, string, string, string, string, string | null, number, number]
   >;
-  private readonly getAndDeleteAuthCodeStmt: (
-    code: string,
+  private readonly consumeCodeTx: (
+    codeHash: string,
     nowMs: number,
-  ) => OAuthAuthCodeRecord | undefined;
+  ) => AuthCodeRow | undefined;
+  private readonly deleteExpiredGrantsStmt: Statement<[number]>;
   private readonly insertTokenStmt: Statement<
-    [string, string, string, string, number, number, number]
+    [string, string, string, string, number, number, number, number]
   >;
-  private readonly getAccessTokenStmt: Statement<[string]>;
-  private readonly refreshTx: (
-    refreshToken: string,
-    nowMs: number,
-    newAccessToken: string,
-    accessExpiresAtMs: number,
-    refreshExpiresAtMs: number,
-    expectedClientId: string | undefined,
-  ) => OAuthTokenPair | undefined;
+  private readonly getByAccessStmt: Statement<[string]>;
+  private readonly refreshTx: (req: RefreshRequest) => OAuthGrant | undefined;
+  private readonly listClientStatsStmt: Statement<[number]>;
+  private readonly revokeTx: (clientId: string) => boolean;
 
   constructor(db: Database) {
     this.insertClientStmt = db.prepare(
@@ -116,71 +109,95 @@ export class SqliteAuthStore implements AuthStore {
           AND client_id NOT IN (SELECT client_id FROM oauth_auth_codes)
           AND client_id NOT IN (SELECT client_id FROM oauth_access_tokens)`,
     );
+
     this.insertAuthCodeStmt = db.prepare(
       "INSERT INTO oauth_auth_codes (code, client_id, redirect_uri, scope, code_challenge, state, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     );
-
     const selectCode = db.prepare<[string]>(
-      "SELECT code, client_id, redirect_uri, scope, code_challenge, state, expires_at, created_at FROM oauth_auth_codes WHERE code = ?",
+      "SELECT client_id, redirect_uri, scope, code_challenge, state, expires_at, created_at FROM oauth_auth_codes WHERE code = ?",
     );
     const deleteCode = db.prepare<[string]>(
       "DELETE FROM oauth_auth_codes WHERE code = ?",
     );
-    const consumeTx = db.transaction(
-      (code: string, nowMs: number): OAuthAuthCodeRecord | undefined => {
-        const row = selectCode.get(code) as AuthCodeRow | undefined;
+    this.consumeCodeTx = db.transaction(
+      (codeHash: string, nowMs: number): AuthCodeRow | undefined => {
+        const row = selectCode.get(codeHash) as AuthCodeRow | undefined;
         if (!row) return undefined;
-        deleteCode.run(code);
-        if (row.expires_at <= nowMs) return undefined;
-        return rowToAuthCode(row);
+        deleteCode.run(codeHash);
+        return row.expires_at <= nowMs ? undefined : row;
       },
     );
-    this.getAndDeleteAuthCodeStmt = (code, nowMs) => consumeTx(code, nowMs);
 
+    this.listClientStatsStmt = db.prepare(
+      `SELECT c.client_id, c.client_name, c.redirect_uris_json, c.created_at,
+              COALESCE(SUM(CASE WHEN t.refresh_expires_at > ? THEN 1 ELSE 0 END), 0) AS active_grants,
+              MAX(t.grant_created_at) AS last_grant_at
+         FROM oauth_clients c
+         LEFT JOIN oauth_access_tokens t ON t.client_id = c.client_id
+        GROUP BY c.client_id
+        ORDER BY c.created_at ASC, c.client_id ASC`,
+    );
+    const deleteClientCodes = db.prepare<[string]>(
+      "DELETE FROM oauth_auth_codes WHERE client_id = ?",
+    );
+    const deleteClientTokens = db.prepare<[string]>(
+      "DELETE FROM oauth_access_tokens WHERE client_id = ?",
+    );
+    const deleteClient = db.prepare<[string]>(
+      "DELETE FROM oauth_clients WHERE client_id = ?",
+    );
+    this.revokeTx = db.transaction((clientId: string): boolean => {
+      deleteClientCodes.run(clientId);
+      deleteClientTokens.run(clientId);
+      return deleteClient.run(clientId).changes > 0;
+    });
+
+    this.deleteExpiredGrantsStmt = db.prepare(
+      "DELETE FROM oauth_access_tokens WHERE refresh_expires_at <= ?",
+    );
     this.insertTokenStmt = db.prepare(
-      "INSERT INTO oauth_access_tokens (access_token, refresh_token, client_id, scope, access_expires_at, refresh_expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO oauth_access_tokens (access_token, refresh_token, client_id, scope, access_expires_at, refresh_expires_at, created_at, grant_created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     );
-    this.getAccessTokenStmt = db.prepare(
-      "SELECT access_token, refresh_token, client_id, scope, access_expires_at, refresh_expires_at, created_at FROM oauth_access_tokens WHERE access_token = ?",
+    this.getByAccessStmt = db.prepare(
+      `SELECT ${GRANT_COLUMNS} FROM oauth_access_tokens WHERE access_token = ?`,
     );
-
     const selectByRefresh = db.prepare<[string]>(
-      "SELECT access_token, refresh_token, client_id, scope, access_expires_at, refresh_expires_at, created_at FROM oauth_access_tokens WHERE refresh_token = ?",
+      `SELECT ${GRANT_COLUMNS} FROM oauth_access_tokens WHERE refresh_token = ?`,
     );
     const updateAccess = db.prepare<[string, number, number, string]>(
       "UPDATE oauth_access_tokens SET access_token = ?, access_expires_at = ?, refresh_expires_at = ? WHERE refresh_token = ?",
     );
-    const refreshTx = db.transaction(
-      (
-        refreshToken: string,
-        nowMs: number,
-        newAccessToken: string,
-        accessExpiresAtMs: number,
-        refreshExpiresAtMs: number,
-        expectedClientId: string | undefined,
-      ): OAuthTokenPair | undefined => {
-        const row = selectByRefresh.get(refreshToken) as TokenRow | undefined;
-        // Non-destructive: unknown, expired or wrong-client refresh leaves the row untouched.
+    this.refreshTx = db.transaction(
+      (req: RefreshRequest): OAuthGrant | undefined => {
+        const refreshHash = hashToken(req.refreshToken);
+        const row = selectByRefresh.get(refreshHash) as GrantRow | undefined;
+        const nowMs = req.now.getTime();
+        // Non-destructive: unknown, expired, wrong-client or past-cap leaves the row untouched.
         if (!row || row.refresh_expires_at <= nowMs) return undefined;
-        if (expectedClientId !== undefined && row.client_id !== expectedClientId) {
+        if (
+          req.expectedClientId !== undefined &&
+          row.client_id !== req.expectedClientId
+        ) {
           return undefined;
         }
+        const grantEndMs = row.grant_created_at + req.maxGrantMs;
+        if (nowMs >= grantEndMs) return undefined;
+        const accessExpiresAtMs = Math.min(nowMs + req.accessTtlMs, grantEndMs);
+        const refreshExpiresAtMs = Math.min(nowMs + req.refreshTtlMs, grantEndMs);
         updateAccess.run(
-          newAccessToken,
+          hashToken(req.newAccessToken),
           accessExpiresAtMs,
           refreshExpiresAtMs,
-          refreshToken,
+          refreshHash,
         );
-        return rowToTokenPair({
+        this.deleteExpiredGrantsStmt.run(nowMs);
+        return rowToGrant({
           ...row,
-          access_token: newAccessToken,
           access_expires_at: accessExpiresAtMs,
           refresh_expires_at: refreshExpiresAtMs,
         });
       },
     );
-    this.refreshTx = (rt, nowMs, newAccess, accessExp, refreshExp, clientId) =>
-      refreshTx(rt, nowMs, newAccess, accessExp, refreshExp, clientId);
   }
 
   async registerClient(reg: OAuthClientRegistration): Promise<void> {
@@ -210,6 +227,24 @@ export class SqliteAuthStore implements AuthStore {
     return rows.map(rowToRecord);
   }
 
+  async listClientsWithStats(now: Date): Promise<readonly OAuthClientStats[]> {
+    const rows = this.listClientStatsStmt.all(now.getTime()) as (ClientRow & {
+      active_grants: number;
+      last_grant_at: number | null;
+    })[];
+    return rows.map((row) => ({
+      client: rowToRecord(row),
+      activeGrants: row.active_grants,
+      ...(row.last_grant_at !== null
+        ? { lastGrantAt: new Date(row.last_grant_at) }
+        : {}),
+    }));
+  }
+
+  async revokeClient(clientId: string): Promise<boolean> {
+    return this.revokeTx(clientId);
+  }
+
   async countClients(): Promise<number> {
     return (this.countClientsStmt.get() as { n: number }).n;
   }
@@ -222,7 +257,7 @@ export class SqliteAuthStore implements AuthStore {
   async saveAuthCode(record: OAuthAuthCodeRecord): Promise<void> {
     this.deleteExpiredCodesStmt.run(record.createdAt.getTime());
     this.insertAuthCodeStmt.run(
-      record.code,
+      hashToken(record.code),
       record.clientId,
       record.redirectUri,
       record.scope,
@@ -237,48 +272,46 @@ export class SqliteAuthStore implements AuthStore {
     code: string,
     now: Date,
   ): Promise<OAuthAuthCodeRecord | undefined> {
-    return this.getAndDeleteAuthCodeStmt(code, now.getTime());
+    const row = this.consumeCodeTx(hashToken(code), now.getTime());
+    if (!row) return undefined;
+    return {
+      code,
+      clientId: row.client_id,
+      redirectUri: row.redirect_uri,
+      scope: row.scope,
+      codeChallenge: row.code_challenge,
+      expiresAt: new Date(row.expires_at),
+      createdAt: new Date(row.created_at),
+      ...(row.state !== null ? { state: row.state } : {}),
+    };
   }
 
   async saveTokenPair(pair: OAuthTokenPair): Promise<void> {
+    this.deleteExpiredGrantsStmt.run(pair.createdAt.getTime());
     this.insertTokenStmt.run(
-      pair.accessToken,
-      pair.refreshToken,
+      hashToken(pair.accessToken),
+      hashToken(pair.refreshToken),
       pair.clientId,
       pair.scope,
       pair.accessExpiresAt.getTime(),
       pair.refreshExpiresAt.getTime(),
       pair.createdAt.getTime(),
+      pair.grantCreatedAt.getTime(),
     );
   }
 
   async getAccessToken(
     accessToken: string,
     now: Date,
-  ): Promise<OAuthTokenPair | undefined> {
-    const row = this.getAccessTokenStmt.get(accessToken) as
-      | TokenRow
+  ): Promise<OAuthGrant | undefined> {
+    const row = this.getByAccessStmt.get(hashToken(accessToken)) as
+      | GrantRow
       | undefined;
-    if (!row) return undefined;
-    if (row.access_expires_at <= now.getTime()) return undefined;
-    return rowToTokenPair(row);
+    if (!row || row.access_expires_at <= now.getTime()) return undefined;
+    return rowToGrant(row);
   }
 
-  async refreshAccessToken(
-    refreshToken: string,
-    now: Date,
-    newAccessToken: string,
-    accessExpiresAt: Date,
-    refreshExpiresAt: Date,
-    expectedClientId?: string,
-  ): Promise<OAuthTokenPair | undefined> {
-    return this.refreshTx(
-      refreshToken,
-      now.getTime(),
-      newAccessToken,
-      accessExpiresAt.getTime(),
-      refreshExpiresAt.getTime(),
-      expectedClientId,
-    );
+  async refreshAccessToken(req: RefreshRequest): Promise<OAuthGrant | undefined> {
+    return this.refreshTx(req);
   }
 }

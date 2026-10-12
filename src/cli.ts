@@ -30,7 +30,11 @@ import type {
   VivaSubscription,
 } from "./store/types.js";
 import type { MessageStore } from "./store/message-store.js";
-import type { Clock } from "./clock.js";
+import { systemClock, type Clock } from "./clock.js";
+import { openDatabase } from "./store/open-database.js";
+import { applyMigrations } from "./store/schema.js";
+import type { AuthStore, OAuthClientStats } from "./auth/oauth/auth-store.js";
+import { SqliteAuthStore } from "./auth/oauth/sqlite-auth-store.js";
 import type { VivaClient, VivaCommunity } from "./sources/viva.js";
 import type { VivaSubscriptionStore } from "./store/viva-subscription-store.js";
 import type {
@@ -237,6 +241,7 @@ export interface RunCliOptions extends AddAccountOptions {
   readonly calendarAccountStore?: CalendarAccountStore;
   readonly calendarStore?: MessageStore;
   readonly clock?: Clock;
+  readonly authStore?: AuthStore;
 }
 
 export type RunCliResult =
@@ -289,6 +294,11 @@ export type RunCliResult =
       readonly mode: "transcripts-disable";
       readonly account: string;
     }
+  | {
+      readonly mode: "oauth-clients";
+      readonly clients: readonly OAuthClientStats[];
+    }
+  | { readonly mode: "oauth-revoke"; readonly clientId: string }
   | { readonly mode: "server"; readonly main: MainResult };
 
 const BOOLEAN_FLAGS = new Set([
@@ -306,7 +316,10 @@ const BOOLEAN_FLAGS = new Set([
   "--teams-admin-consent",
   "--calendar-list",
   "--calendar-resync",
+  "--list-oauth-clients",
 ]);
+
+const OAUTH_VALUE_FLAGS = new Set(["--revoke-oauth-client"]);
 
 const VIVA_VALUE_FLAGS = new Set([
   "--viva-subscribe",
@@ -390,7 +403,8 @@ function parseArgv(argv: readonly string[]): {
       VIVA_VALUE_FLAGS.has(a) ||
       TEAMS_VALUE_FLAGS.has(a) ||
       ADD_ACCOUNT_VALUE_FLAGS.has(a) ||
-      CALENDAR_VALUE_FLAGS.has(a)
+      CALENDAR_VALUE_FLAGS.has(a) ||
+      OAUTH_VALUE_FLAGS.has(a)
     ) {
       const v = argv[i + 1];
       if (v === undefined) {
@@ -404,7 +418,7 @@ function parseArgv(argv: readonly string[]): {
       continue;
     }
     throw new CliUsageError(
-      `Unknown flag: ${a}. Usage: waldo-wtf [--add-account | --backfill-bodies | --import-whatsapp | --steer-* | --viva-* | --teams-* | --teams-admin-consent | --calendar-enable | --calendar-disable | --calendar-list | --calendar-resync | --transcripts-enable | --transcripts-disable]`,
+      `Unknown flag: ${a}. Usage: waldo-wtf [--add-account | --backfill-bodies | --import-whatsapp | --steer-* | --viva-* | --teams-* | --teams-admin-consent | --calendar-enable | --calendar-disable | --calendar-list | --calendar-resync | --transcripts-enable | --transcripts-disable | --list-oauth-clients | --revoke-oauth-client <id>]`,
     );
   }
   return { boolean, values };
@@ -1878,11 +1892,77 @@ export async function calendarResync(
   }
 }
 
+const redirectOrigins = (uris: readonly string[]): string => {
+  const origins = uris.map((u) => {
+    try {
+      const url = new URL(u);
+      return `${url.protocol}//${url.host}`;
+    } catch {
+      return "?";
+    }
+  });
+  return origins.length === 0 ? "-" : [...new Set(origins)].join(",");
+};
+
+const formatClientStats = (s: OAuthClientStats): string =>
+  [
+    s.client.clientId,
+    `name=${s.client.clientName ?? "-"}`,
+    `redirect=${redirectOrigins(s.client.redirectUris)}`,
+    `created=${s.client.createdAt.toISOString()}`,
+    `active_grants=${s.activeGrants}`,
+    `last_grant=${s.lastGrantAt?.toISOString() ?? "never"}`,
+  ].join("  ");
+
+/**
+ * Runs `fn` against the injected AuthStore, or against the lake's SQLite
+ * auth tables (migrated first, so a CLI run before the server's first boot
+ * on new code still sees the current schema).
+ */
+async function withAuthStore<T>(
+  opts: RunCliOptions,
+  fn: (store: AuthStore) => Promise<T>,
+): Promise<T> {
+  if (opts.authStore !== undefined) return fn(opts.authStore);
+  /* c8 ignore start -- real-db wiring, exercised by /local-smoke */
+  const config = loadConfig(resolveEnv(opts));
+  const db = openDatabase(config.dbPath);
+  try {
+    applyMigrations(db);
+    return await fn(new SqliteAuthStore(db));
+  } finally {
+    db.close();
+  }
+  /* c8 ignore stop */
+}
+
 export async function runCli(
   argv: readonly string[],
   opts: RunCliOptions = {},
 ): Promise<RunCliResult> {
   const parsed = parseArgv(argv);
+  /* c8 ignore next -- default console.log only in production */
+  const printOut: PrintFn = opts.print ?? ((m) => console.log(m));
+
+  if (parsed.boolean.has("--list-oauth-clients")) {
+    const now = (opts.clock ?? systemClock).now();
+    const clients = await withAuthStore(opts, (s) => s.listClientsWithStats(now));
+    if (clients.length === 0) printOut("no OAuth clients registered");
+    for (const c of clients) printOut(formatClientStats(c));
+    return { mode: "oauth-clients", clients };
+  }
+
+  const revokeId = parsed.values.get("--revoke-oauth-client");
+  if (revokeId !== undefined) {
+    const revoked = await withAuthStore(opts, (s) => s.revokeClient(revokeId));
+    if (!revoked) {
+      throw new CliUsageError(
+        `no OAuth client "${revokeId}" — see --list-oauth-clients`,
+      );
+    }
+    printOut(`revoked OAuth client ${revokeId} (its tokens and codes are deleted)`);
+    return { mode: "oauth-revoke", clientId: revokeId };
+  }
 
   const tenantValue = parsed.values.get("--tenant");
   if (parsed.boolean.has("--add-account")) {
@@ -2138,6 +2218,9 @@ if (isMain) {
         process.exit(0);
       } else if (r.mode === "transcripts-disable") {
         console.log(`Transcripts disabled for ${r.account}`);
+        process.exit(0);
+      } else if (r.mode === "oauth-clients" || r.mode === "oauth-revoke") {
+        // already printed via runCli's print callback
         process.exit(0);
       }
     })

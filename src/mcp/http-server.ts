@@ -31,7 +31,10 @@ import { createMcpServer } from "./mcp-server.js";
 import { readBodyCapped } from "./read-body.js";
 import { clientIp } from "./client-ip.js";
 import { FixedWindowRateLimiter } from "../auth/oauth/rate-limiter.js";
-import { DEFAULT_MAX_OAUTH_CLIENTS } from "../auth/oauth/oauth-config.js";
+import {
+  DEFAULT_MAX_GRANT_DAYS,
+  DEFAULT_MAX_OAUTH_CLIENTS,
+} from "../auth/oauth/oauth-config.js";
 
 export interface RateLimitSpec {
   readonly windowMs: number;
@@ -47,6 +50,7 @@ export interface OAuthRateLimits {
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
 
 // Single-user server: generous for the real clients (claude.ai registers once,
 // refreshes daily), tight enough to make scrypt / DB-row abuse pointless.
@@ -71,6 +75,8 @@ export interface OAuthHttpOptions {
   readonly redirectAllowlist?: readonly string[];
   /** Defaults to DEFAULT_MAX_OAUTH_CLIENTS. */
   readonly maxClients?: number;
+  /** Absolute grant lifetime in days; defaults to DEFAULT_MAX_GRANT_DAYS. */
+  readonly maxGrantDays?: number;
   /** Per-route overrides of DEFAULT_OAUTH_RATE_LIMITS. */
   readonly rateLimits?: Partial<OAuthRateLimits>;
 }
@@ -318,6 +324,7 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
             store: oauth.authStore,
             ids: oauth.ids,
             clock: opts.clock,
+            maxGrantMs: (oauth.maxGrantDays ?? DEFAULT_MAX_GRANT_DAYS) * DAY_MS,
             body,
           });
           writeJson(res, result.status, result.body, NO_STORE);
