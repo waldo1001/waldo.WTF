@@ -57,9 +57,15 @@ export class WhatsAppArchiveError extends WhatsAppImportError {
 const CHAT_FILENAME_RE = /^WhatsApp Chat - (.+)\.(?:txt|zip)$/;
 
 function extractChatTextFromZip(buffer: Buffer, filePath: string): string {
-  let zip: AdmZip;
+  // adm-zip >= 0.6 validates lazily: duplicate entry names, entries whose
+  // declared size runs past the buffer, and the decompression cap can throw
+  // from the constructor, getEntry() or getData(). All of them mean "not a
+  // usable export" and must surface as WhatsAppParseError (file stays put).
+  let entry: ReturnType<AdmZip["getEntry"]>;
+  let text: string;
   try {
-    zip = new AdmZip(buffer);
+    entry = new AdmZip(buffer).getEntry("_chat.txt");
+    text = entry ? entry.getData().toString("utf8") : "";
   } catch (err) {
     throw new WhatsAppParseError(
       `failed to open WhatsApp zip export`,
@@ -67,14 +73,13 @@ function extractChatTextFromZip(buffer: Buffer, filePath: string): string {
       { cause: err },
     );
   }
-  const entry = zip.getEntry("_chat.txt");
   if (!entry) {
     throw new WhatsAppParseError(
       `WhatsApp zip export is missing _chat.txt`,
       filePath,
     );
   }
-  return entry.getData().toString("utf8");
+  return text;
 }
 
 function basename(p: string): string {

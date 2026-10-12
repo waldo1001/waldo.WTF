@@ -18,6 +18,20 @@ function makeZip(entries: Record<string, string>): Buffer {
   return zip.toBuffer();
 }
 
+/** A zip whose second entry is renamed (in BOTH headers) to `_chat.txt`. */
+function makeZipWithDuplicateChat(): Buffer {
+  const buf = makeZip({ "_chat.txt": CHAT_FIXTURE, "_chat.tx2": "[15/04/2026, 09:05:00] evil: injected" });
+  return Buffer.from(buf.toString("latin1").split("_chat.tx2").join("_chat.txt"), "latin1");
+}
+
+/** A zip whose `_chat.txt` central-directory entry claims far more data than the file holds. */
+function makeZipWithOverlongEntry(): Buffer {
+  const buf = Buffer.from(makeZip({ "_chat.txt": CHAT_FIXTURE }));
+  const cd = buf.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02])); // central dir header
+  buf.writeUInt32LE(0x00ffffff, cd + 20); // compressed size
+  return buf;
+}
+
 const CHAT_FIXTURE = [
   "[15/04/2026, 09:03:17] waldo: first message",
   "continuation",
@@ -286,6 +300,14 @@ describe("importWhatsAppFile", () => {
         archiveRoot: ARCHIVE,
       }),
     ).rejects.toThrow(WhatsAppImportError);
+    await expect(
+      importWhatsAppFile({
+        ...deps,
+        filePath: src,
+        account: ACCOUNT,
+        archiveRoot: ARCHIVE,
+      }),
+    ).rejects.toThrow(/missing _chat\.txt/);
     expect(await deps.fs.exists(src)).toBe(true);
   });
 
@@ -302,6 +324,33 @@ describe("importWhatsAppFile", () => {
       }),
     ).rejects.toThrow(WhatsAppImportError);
     expect(await deps.fs.exists(src)).toBe(true);
+  });
+
+  it.each([
+    ["a duplicate _chat.txt entry (smuggled second chat)", makeZipWithDuplicateChat],
+    ["an entry whose declared size runs past the end of the file", makeZipWithOverlongEntry],
+  ])("refuses a zip with %s as WhatsAppParseError and does not archive it", async (_label, build) => {
+    const src = `${DOWNLOADS}/WhatsApp Chat - Mom.zip`;
+    await deps.fs.writeFile(src, build());
+
+    await expect(
+      importWhatsAppFile({
+        ...deps,
+        filePath: src,
+        account: ACCOUNT,
+        archiveRoot: ARCHIVE,
+      }),
+    ).rejects.toThrow(WhatsAppParseError);
+    const err = await importWhatsAppFile({
+      ...deps,
+      filePath: src,
+      account: ACCOUNT,
+      archiveRoot: ARCHIVE,
+    }).catch((e: unknown) => e as WhatsAppParseError);
+    expect(err.message).toContain("failed to open WhatsApp zip export");
+    expect((err as { cause?: unknown }).cause).toBeInstanceOf(Error);
+    expect(await deps.fs.exists(src)).toBe(true);
+    expect(await deps.store.listAccounts()).toEqual([]);
   });
 
   it("throws WhatsAppParseError when the zip buffer is corrupted", async () => {
