@@ -18,6 +18,13 @@ export interface TokenResponse {
   readonly body: Record<string, unknown>;
 }
 
+// Public clients (token_endpoint_auth_method "none") may omit client_id;
+// when they do send it, it must match the grant it is redeeming.
+const presentedClientId = (body: Record<string, unknown>): string | undefined =>
+  typeof body.client_id === "string" && body.client_id !== ""
+    ? body.client_id
+    : undefined;
+
 const errorResponse = (
   status: number,
   error: string,
@@ -44,6 +51,11 @@ async function handleAuthorizationCode(
   const authCode = await req.store.consumeAuthCode(code, now);
   if (!authCode) {
     return errorResponse(400, "invalid_grant", "authorization code is invalid or expired");
+  }
+
+  const clientId = presentedClientId(body);
+  if (clientId !== undefined && clientId !== authCode.clientId) {
+    return errorResponse(400, "invalid_grant", "client_id does not match the authorization code");
   }
 
   if (authCode.redirectUri !== redirectUri) {
@@ -105,6 +117,7 @@ async function handleRefreshToken(
     newAccess,
     accessExpiresAt,
     refreshExpiresAt,
+    presentedClientId(body),
   );
   if (!pair) {
     return errorResponse(400, "invalid_grant", "refresh token is invalid or expired");

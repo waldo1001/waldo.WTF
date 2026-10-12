@@ -12,6 +12,7 @@ This document covers setting up the OAuth 2.1 surface so claude.ai or Claude mob
 | `WALDO_ADMIN_PASSWORD` | Yes | Passphrase shown on the consent page when a client registers. Generate: `openssl rand -hex 24` |
 | `BEARER_TOKEN` | Keep | Static bearer still works unless you set `WALDO_DISABLE_STATIC_BEARER=true`. |
 | `WALDO_DISABLE_STATIC_BEARER` | Optional | Set to `true` once OAuth is your primary access path to harden the endpoint. |
+| `WALDO_OAUTH_REDIRECT_ALLOWLIST` | Optional | Comma-separated https callback URIs a client may register/use. See §1.1. |
 
 Add to `.env` (or the container environment):
 
@@ -30,6 +31,39 @@ GET  /oauth/authorize                          # Consent page
 POST /oauth/authorize                          # Consent submit
 POST /oauth/token                              # Token exchange + refresh
 ```
+
+### 1.1. Redirect allowlist and what the consent page checks
+
+The server is internet-reachable (Tailscale Funnel), so `/oauth/register` is
+open to anyone. To stop **consent phishing** (an attacker registers a client
+named "Claude" whose callback is their own host, then sends you the real
+consent link), codes are only ever sent to allowlisted callbacks:
+
+- **Remote callbacks** must match an entry of `WALDO_OAUTH_REDIRECT_ALLOWLIST`
+  **exactly**. Default: `https://claude.ai/api/mcp/auth_callback`,
+  `https://claude.com/api/mcp/auth_callback`.
+- **Loopback** `http://localhost`, `http://127.0.0.1`, `http://[::1]` (any
+  port, any path) is always allowed — Claude Desktop / Claude Code listen on a
+  random local port.
+- Credentials (`user@`) and fragments (`#`) are always rejected.
+
+Both `GET` and `POST /oauth/authorize` re-check: the client exists, the
+redirect URI is registered for it **and** still allowlisted, `S256`, and a
+well-formed 43–128 char challenge. The POST checks this **before** the
+password, so a hand-crafted form can never mint a code. Clients registered
+before the allowlist existed with other callbacks are refused at authorize time
+(revoke them, §5).
+
+The consent page shows **"After approval you will be sent to: `<host>`"**.
+Only approve if that is the client you just started connecting. The client
+name is self-declared and proves nothing.
+
+A rejected registration logs one line:
+`oauth_dcr_redirect_rejected redirect_uris=[...]`. If claude.ai ever moves to a
+new callback, that line tells you what to add.
+
+`POST /oauth/token`: if the client sends `client_id`, it must match the client
+the code / refresh token was issued to (`invalid_grant` otherwise).
 
 ---
 
@@ -197,6 +231,8 @@ sqlite3 data/lake.db \
 | MCP endpoint → 401 even with fresh token | `WALDO_DISABLE_STATIC_BEARER=true` and token lookup failed | Verify `WALDO_PUBLIC_URL` resolves correctly |
 | MCP endpoint → 401 with bare `Bearer` (no resource_metadata) | `WALDO_PUBLIC_URL` not set | OAuth not mounted; static bearer only |
 | `redirect_uri_mismatch` on register | Supplied `redirect_uri` not in client's registered list | Re-register or fix the redirect URI |
+| `POST /oauth/register` → 400 `invalid_redirect_uri` | Callback not on the allowlist (§1.1) | Check the `oauth_dcr_redirect_rejected` log line; add the URI to `WALDO_OAUTH_REDIRECT_ALLOWLIST` if legitimate |
+| Consent page → 400 "redirect_uri is not registered for this client or not allowed" | Client registered before the allowlist with a callback that is no longer allowed | Remove/re-add the connector (fresh DCR) |
 
 ### 6.1. Tools error or time out after an OAuth deploy
 

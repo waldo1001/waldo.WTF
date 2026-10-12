@@ -3,6 +3,9 @@ import { handleDynamicClientRegistration } from "./dcr.js";
 import { InMemoryAuthStore } from "../../testing/in-memory-auth-store.js";
 import type { RandomIdSource } from "./ids.js";
 import { FakeClock } from "../../testing/fake-clock.js";
+import { DEFAULT_REDIRECT_ALLOWLIST } from "./redirect-allowlist.js";
+
+const CLAUDE_CB = "https://claude.ai/api/mcp/auth_callback";
 
 const fixedIds = (id: string): RandomIdSource => ({ next: () => id });
 
@@ -14,18 +17,19 @@ describe("handleDynamicClientRegistration", () => {
 
     const res = await handleDynamicClientRegistration({
       body: {
-        redirect_uris: ["https://claude.ai/cb"],
+        redirect_uris: [CLAUDE_CB],
         client_name: "Claude.ai connector",
       },
       store,
       ids,
       clock,
+      redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
     });
 
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({
       client_id: "a".repeat(64),
-      redirect_uris: ["https://claude.ai/cb"],
+      redirect_uris: [CLAUDE_CB],
       client_name: "Claude.ai connector",
       token_endpoint_auth_method: "none",
       grant_types: ["authorization_code", "refresh_token"],
@@ -37,7 +41,7 @@ describe("handleDynamicClientRegistration", () => {
     expect(await store.getClient("a".repeat(64))).toMatchObject({
       clientId: "a".repeat(64),
       clientName: "Claude.ai connector",
-      redirectUris: ["https://claude.ai/cb"],
+      redirectUris: [CLAUDE_CB],
     });
   });
 
@@ -46,10 +50,11 @@ describe("handleDynamicClientRegistration", () => {
     const ids = fixedIds("b".repeat(64));
     const clock = new FakeClock(new Date("2026-04-20T10:00:00Z"));
     await handleDynamicClientRegistration({
-      body: { redirect_uris: ["https://claude.ai/cb"] },
+      body: { redirect_uris: [CLAUDE_CB] },
       store,
       ids,
       clock,
+      redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
     });
     const stored = await store.getClient("b".repeat(64));
     expect(stored?.clientName).toBeUndefined();
@@ -64,6 +69,7 @@ describe("handleDynamicClientRegistration", () => {
       store,
       ids,
       clock,
+      redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
     });
     expect(res.status).toBe(400);
     expect(res.body).toEqual({
@@ -82,6 +88,7 @@ describe("handleDynamicClientRegistration", () => {
       store,
       ids,
       clock,
+      redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_client_metadata");
@@ -96,6 +103,7 @@ describe("handleDynamicClientRegistration", () => {
       store,
       ids,
       clock,
+      redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_redirect_uri");
@@ -115,6 +123,7 @@ describe("handleDynamicClientRegistration", () => {
       store,
       ids,
       clock,
+      redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
     });
     expect(res.status).toBe(201);
   });
@@ -128,6 +137,7 @@ describe("handleDynamicClientRegistration", () => {
       store,
       ids,
       clock,
+      redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_redirect_uri");
@@ -142,6 +152,7 @@ describe("handleDynamicClientRegistration", () => {
       store,
       ids,
       clock,
+      redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_redirect_uri");
@@ -156,6 +167,7 @@ describe("handleDynamicClientRegistration", () => {
       store,
       ids,
       clock,
+      redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_client_metadata");
@@ -170,6 +182,7 @@ describe("handleDynamicClientRegistration", () => {
       store,
       ids,
       clock,
+      redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_client_metadata");
@@ -180,12 +193,67 @@ describe("handleDynamicClientRegistration", () => {
     const ids = fixedIds("h".repeat(64));
     const clock = new FakeClock(new Date("2026-04-20T10:00:00Z"));
     const res = await handleDynamicClientRegistration({
-      body: { redirect_uris: "https://claude.ai/cb" },
+      body: { redirect_uris: CLAUDE_CB },
       store,
       ids,
       clock,
+      redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_client_metadata");
+  });
+
+  it("rejects an https redirect_uri that is not on the allowlist (consent phishing)", async () => {
+    const store = new InMemoryAuthStore();
+    const res = await handleDynamicClientRegistration({
+      body: { redirect_uris: [CLAUDE_CB, "https://evil.example/cb"], client_name: "Claude" },
+      store,
+      ids: fixedIds("e".repeat(64)),
+      clock: new FakeClock(new Date("2026-04-20T10:00:00Z")),
+      redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_redirect_uri");
+    expect(await store.listClients()).toHaveLength(0);
+  });
+
+  it("rejects a client_name longer than 64 characters", async () => {
+    const store = new InMemoryAuthStore();
+    const res = await handleDynamicClientRegistration({
+      body: { redirect_uris: [CLAUDE_CB], client_name: "x".repeat(65) },
+      store,
+      ids: fixedIds("f".repeat(64)),
+      clock: new FakeClock(new Date("2026-04-20T10:00:00Z")),
+      redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_client_metadata");
+    expect(await store.listClients()).toHaveLength(0);
+  });
+
+  it("accepts a client_name of exactly 64 characters", async () => {
+    const store = new InMemoryAuthStore();
+    const res = await handleDynamicClientRegistration({
+      body: { redirect_uris: [CLAUDE_CB], client_name: "x".repeat(64) },
+      store,
+      ids: fixedIds("g".repeat(64)),
+      clock: new FakeClock(new Date("2026-04-20T10:00:00Z")),
+      redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+    });
+    expect(res.status).toBe(201);
+  });
+
+  it("ignores a non-string client_name", async () => {
+    const store = new InMemoryAuthStore();
+    const res = await handleDynamicClientRegistration({
+      body: { redirect_uris: [CLAUDE_CB], client_name: 12345 },
+      store,
+      ids: fixedIds("h".repeat(64)),
+      clock: new FakeClock(new Date("2026-04-20T10:00:00Z")),
+      redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.client_name).toBeUndefined();
+    expect((await store.getClient("h".repeat(64)))?.clientName).toBeUndefined();
   });
 });

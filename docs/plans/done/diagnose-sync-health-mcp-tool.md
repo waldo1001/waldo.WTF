@@ -136,7 +136,7 @@ All classification is **pure** over already-in-memory rows — no new IO paths e
 1. Unit tests: `npm run test -- diagnose-sync-health` — all new suites green.
 2. Coverage: ≥90% line + branch on new files per [coverage policy](docs/tdd/coverage-policy.md).
 3. Local smoke: run [`/local-smoke`](.claude/skills/local-smoke/SKILL.md) — verify `tools/list` includes `diagnose_sync_health` and a live call returns a result shape matching the contract.
-4. Manual agent loop: from Claude Cowork or Claude Code, invoke `diagnose_sync_health` against the running NAS instance at `http://waldonas3.tailb07704.ts.net:8765`. Confirm the returned `remediationPrompt` strings are self-contained enough to hand to a fresh agent session.
+4. Manual agent loop: from Claude Cowork or Claude Code, invoke `diagnose_sync_health` against the running NAS instance at `http://<nas-host>.<tailnet>.ts.net:8765`. Confirm the returned `remediationPrompt` strings are self-contained enough to hand to a fresh agent session.
 5. Inject failure: temporarily corrupt a delta token row in a throwaway DB (via local-smoke's scratch DB) and confirm a `delta-invalid` finding appears with a correct SQL remediation suggestion.
 6. Run [`/security-scan`](.claude/skills/security-scan/SKILL.md) — confirm remediation prompts do not leak tokens or bearer secrets from `lastError` strings (sanitize error text before inclusion; add a redaction helper + test).
 

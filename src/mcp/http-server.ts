@@ -7,6 +7,7 @@ import {
 import { timingSafeEqual } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Clock } from "../clock.js";
+import type { Logger } from "../logger.js";
 import type { MessageStore } from "../store/message-store.js";
 import type { SteeringStore } from "../store/steering-store.js";
 import type { VivaSubscriptionStore } from "../store/viva-subscription-store.js";
@@ -25,6 +26,7 @@ import {
 } from "../auth/oauth/authorize.js";
 import type { PasswordHasher } from "../auth/oauth/password.js";
 import { handleTokenRequest } from "../auth/oauth/token.js";
+import { DEFAULT_REDIRECT_ALLOWLIST } from "../auth/oauth/redirect-allowlist.js";
 import { createMcpServer } from "./mcp-server.js";
 
 export interface OAuthHttpOptions {
@@ -34,6 +36,8 @@ export interface OAuthHttpOptions {
   readonly adminPasswordHash?: string;
   readonly hasher?: PasswordHasher;
   readonly disableStaticBearer?: boolean;
+  /** Defaults to DEFAULT_REDIRECT_ALLOWLIST (claude.ai / claude.com callbacks). */
+  readonly redirectAllowlist?: readonly string[];
 }
 
 export interface McpHttpServerOptions {
@@ -43,6 +47,7 @@ export interface McpHttpServerOptions {
   readonly clock: Clock;
   readonly vivaSubs?: VivaSubscriptionStore;
   readonly oauth?: OAuthHttpOptions;
+  readonly logger?: Logger;
   readonly timeouts?: {
     readonly requestMs?: number;
     readonly headersMs?: number;
@@ -54,13 +59,30 @@ const writeJson = (
   res: ServerResponse,
   status: number,
   body: unknown,
+  extraHeaders: Record<string, string> = {},
 ): void => {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
     "Content-Type": "application/json",
     "Content-Length": Buffer.byteLength(payload).toString(),
+    ...extraHeaders,
   });
   res.end(payload);
+};
+
+const MAX_LOGGED_REDIRECT_CHARS = 500;
+
+// OAuth responses carry credentials (client ids, codes, tokens): never cache.
+const NO_STORE: Record<string, string> = { "Cache-Control": "no-store" };
+
+// The consent page takes the admin password: forbid framing (clickjacking),
+// caching, and leaking the query string (state, challenge) via Referer.
+const HTML_SECURITY_HEADERS: Record<string, string> = {
+  "X-Frame-Options": "DENY",
+  "Content-Security-Policy":
+    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+  "Cache-Control": "no-store",
+  "Referrer-Policy": "no-referrer",
 };
 
 const isAuthorized = (
@@ -103,6 +125,7 @@ const writeHtml = (
   res.writeHead(status, {
     "Content-Type": contentType,
     "Content-Length": Buffer.byteLength(body).toString(),
+    ...HTML_SECURITY_HEADERS,
   });
   res.end(body);
 };
@@ -140,6 +163,8 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
       return;
     }
     if (opts.oauth) {
+      const redirectAllowlist =
+        opts.oauth.redirectAllowlist ?? DEFAULT_REDIRECT_ALLOWLIST;
       if (
         req.method === "GET" &&
         req.url === "/.well-known/oauth-authorization-server"
@@ -181,8 +206,18 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
             store: oauth.authStore,
             ids: oauth.ids,
             clock: opts.clock,
+            redirectAllowlist,
           });
-          writeJson(res, result.status, result.body);
+          if (result.body?.error === "invalid_redirect_uri") {
+            // Not a secret, and the only way to notice that a legitimate
+            // client started using a new callback. JSON-encode + cap so
+            // attacker-chosen text cannot forge or flood log lines.
+            const uris = JSON.stringify(
+              (parsed as { redirect_uris?: unknown }).redirect_uris,
+            ).slice(0, MAX_LOGGED_REDIRECT_CHARS);
+            opts.logger?.info(`oauth_dcr_redirect_rejected redirect_uris=${uris}`);
+          }
+          writeJson(res, result.status, result.body, NO_STORE);
         })();
         return;
       }
@@ -201,7 +236,7 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
             clock: opts.clock,
             body,
           });
-          writeJson(res, result.status, result.body);
+          writeJson(res, result.status, result.body, NO_STORE);
         })();
         return;
       }
@@ -225,6 +260,7 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
           };
           const result = await handleAuthorizeGet({
             store: oauth.authStore,
+            redirectAllowlist,
             params,
           });
           writeHtml(res, result.status, result.contentType, result.body);
@@ -255,12 +291,13 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
             adminPasswordHash: oauth.adminPasswordHash,
             ids: oauth.ids,
             clock: opts.clock,
+            redirectAllowlist,
             formBody,
           });
           const status = result.status;
           const headers = { ...result.headers };
           if (status === 302) {
-            res.writeHead(302, headers);
+            res.writeHead(302, { ...headers, ...NO_STORE });
             res.end();
           } else {
             /* c8 ignore next -- authorize handler always sets Content-Type */

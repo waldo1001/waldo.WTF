@@ -1,13 +1,13 @@
 ---
 name: deploy-local
-description: Deploy waldo.WTF to the Mac mini (waldomacmini1) native LaunchDaemon — no Docker. Runs tests + local-smoke, refreshes deps, restarts the launchd service, re-asserts Tailscale Serve, and smoke-checks HTTPS health + the MCP tool surface. Use whenever shipping code changes to the running Mac mini server, OR when running a data migration from docs/migrations/. Flags; `--migrate <name>` to run a registered migration, `--dry-run` to print the plan without executing.
+description: Deploy waldo.WTF to the Mac mini (waldomacmini1) native LaunchDaemon — no Docker. Runs tests + local-smoke, refreshes deps, restarts the launchd service, re-asserts Tailscale Funnel, and smoke-checks HTTPS health + the MCP tool surface. Use whenever shipping code changes to the running Mac mini server, OR when running a data migration from docs/migrations/. Flags; `--migrate <name>` to run a registered migration, `--dry-run` to print the plan without executing.
 ---
 
 # /deploy-local — native Mac mini deploy (no Docker)
 
 waldo.WTF runs natively on the Mac mini `waldomacmini1` as a LaunchDaemon
 (`com.waldo.wtf.server`), reachable at `https://waldomacmini1.tailb07704.ts.net`
-via Tailscale Serve (TLS → `127.0.0.1:8765`). The data lake, auth cache, and
+via Tailscale Funnel (public TLS → `127.0.0.1:8765`). The data lake, auth cache, and
 `.env` live under `/Users/waldo/waldo-wtf/`; the code runs from this checkout via
 `tsx`. There is **no container, no image, no scp** — deploy is local.
 
@@ -33,9 +33,10 @@ backup-only target (nightly `com.waldo.wtf.backup`).
    (`node -p process.versions.modules` ≠ what better-sqlite3 was built for):
    `npm rebuild better-sqlite3`. Verify `node_modules/.bin/tsx` exists.
 5. **Restart** — `sudo launchctl kickstart -k system/com.waldo.wtf.server`.
-6. **Re-assert exposure** — `sudo /Applications/Tailscale.app/Contents/MacOS/Tailscale serve status`
-   should still show `https://waldomacmini1.tailb07704.ts.net → http://127.0.0.1:8765`;
-   if missing, `sudo … serve --bg --https=443 http://127.0.0.1:8765`.
+6. **Re-assert exposure** — `sudo /Applications/Tailscale.app/Contents/MacOS/Tailscale funnel status`
+   should still show `https://waldomacmini1.tailb07704.ts.net (Funnel on) → http://127.0.0.1:8765`;
+   if missing, `sudo … funnel --bg http://127.0.0.1:8765`. Production is **Funnel**
+   (public), not tailnet-only Serve — the claude.ai connector needs it (docs/deploy-macmini.md).
 7. **Smoke** — `curl -sS https://waldomacmini1.tailb07704.ts.net/health` → `{"ok":true}`;
    then ask Claude (Desktop/web) `list_accounts` + `get_sync_status` — `last_ok_at` within minutes.
    Watch `tail -f logs/server.out.log` for `sync tick complete: N account(s), M ok, 0 error(s)`.

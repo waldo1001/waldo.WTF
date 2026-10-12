@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { loadOAuthConfig, OAuthConfigError } from "./oauth-config.js";
+import { DEFAULT_REDIRECT_ALLOWLIST } from "./redirect-allowlist.js";
 
 describe("loadOAuthConfig", () => {
   it("requires WALDO_PUBLIC_URL", () => {
@@ -79,6 +80,43 @@ describe("loadOAuthConfig", () => {
   it("rejects a malformed publicUrl", () => {
     expect(() =>
       loadOAuthConfig({ WALDO_PUBLIC_URL: "not a url" }),
+    ).toThrow(OAuthConfigError);
+  });
+
+  it("redirectAllowlist defaults to the claude.ai / claude.com callbacks", () => {
+    const cfg = loadOAuthConfig({ WALDO_PUBLIC_URL: "https://nas.example.ts.net" });
+    expect(cfg.redirectAllowlist).toEqual(DEFAULT_REDIRECT_ALLOWLIST);
+  });
+
+  it("WALDO_OAUTH_REDIRECT_ALLOWLIST replaces the default (comma-separated, trimmed)", () => {
+    const cfg = loadOAuthConfig({
+      WALDO_PUBLIC_URL: "https://nas.example.ts.net",
+      WALDO_OAUTH_REDIRECT_ALLOWLIST:
+        " https://a.example/cb , https://b.example/cb ,",
+    });
+    expect(cfg.redirectAllowlist).toEqual([
+      "https://a.example/cb",
+      "https://b.example/cb",
+    ]);
+  });
+
+  it("rejects a non-https or malformed WALDO_OAUTH_REDIRECT_ALLOWLIST entry", () => {
+    for (const bad of ["http://a.example/cb", "not a url", "https://u@a.example/cb"]) {
+      expect(() =>
+        loadOAuthConfig({
+          WALDO_PUBLIC_URL: "https://nas.example.ts.net",
+          WALDO_OAUTH_REDIRECT_ALLOWLIST: bad,
+        }),
+      ).toThrow(OAuthConfigError);
+    }
+  });
+
+  it("rejects an allowlist entry carrying only a password", () => {
+    expect(() =>
+      loadOAuthConfig({
+        WALDO_PUBLIC_URL: "https://nas.example.ts.net",
+        WALDO_OAUTH_REDIRECT_ALLOWLIST: "https://:pw@a.example/cb",
+      }),
     ).toThrow(OAuthConfigError);
   });
 });

@@ -64,7 +64,8 @@ export interface AuthStore {
    * (the old access token stops validating), slide `accessExpiresAt` and
    * `refreshExpiresAt`, and keep the SAME refresh token. Returns the updated
    * pair, or `undefined` for an unknown/expired refresh token (leaving the
-   * stored row untouched in that case).
+   * stored row untouched in that case). When `expectedClientId` is given and
+   * differs from the grant's client, behaves like an unknown token.
    */
   refreshAccessToken(
     refreshToken: string,
@@ -72,5 +73,6 @@ export interface AuthStore {
     newAccessToken: string,
     accessExpiresAt: Date,
     refreshExpiresAt: Date,
+    expectedClientId?: string,
   ): Promise<OAuthTokenPair | undefined>;
 }

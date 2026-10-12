@@ -90,6 +90,7 @@ export class SqliteAuthStore implements AuthStore {
     newAccessToken: string,
     accessExpiresAtMs: number,
     refreshExpiresAtMs: number,
+    expectedClientId: string | undefined,
   ) => OAuthTokenPair | undefined;
 
   constructor(db: Database) {
@@ -143,10 +144,14 @@ export class SqliteAuthStore implements AuthStore {
         newAccessToken: string,
         accessExpiresAtMs: number,
         refreshExpiresAtMs: number,
+        expectedClientId: string | undefined,
       ): OAuthTokenPair | undefined => {
         const row = selectByRefresh.get(refreshToken) as TokenRow | undefined;
-        // Non-destructive: unknown or expired refresh leaves the row untouched.
+        // Non-destructive: unknown, expired or wrong-client refresh leaves the row untouched.
         if (!row || row.refresh_expires_at <= nowMs) return undefined;
+        if (expectedClientId !== undefined && row.client_id !== expectedClientId) {
+          return undefined;
+        }
         updateAccess.run(
           newAccessToken,
           accessExpiresAtMs,
@@ -161,8 +166,8 @@ export class SqliteAuthStore implements AuthStore {
         });
       },
     );
-    this.refreshTx = (rt, nowMs, newAccess, accessExp, refreshExp) =>
-      refreshTx(rt, nowMs, newAccess, accessExp, refreshExp);
+    this.refreshTx = (rt, nowMs, newAccess, accessExp, refreshExp, clientId) =>
+      refreshTx(rt, nowMs, newAccess, accessExp, refreshExp, clientId);
   }
 
   async registerClient(reg: OAuthClientRegistration): Promise<void> {
@@ -242,6 +247,7 @@ export class SqliteAuthStore implements AuthStore {
     newAccessToken: string,
     accessExpiresAt: Date,
     refreshExpiresAt: Date,
+    expectedClientId?: string,
   ): Promise<OAuthTokenPair | undefined> {
     return this.refreshTx(
       refreshToken,
@@ -249,6 +255,7 @@ export class SqliteAuthStore implements AuthStore {
       newAccessToken,
       accessExpiresAt.getTime(),
       refreshExpiresAt.getTime(),
+      expectedClientId,
     );
   }
 }

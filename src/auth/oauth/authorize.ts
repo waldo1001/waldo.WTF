@@ -2,8 +2,12 @@ import type { Clock } from "../../clock.js";
 import type { AuthStore } from "./auth-store.js";
 import type { RandomIdSource } from "./ids.js";
 import type { PasswordHasher } from "./password.js";
+import { isRedirectAllowed } from "./redirect-allowlist.js";
+import type { OAuthClientRecord } from "./auth-store.js";
 
 const AUTH_CODE_TTL_MS = 10 * 60 * 1000;
+// RFC 7636 §4.2: S256 challenge is base64url, 43..128 chars.
+const CODE_CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{43,128}$/;
 
 export interface AuthorizeGetParams {
   readonly client_id: string;
@@ -17,6 +21,7 @@ export interface AuthorizeGetParams {
 
 export interface AuthorizeGetRequest {
   readonly store: AuthStore;
+  readonly redirectAllowlist: readonly string[];
   readonly params: AuthorizeGetParams;
 }
 
@@ -42,6 +47,7 @@ export interface AuthorizePostRequest {
   readonly adminPasswordHash: string | undefined;
   readonly ids: RandomIdSource;
   readonly clock: Clock;
+  readonly redirectAllowlist: readonly string[];
   readonly formBody: AuthorizePostFormBody;
 }
 
@@ -62,7 +68,13 @@ const escHtml = (s: string): string =>
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+const redirectOrigin = (uri: string): string => {
+  const u = new URL(uri);
+  return `${u.protocol}//${u.host}`;
+};
 
 const consentForm = (
   client: { clientId: string; clientName?: string },
@@ -88,13 +100,16 @@ label{display:block;margin-top:1rem;font-weight:600}
 input[type=password]{width:100%;padding:.5rem;margin-top:.25rem;box-sizing:border-box;border:1px solid #ccc;border-radius:4px;font-size:1rem}
 button{margin-top:1.5rem;width:100%;padding:.75rem;background:#1d4ed8;color:#fff;border:none;border-radius:4px;font-size:1rem;cursor:pointer}
 button:hover{background:#1e40af}
+.dest{background:#fef3c7;border:1px solid #f59e0b;padding:.75rem;border-radius:4px}
+.host{font-size:1.25rem;font-family:monospace;word-break:break-all}
 .scope{background:#f3f4f6;padding:.5rem;border-radius:4px;font-family:monospace}
 </style>
 </head>
 <body>
 <div class="card">
 <h1>Authorize access</h1>
-<p><strong>${displayName}</strong> is requesting access to your waldo.WTF message lake.</p>
+<p class="dest">After approval you will be sent to:<br><strong class="host">${escHtml(redirectOrigin(params.redirect_uri))}</strong></p>
+<p>Only approve if that is where you started this connection. <strong>${displayName}</strong> (name is self-declared by the client) is requesting read access to your waldo.WTF message lake.</p>
 <p>Scope: <span class="scope">${escHtml(params.scope ?? "mcp")}</span></p>
 <p>Client ID: <code>${escHtml(client.clientId)}</code></p>
 ${err}
@@ -114,73 +129,102 @@ ${params.state !== undefined ? hidden("state", params.state) : ""}
 </html>`;
 };
 
+type ValidationResult =
+  | { readonly ok: true; readonly client: OAuthClientRecord }
+  | { readonly ok: false; readonly error: AuthorizeGetResponse };
+
+// Shared by GET (render consent) and POST (mint code): the POST is a plain
+// form submit anyone can craft, so it must not trust that the GET ran.
+// Error messages are fixed strings — never reflect attacker-supplied input.
+async function validateAuthorizeParams(
+  store: AuthStore,
+  params: AuthorizeGetParams,
+  redirectAllowlist: readonly string[],
+): Promise<ValidationResult> {
+  const fail = (message: string): ValidationResult => ({
+    ok: false,
+    error: errorHtml(400, message),
+  });
+  if (params.response_type !== "code") {
+    return fail("response_type must be 'code'");
+  }
+  if (params.code_challenge_method !== "S256") {
+    return fail("code_challenge_method must be 'S256' (required by OAuth 2.1)");
+  }
+  if (!CODE_CHALLENGE_PATTERN.test(params.code_challenge)) {
+    return fail("code_challenge is required (PKCE, 43-128 base64url characters)");
+  }
+  const client = await store.getClient(params.client_id);
+  if (!client) {
+    return fail("unknown client");
+  }
+  if (
+    !client.redirectUris.includes(params.redirect_uri) ||
+    !isRedirectAllowed(params.redirect_uri, redirectAllowlist)
+  ) {
+    return fail("redirect_uri is not registered for this client or not allowed");
+  }
+  return { ok: true, client };
+}
+
 export async function handleAuthorizeGet(
   req: AuthorizeGetRequest,
 ): Promise<AuthorizeGetResponse> {
-  const { params, store } = req;
-
-  if (params.response_type !== "code") {
-    return errorHtml(400, "response_type must be 'code'");
-  }
-  if (params.code_challenge_method !== "S256") {
-    return errorHtml(
-      400,
-      "code_challenge_method must be 'S256' (required by OAuth 2.1)",
-    );
-  }
-  if (!params.code_challenge) {
-    return errorHtml(400, "code_challenge is required (PKCE)");
-  }
-
-  const client = await store.getClient(params.client_id);
-  if (!client) {
-    return errorHtml(400, `unknown client: ${params.client_id}`);
-  }
-  if (!client.redirectUris.includes(params.redirect_uri)) {
-    return errorHtml(
-      400,
-      `redirect_uri '${params.redirect_uri}' is not registered for this client`,
-    );
-  }
-
-  const html = consentForm(client, params);
+  const result = await validateAuthorizeParams(
+    req.store,
+    req.params,
+    req.redirectAllowlist,
+  );
+  if (!result.ok) return result.error;
+  const html = consentForm(result.client, req.params);
   return { status: 200, contentType: "text/html; charset=utf-8", body: html };
 }
+
+const toPostResponse = (r: AuthorizeGetResponse): AuthorizePostResponse => ({
+  status: r.status,
+  headers: { "Content-Type": r.contentType },
+  body: r.body,
+});
 
 export async function handleAuthorizePost(
   req: AuthorizePostRequest,
 ): Promise<AuthorizePostResponse> {
   if (req.adminPasswordHash === undefined) {
-    return {
-      status: 503,
-      headers: { "Content-Type": "text/html; charset=utf-8" },
-      body: "<!DOCTYPE html><html><body><h1>503</h1><p>OAuth admin password not configured.</p></body></html>",
-    };
+    return toPostResponse(
+      errorHtml(503, "OAuth admin password not configured."),
+    );
   }
 
   const { formBody, store, hasher, adminPasswordHash, ids, clock } = req;
+  const params: AuthorizeGetParams = {
+    client_id: formBody.client_id,
+    redirect_uri: formBody.redirect_uri,
+    response_type: "code",
+    code_challenge: formBody.code_challenge,
+    code_challenge_method: formBody.code_challenge_method,
+    ...(formBody.scope !== undefined ? { scope: formBody.scope } : {}),
+    ...(formBody.state !== undefined ? { state: formBody.state } : {}),
+  };
+
+  // Validate before the (deliberately slow) password check: a tampered
+  // POST costs no scrypt work and can never reach saveAuthCode.
+  const validation = await validateAuthorizeParams(
+    store,
+    params,
+    req.redirectAllowlist,
+  );
+  if (!validation.ok) return toPostResponse(validation.error);
 
   const passwordOk = await hasher.verify(formBody.password, adminPasswordHash);
   if (!passwordOk) {
-    const client = await store.getClient(formBody.client_id);
-    const getParams: AuthorizeGetParams = {
-      client_id: formBody.client_id,
-      redirect_uri: formBody.redirect_uri,
-      response_type: "code",
-      code_challenge: formBody.code_challenge,
-      code_challenge_method: formBody.code_challenge_method,
-      scope: formBody.scope,
-      state: formBody.state,
-    };
-    const html = consentForm(
-      client ?? { clientId: formBody.client_id },
-      getParams,
-      "Incorrect password. Please try again.",
-    );
     return {
       status: 401,
       headers: { "Content-Type": "text/html; charset=utf-8" },
-      body: html,
+      body: consentForm(
+        validation.client,
+        params,
+        "Incorrect password. Please try again.",
+      ),
     };
   }
 
@@ -190,7 +234,7 @@ export async function handleAuthorizePost(
 
   await store.saveAuthCode({
     code,
-    clientId: formBody.client_id,
+    clientId: validation.client.clientId,
     redirectUri: formBody.redirect_uri,
     scope: formBody.scope ?? "mcp",
     codeChallenge: formBody.code_challenge,

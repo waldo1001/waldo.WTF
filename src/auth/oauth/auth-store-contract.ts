@@ -290,6 +290,38 @@ export function runAuthStoreContract(
       expect(original?.accessToken).toBe("at-1");
     });
 
+    it("refreshAccessToken with a mismatching expectedClientId returns undefined and leaves the row intact", async () => {
+      const store = await factory();
+      await store.registerClient(reg({ clientId: "abc123" }));
+      await store.saveTokenPair(tokenPair());
+      const got = await store.refreshAccessToken(
+        "rt-1",
+        TOKEN_NOW,
+        "at-2",
+        ACCESS_EXPIRES,
+        REFRESH_EXPIRES,
+        "other-client",
+      );
+      expect(got).toBeUndefined();
+      expect(await store.getAccessToken("at-1", TOKEN_NOW)).toBeDefined();
+      expect(await store.getAccessToken("at-2", TOKEN_NOW)).toBeUndefined();
+    });
+
+    it("refreshAccessToken with a matching expectedClientId refreshes", async () => {
+      const store = await factory();
+      await store.registerClient(reg({ clientId: "abc123" }));
+      await store.saveTokenPair(tokenPair());
+      const got = await store.refreshAccessToken(
+        "rt-1",
+        TOKEN_NOW,
+        "at-2",
+        ACCESS_EXPIRES,
+        REFRESH_EXPIRES,
+        "abc123",
+      );
+      expect(got?.accessToken).toBe("at-2");
+    });
+
     it("registerClient round-trips multiple redirect URIs", async () => {
       const store = await factory();
       await store.registerClient(

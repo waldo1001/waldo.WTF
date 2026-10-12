@@ -342,7 +342,7 @@ Plan: [docs/plans/done/oauth-mcp-auth-slice-4-resource-guard.md](docs/plans/done
 
 Plan: [docs/plans/done/oauth-mcp-auth-slice-5-live-smoke.md](docs/plans/done/oauth-mcp-auth-slice-5-live-smoke.md).
 
-**Live smoke ✅ (2026-04-20)** — claude.ai custom connector registered end-to-end against `https://waldonas3.tailb07704.ts.net` (Tailscale Funnel → NAS container). Full OAuth flow exercised (DCR → consent → PKCE token exchange → `/mcp` tool calls). Static bearer kept on alongside OAuth; `WALDO_DISABLE_STATIC_BEARER` left false so Claude Desktop's bearer path keeps working.
+**Live smoke ✅ (2026-04-20)** — claude.ai custom connector registered end-to-end against `https://<nas-host>.<tailnet>.ts.net` (Tailscale Funnel → NAS container). Full OAuth flow exercised (DCR → consent → PKCE token exchange → `/mcp` tool calls). Static bearer kept on alongside OAuth; `WALDO_DISABLE_STATIC_BEARER` left false so Claude Desktop's bearer path keeps working.
 
 ---
 
@@ -368,7 +368,7 @@ Plan: [docs/plans/done/oauth-mcp-auth-slice-5-live-smoke.md](docs/plans/done/oau
   (copied + `integrity_check`-gated, schema v15, zero re-sync) and the MSAL token cache
   (5 accounts re-synced, 0 errors — cache is portable). Now a launchd LaunchDaemon
   (`com.waldo.wtf.server`, `KeepAlive` + in-process watchdog replace the autoheal
-  sidecar); exposed via Tailscale Serve TLS at `https://waldomacmini1.tailb07704.ts.net`
+  sidecar); exposed via Tailscale Serve TLS at `https://<host>.<tailnet>.ts.net`
   (OAuth + static-bearer both live). WhatsApp push repointed (`bin/wtf-whatsapp-push`
   now `WTF_PUSH_*`, legacy `WTF_NAS_*` still honored). NAS demoted to backup-only:
   frozen pre-migration snapshot at `/volume1/docker/waldo-wtf/` (compose neutralized) +

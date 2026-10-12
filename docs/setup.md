@@ -135,6 +135,9 @@ BEARER_TOKEN=generate-a-long-random-hex-string
 # WALDO_PUBLIC_URL=https://waldo-nas.your-tailnet.ts.net
 # WALDO_ADMIN_PASSWORD=  # generate with: openssl rand -hex 24 — gates consent (slice 2+)
 # WALDO_DISABLE_STATIC_BEARER=  # set to true once OAuth is the primary path (slice 4+)
+# WALDO_OAUTH_REDIRECT_ALLOWLIST=  # comma-separated https callbacks allowed at DCR/authorize.
+#   Default: https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback
+#   http://localhost / 127.0.0.1 / [::1] (any port) are always allowed for native clients.
 
 # Optional — kill switch for the in-process watchdogs (event-loop lag +
 # self-loopback healthcheck). On wedge, the process logs and exits so

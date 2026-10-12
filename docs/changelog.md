@@ -11,6 +11,16 @@ skill.
 
 ---
 
+## 2026-10-12
+
+- **Security hardening S1 — OAuth flow integrity** ([plan](plans/done/security-hardening-s1-oauth-flow-integrity.md), umbrella [security-hardening.md](plans/security-hardening.md)). Production is reachable via Tailscale **Funnel**, so consent phishing was a live path: DCR accepted any https callback and the consent POST minted a code for whatever it was sent.
+- DCR now only accepts redirect URIs on an allowlist (`WALDO_OAUTH_REDIRECT_ALLOWLIST`, default claude.ai + claude.com callbacks) plus http loopback for Claude Desktop / Claude Code; `client_name` is capped at 64 chars. Rejections log `oauth_dcr_redirect_rejected` so a new legitimate callback is easy to spot.
+- `GET` and `POST /oauth/authorize` share one validator (client exists, redirect registered **and** allowlisted, S256, well-formed challenge); the POST validates before the scrypt password check. Clients registered earlier with non-allowlisted callbacks are now refused at authorize time.
+- The consent page shows the destination host prominently and labels the client name as self-declared; error pages no longer reflect submitted input; HTML responses carry `X-Frame-Options: DENY`, a strict CSP with `frame-ancestors 'none'`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`. OAuth JSON responses are `no-store`.
+- `/oauth/token` binds codes and refresh tokens to their client: a `client_id` that doesn't match → `invalid_grant` (omitting it still works).
+- Applied non-breaking `npm audit fix` (MCP SDK 1.29.0 → 1.32.1, plus transitive `proxy-addr`, `hono`, `fast-uri` …). Remaining 3 critical / 2 high need major bumps (vitest 2→4 dev-only, adm-zip 0.5→0.6) — deferred to a separate task by decision.
+- Docs: [deploy-macmini.md](deploy-macmini.md) corrected — production is exposed via **Funnel**, not tailnet-only Serve; `/deploy-local` now re-asserts Funnel. Full tailnet hostnames in docs replaced with `<host>.<tailnet>.ts.net` placeholders.
+
 ## 2026-08-24
 
 - **Meeting transcripts are live.** After the ifacto tenant admin enabled
@@ -569,7 +579,7 @@ skill.
 
 ## 2026-06-21
 
-- **Migrated production off the NAS+Docker onto the Mac mini (`waldomacmini1`), native, no Docker.** Existing lake moved intact (1.37 GB, 65,567 messages, schema v15) via tar-over-ssh, `integrity_check`/`quick_check` gated, zero re-sync; MSAL token cache copied (5 accounts, first tick 19 ok / 0 errors). Now a launchd LaunchDaemon `com.waldo.wtf.server` (`KeepAlive` + the existing in-process event-loop watchdog replace the Docker `autoheal` sidecar). Data root `/Users/waldo/waldo-wtf/{db,auth,whatsapp-inbox,whatsapp-archive,logs}` + `.env` (chmod 600, loaded by dotenv from the daemon WorkingDirectory). Exposed via Tailscale Serve TLS → `127.0.0.1:8765` at `https://waldomacmini1.tailb07704.ts.net` (OAuth + static-bearer both live). Full runbook: [deploy-macmini.md](deploy-macmini.md).
+- **Migrated production off the NAS+Docker onto the Mac mini (`waldomacmini1`), native, no Docker.** Existing lake moved intact (1.37 GB, 65,567 messages, schema v15) via tar-over-ssh, `integrity_check`/`quick_check` gated, zero re-sync; MSAL token cache copied (5 accounts, first tick 19 ok / 0 errors). Now a launchd LaunchDaemon `com.waldo.wtf.server` (`KeepAlive` + the existing in-process event-loop watchdog replace the Docker `autoheal` sidecar). Data root `/Users/waldo/waldo-wtf/{db,auth,whatsapp-inbox,whatsapp-archive,logs}` + `.env` (chmod 600, loaded by dotenv from the daemon WorkingDirectory). Exposed via Tailscale Serve TLS → `127.0.0.1:8765` at `https://<host>.<tailnet>.ts.net` (OAuth + static-bearer both live). Full runbook: [deploy-macmini.md](deploy-macmini.md).
 - Added `NODE_OPTIONS=--dns-result-order=ipv4first` to the server env: this network's IPv6 path to some Microsoft 365 endpoints stalls large responses (an established IPv6 socket hangs); IPv4 is healthy. Captured as an operational note in [deploy-macmini.md](deploy-macmini.md).
 - WhatsApp push ([../bin/wtf-whatsapp-push](../bin/wtf-whatsapp-push)) repointed off the NAS: new `WTF_PUSH_HOST`/`WTF_PUSH_INBOX` (default the Mac mini), legacy `WTF_NAS_*` accepted as deprecated aliases. TDD: 4 new tests in [../src/sync/whatsapp-push-script.test.ts](../src/sync/whatsapp-push-script.test.ts) (push-vars / Mac-mini-default / legacy-backward-compat / push-over-legacy precedence). Server-side chokidar watcher now watches `/Users/waldo/waldo-wtf/whatsapp-inbox`.
 - NAS demoted to **backup-only**: containers removed, compose file neutralized (`docker-compose.yml.MIGRATED-to-macmini-20260621`) so a reboot can't start a second writer; pre-migration lake frozen at `/volume1/docker/waldo-wtf/`. New nightly hot-snapshot backup ([../deploy/wtf-backup.sh](../deploy/wtf-backup.sh) via `com.waldo.wtf.backup` @ 03:30) → `waldonas3:/volume1/backup/waldo-wtf/YYYY-MM-DD/`, keep 14 days.
@@ -674,7 +684,7 @@ skill.
 - OAuth slice 3: `POST /oauth/token` — `authorization_code` grant (PKCE verifier check, issues access + refresh pair) and `refresh_token` grant (rotation: old token invalidated on use). Access TTL 1 h, refresh TTL 30 days. Schema migration v8 → v9: `oauth_access_tokens` table + refresh index.
 - OAuth slice 4: MCP endpoint dual-path auth — accepts valid OAuth access token **or** static bearer (unless `WALDO_DISABLE_STATIC_BEARER=true`). Every 401 with OAuth configured now carries `WWW-Authenticate: Bearer resource_metadata=<publicUrl>/.well-known/oauth-protected-resource` (RFC 6750).
 - OAuth slice 5: `docs/oauth.md` operator guide — setup, curl walkthrough, claude.ai registration steps, admin password rotation, manual SQLite client revocation, troubleshooting table. `.env.example` verified complete.
-- OAuth live smoke passed: claude.ai custom connector registered against `https://waldonas3.tailb07704.ts.net` (Tailscale Funnel), consent accepted, first tool call (`list_accounts` / `get_sync_status`) returned live lake data. NAS deploy of image `waldo-wtf:local` (sha256:f4a83b32de6f) healthy.
+- OAuth live smoke passed: claude.ai custom connector registered against `https://<nas-host>.<tailnet>.ts.net` (Tailscale Funnel), consent accepted, first tool call (`list_accounts` / `get_sync_status`) returned live lake data. NAS deploy of image `waldo-wtf:local` (sha256:f4a83b32de6f) healthy.
 - `.env.example` documents four OAuth vars: `WALDO_PUBLIC_URL`, `WALDO_ADMIN_PASSWORD`, `WALDO_DISABLE_STATIC_BEARER` (new in slice 1), and confirms all are optional with clear defaults.
 
 ## 2026-04-19

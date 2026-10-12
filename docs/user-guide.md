@@ -951,6 +951,7 @@ to `waldo-nas.<tailnet>.ts.net:8765`.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
+| Adding the connector fails at registration (`invalid_redirect_uri`) | The client's OAuth callback is not on the redirect allowlist | Find the URI in the server log line `oauth_dcr_redirect_rejected`; if it is legitimate, add it to `WALDO_OAUTH_REDIRECT_ALLOWLIST` and restart — see [oauth.md §1.1](oauth.md) |
 | `get_sync_status` shows account in error | Token expired or tenant revoked consent | Re-run `npm run login -- --account <email>` |
 | Claude says "no recent activity" but mail is flowing | Sync worker crashed | Check logs for `delta_sync_failed`; restart `npm run dev` |
 | SQLite "database is locked" | WAL mode lost, or db is on SMB | Confirm `journal_mode=wal`, move db to internal disk |

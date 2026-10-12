@@ -8,7 +8,7 @@ removed). The Synology NAS is now a **backup-only** target.
 ## Topology
 
 ```
-Claude Desktop / claude.ai ──HTTPS──► waldomacmini1.tailb07704.ts.net  (Tailscale Serve, TLS)
+claude.ai / Claude mobile / Desktop ──HTTPS (public internet)──► <host>.<tailnet>.ts.net  (Tailscale FUNNEL, TLS)
                                             │  reverse-proxy
                                             ▼
                                       127.0.0.1:8765   (LaunchDaemon: tsx src/cli.ts)
@@ -57,19 +57,31 @@ sudo launchctl kickstart -k system/com.waldo.wtf.server
 sudo launchctl print system/com.waldo.wtf.server | grep -E 'state|pid'   # expect running, has pid
 ```
 
-## Expose over HTTPS (Tailscale Serve)
+## Expose over HTTPS (Tailscale Funnel)
 
 ```bash
 TS=/Applications/Tailscale.app/Contents/MacOS/Tailscale
-sudo "$TS" serve --bg --https=443 http://127.0.0.1:8765
-sudo "$TS" serve status
-curl -s https://waldomacmini1.tailb07704.ts.net/health      # {"ok":true}
+sudo "$TS" funnel status      # expect: https://<host>.<tailnet>.ts.net (Funnel on) -> http://127.0.0.1:8765
+# if missing:
+sudo "$TS" funnel --bg http://127.0.0.1:8765
+curl -s https://<host>.<tailnet>.ts.net/health      # {"ok":true}
 ```
 
-Serve is tailnet-only (not Funnel) and persists in tailscaled state across reboots.
-`WALDO_PUBLIC_URL=https://waldomacmini1.tailb07704.ts.net` in `.env` enables the OAuth
-routes for the claude.ai web connector; Claude Desktop uses the same HTTPS `/mcp` URL
-+ bearer.
+Production is exposed with **Funnel, i.e. on the public internet**, not
+tailnet-only Serve. That is required: the claude.ai connector (used by
+claude.ai web, Claude mobile and Claude Desktop) connects from Anthropic's cloud,
+which cannot reach a tailnet-only host. The config persists in tailscaled state
+across reboots.
+
+Implications — every route is reachable by anyone who knows the hostname:
+
+- **OAuth is the public access path.** `WALDO_PUBLIC_URL=https://<host>.<tailnet>.ts.net`
+  in `.env` enables it; DCR and authorize are restricted to allowlisted callbacks
+  ([oauth.md §1.1](oauth.md)).
+- **The static `BEARER_TOKEN` currently also works over Funnel.** It is being moved
+  to a loopback-only listener — see [plans/security-hardening.md](plans/security-hardening.md) (S2).
+- Funnel requests never carry Tailscale identity headers; the server sees every
+  request as coming from `127.0.0.1`.
 
 ## Day-to-day
 

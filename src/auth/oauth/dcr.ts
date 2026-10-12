@@ -1,12 +1,16 @@
 import type { Clock } from "../../clock.js";
 import type { AuthStore } from "./auth-store.js";
 import type { RandomIdSource } from "./ids.js";
+import { isRedirectAllowed } from "./redirect-allowlist.js";
+
+const MAX_CLIENT_NAME_LENGTH = 64;
 
 export interface DcrRequest {
   readonly body: unknown;
   readonly store: AuthStore;
   readonly ids: RandomIdSource;
   readonly clock: Clock;
+  readonly redirectAllowlist: readonly string[];
 }
 
 // RFC 7591 + 8414 client metadata projection. Only the fields slice 1 cares
@@ -36,20 +40,6 @@ export interface DcrResponse {
 
 const isStringArray = (v: unknown): v is string[] =>
   Array.isArray(v) && v.every((x) => typeof x === "string");
-
-const isAllowedRedirectUri = (uri: string): boolean => {
-  let parsed: URL;
-  try {
-    parsed = new URL(uri);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol === "https:") return true;
-  if (parsed.protocol === "http:") {
-    return parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
-  }
-  return false;
-};
 
 const errorResponse = (
   status: number,
@@ -88,17 +78,24 @@ export async function handleDynamicClientRegistration(
     );
   }
   for (const uri of redirectUris) {
-    if (!isAllowedRedirectUri(uri)) {
+    if (!isRedirectAllowed(uri, req.redirectAllowlist)) {
       return errorResponse(
         400,
         "invalid_redirect_uri",
-        `redirect_uri must be https or http(://localhost|127.0.0.1): ${uri}`,
+        "redirect_uri is not on this server's allowlist (WALDO_OAUTH_REDIRECT_ALLOWLIST)",
       );
     }
   }
 
   const clientName =
     typeof obj.client_name === "string" ? obj.client_name : undefined;
+  if (clientName !== undefined && clientName.length > MAX_CLIENT_NAME_LENGTH) {
+    return errorResponse(
+      400,
+      "invalid_client_metadata",
+      `client_name must be at most ${MAX_CLIENT_NAME_LENGTH} characters`,
+    );
+  }
   const clientId = req.ids.next();
   const issuedAt = req.clock.now();
 

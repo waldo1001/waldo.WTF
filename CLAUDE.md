@@ -73,7 +73,7 @@ done, **cite the test names that cover each requirement**.
   shipping code changes to the running **Mac mini** (`waldomacmini1`) native
   LaunchDaemon (no Docker), or when running any one-shot data migration from
   [docs/migrations/](docs/migrations/). Drives test → local-smoke → pull →
-  `npm ci` → restart (`launchctl kickstart`) → re-assert Tailscale Serve →
+  `npm ci` → restart (`launchctl kickstart`) → re-assert Tailscale Funnel →
   smoke. `--migrate <name>` runs a registered migration; `--dry-run` prints
   the plan without executing. Full runbook: [docs/deploy-macmini.md](docs/deploy-macmini.md).
 

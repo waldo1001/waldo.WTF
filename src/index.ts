@@ -304,6 +304,7 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
             adminPasswordHash,
             hasher: scryptPasswordHasher,
             disableStaticBearer: oauthConfig.disableStaticBearer,
+            redirectAllowlist: oauthConfig.redirectAllowlist,
           };
         })()
       : undefined;
@@ -315,6 +316,7 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
     clock,
     vivaSubs,
     ...(oauth !== undefined ? { oauth } : {}),
+    logger,
   });
   await new Promise<void>((resolve) => {
     httpServer.listen(config.port, config.bindHost, () => resolve());

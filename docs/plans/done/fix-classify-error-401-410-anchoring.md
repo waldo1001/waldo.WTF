@@ -13,7 +13,7 @@ for completely unrelated failures.
 
 ## Context
 
-A live session against the NAS (`waldonas3.tailb07704.ts.net:8765`) saw
+A live session against the NAS (`<nas-host>.<tailnet>.ts.net:8765`) saw
 symptoms like "Waldo-wtf is throwing errors — looks like it might need a
 re-auth" appearing for every kind of failure, not just real auth ones.
 Investigation traced the false positive to the bare-digit regex above.

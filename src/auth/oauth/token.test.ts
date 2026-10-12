@@ -172,6 +172,99 @@ describe("handleTokenRequest – authorization_code grant", () => {
   });
 });
 
+describe("handleTokenRequest – client binding", () => {
+  let store: InMemoryAuthStore;
+  let clock: FakeClock;
+
+  beforeEach(async () => {
+    idCounter = 0;
+    store = new InMemoryAuthStore();
+    clock = new FakeClock(NOW);
+    for (const clientId of ["client-1", "client-2"]) {
+      await store.registerClient({
+        clientId,
+        redirectUris: ["https://claude.ai/cb"],
+        createdAt: NOW,
+      });
+    }
+    await store.saveAuthCode({
+      code: "auth-code-1",
+      clientId: "client-1",
+      redirectUri: "https://claude.ai/cb",
+      scope: "mcp",
+      codeChallenge: CHALLENGE,
+      expiresAt: EXPIRES_IN_10,
+      createdAt: NOW,
+    });
+  });
+
+  const exchange = (clientId?: string) =>
+    handleTokenRequest({
+      store,
+      ids: seqIds,
+      clock,
+      body: {
+        grant_type: "authorization_code",
+        code: "auth-code-1",
+        redirect_uri: "https://claude.ai/cb",
+        code_verifier: VERIFIER,
+        ...(clientId !== undefined ? { client_id: clientId } : {}),
+      },
+    });
+
+  it("authorization_code with a client_id other than the code's → 400 invalid_grant, code consumed", async () => {
+    const res = await exchange("client-2");
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_grant");
+    // single-use: no retry with the right client_id
+    const retry = await exchange("client-1");
+    expect(retry.status).toBe(400);
+  });
+
+  it("authorization_code with an empty client_id is treated as absent", async () => {
+    const res = await exchange("");
+    expect(res.status).toBe(200);
+  });
+
+  it("authorization_code without client_id still succeeds (public clients may omit it)", async () => {
+    const res = await exchange(undefined);
+    expect(res.status).toBe(200);
+  });
+
+  it("refresh_token with a client_id other than the grant's → 400 invalid_grant, access token untouched", async () => {
+    const issued = await exchange("client-1");
+    const res = await handleTokenRequest({
+      store,
+      ids: seqIds,
+      clock,
+      body: {
+        grant_type: "refresh_token",
+        refresh_token: String(issued.body.refresh_token),
+        client_id: "client-2",
+      },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_grant");
+    expect(
+      await store.getAccessToken(String(issued.body.access_token), NOW),
+    ).toBeDefined();
+  });
+
+  it("refresh_token without client_id still succeeds", async () => {
+    const issued = await exchange("client-1");
+    const res = await handleTokenRequest({
+      store,
+      ids: seqIds,
+      clock,
+      body: {
+        grant_type: "refresh_token",
+        refresh_token: String(issued.body.refresh_token),
+      },
+    });
+    expect(res.status).toBe(200);
+  });
+});
+
 describe("handleTokenRequest – refresh_token grant", () => {
   let store: InMemoryAuthStore;
   let clock: FakeClock;

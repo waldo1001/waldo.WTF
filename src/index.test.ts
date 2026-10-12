@@ -196,7 +196,7 @@ describe("main", () => {
     const reg = await fetch(`${baseUrl}/oauth/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ redirect_uris: ["https://claude.ai/cb"] }),
+      body: JSON.stringify({ redirect_uris: ["https://claude.ai/api/mcp/auth_callback"] }),
     });
     expect(reg.status).toBe(201);
     const regBody = await reg.json();

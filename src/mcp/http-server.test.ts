@@ -110,16 +110,22 @@ describe("createMcpHttpServer + OAuth discovery & DCR routes", () => {
   let store: InMemoryMessageStore;
   let authStore: InMemoryAuthStore;
   let clock: FakeClock;
+  let logLines: string[];
 
   beforeEach(async () => {
     store = new InMemoryMessageStore();
     authStore = new InMemoryAuthStore();
     clock = new FakeClock(new Date("2026-04-20T10:00:00Z"));
+    logLines = [];
     server = createMcpHttpServer({
       bearerToken: BEARER,
       store,
       steering: new InMemorySteeringStore(),
       clock,
+      logger: {
+        info: (m) => logLines.push(m),
+        error: (m) => logLines.push(m),
+      },
       oauth: {
         publicUrl: PUBLIC_URL,
         authStore,
@@ -173,15 +179,43 @@ describe("createMcpHttpServer + OAuth discovery & DCR routes", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        redirect_uris: ["https://claude.ai/cb"],
+        redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
         client_name: "Claude.ai",
       }),
     });
     expect(res.status).toBe(201);
     const body = await res.json();
     expect(body.client_id).toBe("z".repeat(64));
-    expect(body.redirect_uris).toEqual(["https://claude.ai/cb"]);
+    expect(body.redirect_uris).toEqual(["https://claude.ai/api/mcp/auth_callback"]);
     expect(await authStore.getClient("z".repeat(64))).toBeDefined();
+  });
+
+  it("POST /oauth/register rejects a non-allowlisted redirect and answers no-store", async () => {
+    const res = await fetch(`${baseUrl}/oauth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        redirect_uris: ["https://evil.example/cb"],
+        client_name: "Claude",
+      }),
+    });
+    expect(res.status).toBe(400);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await authStore.listClients()).toHaveLength(0);
+  });
+
+  it("logs a rejected DCR redirect as one escaped line so the operator can extend the allowlist", async () => {
+    await fetch(`${baseUrl}/oauth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        redirect_uris: ["https://new.example/cb\nFAKE log_line"],
+      }),
+    });
+    const line = logLines.find((l) => l.startsWith("oauth_dcr_redirect_rejected"));
+    expect(line).toBeDefined();
+    expect(line).toContain("new.example");
+    expect(line).not.toContain("\n");
   });
 
   it("POST /oauth/register with malformed JSON returns 400", async () => {
@@ -237,7 +271,7 @@ describe("createMcpHttpServer + OAuth authorize routes", () => {
     clock = new FakeClock(new Date("2026-04-20T10:00:00Z"));
     await authStore.registerClient({
       clientId: "cl-1",
-      redirectUris: ["https://claude.ai/callback"],
+      redirectUris: ["https://claude.ai/api/mcp/auth_callback"],
       createdAt: new Date("2026-04-20T09:00:00Z"),
       clientName: "Claude.ai",
     });
@@ -271,9 +305,9 @@ describe("createMcpHttpServer + OAuth authorize routes", () => {
     `${baseUrl}/oauth/authorize?` +
     new URLSearchParams({
       client_id: "cl-1",
-      redirect_uri: "https://claude.ai/callback",
+      redirect_uri: "https://claude.ai/api/mcp/auth_callback",
       response_type: "code",
-      code_challenge: "chal-xyz",
+      code_challenge: "ccccccccccccccccccccccccccccccccccccccccccc",
       code_challenge_method: "S256",
       scope: "mcp",
       state: "s1",
@@ -291,8 +325,8 @@ describe("createMcpHttpServer + OAuth authorize routes", () => {
   it("POST /oauth/authorize with correct password returns 302", async () => {
     const params = new URLSearchParams({
       client_id: "cl-1",
-      redirect_uri: "https://claude.ai/callback",
-      code_challenge: "chal-xyz",
+      redirect_uri: "https://claude.ai/api/mcp/auth_callback",
+      code_challenge: "ccccccccccccccccccccccccccccccccccccccccccc",
       code_challenge_method: "S256",
       scope: "mcp",
       state: "s1",
@@ -313,8 +347,8 @@ describe("createMcpHttpServer + OAuth authorize routes", () => {
   it("POST /oauth/authorize with wrong password returns 401", async () => {
     const params = new URLSearchParams({
       client_id: "cl-1",
-      redirect_uri: "https://claude.ai/callback",
-      code_challenge: "chal-xyz",
+      redirect_uri: "https://claude.ai/api/mcp/auth_callback",
+      code_challenge: "ccccccccccccccccccccccccccccccccccccccccccc",
       code_challenge_method: "S256",
       scope: "mcp",
       password: "wrong",
@@ -325,6 +359,63 @@ describe("createMcpHttpServer + OAuth authorize routes", () => {
       body: params.toString(),
     });
     expect(res.status).toBe(401);
+  });
+
+  const expectHardenedHtmlHeaders = (res: Response): void => {
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+    expect(res.headers.get("content-security-policy")).toContain(
+      "frame-ancestors 'none'",
+    );
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+  };
+
+  it("consent page carries anti-framing / no-store / no-referrer headers", async () => {
+    const res = await fetch(authorizeUrl());
+    expect(res.status).toBe(200);
+    expectHardenedHtmlHeaders(res);
+  });
+
+  it("authorize error page carries the same hardening headers", async () => {
+    const res = await fetch(`${baseUrl}/oauth/authorize?client_id=nope`);
+    expect(res.status).toBe(400);
+    expectHardenedHtmlHeaders(res);
+  });
+
+  it("wrong-password page carries the same hardening headers", async () => {
+    const params = new URLSearchParams({
+      client_id: "cl-1",
+      redirect_uri: "https://claude.ai/api/mcp/auth_callback",
+      code_challenge: "ccccccccccccccccccccccccccccccccccccccccccc",
+      code_challenge_method: "S256",
+      scope: "mcp",
+      password: "wrong",
+    });
+    const res = await fetch(`${baseUrl}/oauth/authorize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: params.toString(),
+    });
+    expect(res.status).toBe(401);
+    expectHardenedHtmlHeaders(res);
+  });
+
+  it("POST /oauth/authorize with a tampered client_id mints no code even with the right password", async () => {
+    const params = new URLSearchParams({
+      client_id: "attacker",
+      redirect_uri: "https://evil.example/cb",
+      code_challenge: "ccccccccccccccccccccccccccccccccccccccccccc",
+      code_challenge_method: "S256",
+      password: "hunter2",
+    });
+    const res = await fetch(`${baseUrl}/oauth/authorize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: params.toString(),
+      redirect: "manual",
+    });
+    expect(res.status).toBe(400);
+    expect(res.headers.get("location")).toBeNull();
   });
 
   it("GET /oauth/authorize without oauth configured falls through to bearer check", async () => {
@@ -371,13 +462,13 @@ describe("createMcpHttpServer + OAuth token route", () => {
     clock = new FakeClock(new Date("2026-04-20T10:00:00Z"));
     await authStore.registerClient({
       clientId: "cl-token",
-      redirectUris: ["https://claude.ai/callback"],
+      redirectUris: ["https://claude.ai/api/mcp/auth_callback"],
       createdAt: new Date("2026-04-20T09:00:00Z"),
     });
     await authStore.saveAuthCode({
       code: "auth-code-fixed",
       clientId: "cl-token",
-      redirectUri: "https://claude.ai/callback",
+      redirectUri: "https://claude.ai/api/mcp/auth_callback",
       scope: "mcp",
       codeChallenge: CHALLENGE,
       expiresAt: new Date("2026-04-20T10:10:00Z"),
@@ -411,7 +502,7 @@ describe("createMcpHttpServer + OAuth token route", () => {
     const body = new URLSearchParams({
       grant_type: "authorization_code",
       code: "auth-code-fixed",
-      redirect_uri: "https://claude.ai/callback",
+      redirect_uri: "https://claude.ai/api/mcp/auth_callback",
       code_verifier: VERIFIER,
       client_id: "cl-token",
     });
@@ -426,11 +517,21 @@ describe("createMcpHttpServer + OAuth token route", () => {
     expect(json.token_type).toBe("Bearer");
   });
 
+  it("POST /oauth/token responses are no-store", async () => {
+    const body = new URLSearchParams({ grant_type: "authorization_code", code: "x" });
+    const res = await fetch(`${baseUrl}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+    expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+
   it("POST /oauth/token with bad code returns 400 invalid_grant", async () => {
     const body = new URLSearchParams({
       grant_type: "authorization_code",
       code: "wrong-code",
-      redirect_uri: "https://claude.ai/callback",
+      redirect_uri: "https://claude.ai/api/mcp/auth_callback",
       code_verifier: VERIFIER,
       client_id: "cl-token",
     });
@@ -463,7 +564,7 @@ describe("createMcpHttpServer + OAuth resource guard", () => {
 
     await authStore.registerClient({
       clientId: "cl-guard",
-      redirectUris: ["https://claude.ai/callback"],
+      redirectUris: ["https://claude.ai/api/mcp/auth_callback"],
       createdAt: NOW,
     });
     await authStore.saveTokenPair({

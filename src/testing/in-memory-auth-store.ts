@@ -102,12 +102,16 @@ export class InMemoryAuthStore implements AuthStore {
     newAccessToken: string,
     accessExpiresAt: Date,
     refreshExpiresAt: Date,
+    expectedClientId?: string,
   ): Promise<OAuthTokenPair | undefined> {
     const accessToken = this.tokensByRefresh.get(refreshToken);
     if (accessToken === undefined) return undefined;
     const pair = this.tokensByAccess.get(accessToken);
     // Non-destructive: unknown or expired refresh leaves the row untouched.
     if (!pair || pair.refreshExpiresAt.getTime() <= now.getTime()) {
+      return undefined;
+    }
+    if (expectedClientId !== undefined && pair.clientId !== expectedClientId) {
       return undefined;
     }
     const updated: OAuthTokenPair = {
