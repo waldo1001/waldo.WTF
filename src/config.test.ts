@@ -95,6 +95,54 @@ describe("loadConfig", () => {
     );
   });
 
+  it("internalPort is absent when WALDO_INTERNAL_PORT is unset or empty", () => {
+    expect(loadConfig(validEnv()).internalPort).toBeUndefined();
+    expect(
+      loadConfig({ ...validEnv(), WALDO_INTERNAL_PORT: "" }).internalPort,
+    ).toBeUndefined();
+  });
+
+  it("internalPort reads WALDO_INTERNAL_PORT as an integer", () => {
+    expect(
+      loadConfig({ ...validEnv(), WALDO_INTERNAL_PORT: "8766" }).internalPort,
+    ).toBe(8766);
+  });
+
+  it("throws ConfigError when WALDO_INTERNAL_PORT is invalid, out of range, or equals the public port", () => {
+    for (const bad of ["abc", "0", "65536"]) {
+      expect(() =>
+        loadConfig({ ...validEnv(), WALDO_INTERNAL_PORT: bad }),
+      ).toThrow(ConfigError);
+    }
+    expect(() =>
+      loadConfig({ ...validEnv(), WALDO_INTERNAL_PORT: "8765" }),
+    ).toThrow(ConfigError);
+    expect(() =>
+      loadConfig({ ...validEnv(), WALDO_PORT: "9000", WALDO_INTERNAL_PORT: "9000" }),
+    ).toThrow(ConfigError);
+    expect(
+      loadConfig({ ...validEnv(), WALDO_INTERNAL_PORT: "65535" }).internalPort,
+    ).toBe(65535);
+  });
+
+  it("WALDO_INTERNAL_PORT errors name the variable and the reason", () => {
+    const errOf = (env: Record<string, string>): ConfigError => {
+      try {
+        loadConfig({ ...validEnv(), ...env });
+      } catch (e) {
+        return e as ConfigError;
+      }
+      throw new Error("expected loadConfig to throw");
+    };
+    const range = errOf({ WALDO_INTERNAL_PORT: "70000" });
+    expect(range.missing).toEqual(["WALDO_INTERNAL_PORT"]);
+    expect(range.message).toBe('WALDO_INTERNAL_PORT must be <= 65535, got "70000"');
+    const same = errOf({ WALDO_INTERNAL_PORT: "8765" });
+    expect(same.missing).toEqual(["WALDO_INTERNAL_PORT"]);
+    expect(same.message).toBe("WALDO_INTERNAL_PORT must differ from WALDO_PORT (8765)");
+    expect(errOf({ WALDO_INTERNAL_PORT: "x" }).message).toContain("WALDO_INTERNAL_PORT");
+  });
+
   it("syncIntervalMs defaults to DEFAULT_SYNC_INTERVAL_MS", () => {
     expect(loadConfig(validEnv()).syncIntervalMs).toBe(DEFAULT_SYNC_INTERVAL_MS);
   });

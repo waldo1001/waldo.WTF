@@ -53,7 +53,7 @@ are consent phishing (#1) and a leaked bearer (#2), so those go first.
 | Slice | Sub-plan | Covers | Why this order |
 |---|---|---|---|
 | S1 | [done/security-hardening-s1-oauth-flow-integrity.md](done/security-hardening-s1-oauth-flow-integrity.md) ✅ | #1, #5a/b/c | The only realistic remote takeover path. #5 is folded in because it touches the same handlers and pages. A separate slice would churn the same files twice. |
-| S2 | [security-hardening-s2-static-bearer-off-public-path.md](security-hardening-s2-static-bearer-off-public-path.md) | #2 | Removes the non-expiring credential from the internet. Needs a coordinated Jarvis env change. |
+| S2 | [done/security-hardening-s2-static-bearer-off-public-path.md](done/security-hardening-s2-static-bearer-off-public-path.md) ✅ | #2 | Removes the non-expiring credential from the internet. Needs a coordinated Jarvis env change. |
 | S3 | [security-hardening-s3-abuse-limits.md](security-hardening-s3-abuse-limits.md) | #3 + new crash finding | DoS / resource exhaustion |
 | S4 | [security-hardening-s4-token-storage-lifetime.md](security-hardening-s4-token-storage-lifetime.md) | #4 + revoke CLI | Schema migration; the riskiest change, so it goes last when everything else is green |
 | — | (docs, inside each slice's `/docs-update`) | #6 | Not a code slice |
@@ -77,12 +77,15 @@ After S4: `/local-smoke`, then stop.
 
 ## Operator steps after deploy (you, not me)
 
-Order matters. Do Jarvis first, then deploy, so Jarvis never 401s:
+Order matters. The internal listener only exists after the deploy, so Jarvis
+switches **right after** it (Jarvis misses at most one sweep, and fails loudly
+rather than silently, per Jarvis spec 605):
 
-1. **Jarvis** (`.env.jarvis` on the Mac mini): set
-   `JARVIS_WTF_MCP_URL=http://127.0.0.1:8766/mcp` (S2 option A), then restart via pm2.
-   Before the deploy, the old URL keeps working.
+1. **waldo.WTF `.env`**: add `WALDO_INTERNAL_PORT=8766` (check `lsof -i :8766` is free first).
 2. **Deploy** with `/deploy-local` (it runs the S4 migration via `--migrate oauth-token-hashing`).
+   Log shows `internal MCP listener (static bearer only) on http://127.0.0.1:8766`.
+   **Then Jarvis** (`.env.jarvis` on the Mac mini): set
+   `JARVIS_WTF_MCP_URL=http://127.0.0.1:8766/mcp` and restart it via pm2.
 3. **Rotate secrets** in `/Users/waldo/waldo-wtf/.env` (I will not touch it):
    - `BEARER_TOKEN=$(openssl rand -hex 32)`, and put the same value in Jarvis's `JARVIS_WTF_MCP_TOKEN`
    - `WALDO_ADMIN_PASSWORD=$(openssl rand -hex 24)`

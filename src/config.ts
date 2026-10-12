@@ -16,6 +16,9 @@ export type Config = Readonly<{
   port: number;
   syncIntervalMs: number;
   bindHost: string;
+  // Loopback-only listener that accepts the static bearer (for local headless
+  // clients such as Jarvis). Never exposed via Tailscale Serve/Funnel.
+  internalPort?: number;
   backfillDays?: number;
   whatsappDownloadsPath: string;
   whatsappArchivePath: string;
@@ -49,6 +52,25 @@ const parsePositiveInt = (raw: string, name: string): number => {
   return n;
 };
 
+const MAX_PORT = 65_535;
+
+const parseInternalPort = (raw: string, publicPort: number): number => {
+  const n = parsePositiveInt(raw, "WALDO_INTERNAL_PORT");
+  if (n > MAX_PORT) {
+    throw new ConfigError(
+      ["WALDO_INTERNAL_PORT"],
+      `WALDO_INTERNAL_PORT must be <= ${MAX_PORT}, got "${raw}"`,
+    );
+  }
+  if (n === publicPort) {
+    throw new ConfigError(
+      ["WALDO_INTERNAL_PORT"],
+      `WALDO_INTERNAL_PORT must differ from WALDO_PORT (${publicPort})`,
+    );
+  }
+  return n;
+};
+
 export function loadConfig(env: Env): Config {
   const required = ["MS_CLIENT_ID", "BEARER_TOKEN"] as const;
   const missing = required.filter((k) => !present(env[k]));
@@ -57,6 +79,9 @@ export function loadConfig(env: Env): Config {
   const port = present(env.WALDO_PORT)
     ? parsePositiveInt(env.WALDO_PORT, "WALDO_PORT")
     : DEFAULT_PORT;
+  const internalPort = present(env.WALDO_INTERNAL_PORT)
+    ? parseInternalPort(env.WALDO_INTERNAL_PORT, port)
+    : undefined;
   const syncIntervalMs = present(env.WALDO_SYNC_INTERVAL_MS)
     ? parsePositiveInt(env.WALDO_SYNC_INTERVAL_MS, "WALDO_SYNC_INTERVAL_MS")
     : DEFAULT_SYNC_INTERVAL_MS;
@@ -93,5 +118,6 @@ export function loadConfig(env: Env): Config {
     watchdogDisabled: env.WALDO_WATCHDOG_DISABLED === "1",
     watchdogSingleBlockMs,
     ...(backfillDays !== undefined ? { backfillDays } : {}),
+    ...(internalPort !== undefined ? { internalPort } : {}),
   };
 }

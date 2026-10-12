@@ -19,6 +19,9 @@ skill.
 - The consent page shows the destination host prominently and labels the client name as self-declared; error pages no longer reflect submitted input; HTML responses carry `X-Frame-Options: DENY`, a strict CSP with `frame-ancestors 'none'`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`. OAuth JSON responses are `no-store`.
 - `/oauth/token` binds codes and refresh tokens to their client: a `client_id` that doesn't match → `invalid_grant` (omitting it still works).
 - Applied non-breaking `npm audit fix` (MCP SDK 1.29.0 → 1.32.1, plus transitive `proxy-addr`, `hono`, `fast-uri` …). Remaining 3 critical / 2 high need major bumps (vitest 2→4 dev-only, adm-zip 0.5→0.6) — deferred to a separate task by decision.
+- **Security hardening S2 — static bearer off the public path** ([plan](plans/done/security-hardening-s2-static-bearer-off-public-path.md)). With `WALDO_PUBLIC_URL` set, the public listener (the Funnel-exposed one) now accepts **OAuth tokens only**; the non-expiring `BEARER_TOKEN` is rejected there.
+- New `WALDO_INTERNAL_PORT` starts a second listener hard-bound to `127.0.0.1` (ignores `WALDO_BIND_HOST`) that accepts **only** the static bearer and has no OAuth routes — for local headless clients (Jarvis). `WALDO_DISABLE_STATIC_BEARER=true` now means "don't start it". **Operator**: set `WALDO_INTERNAL_PORT=8766`, deploy, then point Jarvis at `http://127.0.0.1:8766/mcp`.
+- `.gitignore` now covers `.claude/settings.local.json` (may hold bearer tokens in permission entries) and `.claude/worktrees/`. `/local-smoke` boots in production shape and asserts the static bearer is refused on the public port.
 - Docs: [deploy-macmini.md](deploy-macmini.md) corrected — production is exposed via **Funnel**, not tailnet-only Serve; `/deploy-local` now re-asserts Funnel. Full tailnet hostnames in docs replaced with `<host>.<tailnet>.ts.net` placeholders.
 
 ## 2026-08-24

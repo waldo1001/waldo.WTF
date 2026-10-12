@@ -66,6 +66,13 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
+> **Static bearer scope (since 2026-10-12):** the `Authorization: Bearer <BEARER_TOKEN>`
+> setup below works on a **local dev** server without `WALDO_PUBLIC_URL`. On a
+> server with `WALDO_PUBLIC_URL` set (production), the public port is OAuth-only:
+> add waldo.WTF as a claude.ai **connector** instead ([oauth.md](oauth.md)); the
+> static bearer is honoured only on `http://127.0.0.1:$WALDO_INTERNAL_PORT` on the
+> server host itself.
+
 Restart Claude Desktop. For verification steps (curl `/health` and
 `tools/list`) and troubleshooting, see
 [claude-desktop-wiring.md](claude-desktop-wiring.md).

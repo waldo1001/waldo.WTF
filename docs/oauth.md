@@ -10,8 +10,9 @@ This document covers setting up the OAuth 2.1 surface so claude.ai or Claude mob
 |-----|----------|-------|
 | `WALDO_PUBLIC_URL` | Yes | Externally reachable base URL of the MCP server (https, no trailing slash). Enables all OAuth routes. |
 | `WALDO_ADMIN_PASSWORD` | Yes | Passphrase shown on the consent page when a client registers. Generate: `openssl rand -hex 24` |
-| `BEARER_TOKEN` | Keep | Static bearer still works unless you set `WALDO_DISABLE_STATIC_BEARER=true`. |
-| `WALDO_DISABLE_STATIC_BEARER` | Optional | Set to `true` once OAuth is your primary access path to harden the endpoint. |
+| `BEARER_TOKEN` | Keep | **Not accepted on the public port** once `WALDO_PUBLIC_URL` is set. Only honoured on the internal listener (`WALDO_INTERNAL_PORT`). |
+| `WALDO_INTERNAL_PORT` | Optional | Loopback-only (`127.0.0.1`) listener that accepts the static bearer and has no OAuth routes. For headless local clients (Jarvis). Never Serve/Funnel it. |
+| `WALDO_DISABLE_STATIC_BEARER` | Optional | `true` = don't start the internal listener, i.e. no static-bearer access at all. |
 | `WALDO_OAUTH_REDIRECT_ALLOWLIST` | Optional | Comma-separated https callback URIs a client may register/use. See §1.1. |
 
 Add to `.env` (or the container environment):
@@ -228,7 +229,8 @@ sqlite3 data/lake.db \
 | `POST /oauth/token` → `invalid_grant` | Auth code already used, or expired (10-min window) | Restart the OAuth flow |
 | `POST /oauth/token` → PKCE `code_verifier does not match` | Client sent wrong verifier | Client bug; re-run the PKCE generation |
 | MCP endpoint → 401 with `WWW-Authenticate: Bearer resource_metadata=…` | Access token expired | Refresh via `grant_type=refresh_token` |
-| MCP endpoint → 401 even with fresh token | `WALDO_DISABLE_STATIC_BEARER=true` and token lookup failed | Verify `WALDO_PUBLIC_URL` resolves correctly |
+| MCP endpoint → 401 even with fresh token | Token lookup failed (expired / revoked / wrong server) | Verify `WALDO_PUBLIC_URL` resolves correctly; re-authorize the connector |
+| Static `BEARER_TOKEN` → 401 on the `ts.net` URL | Expected since S2: the public port is OAuth-only | Use the internal listener `http://127.0.0.1:$WALDO_INTERNAL_PORT/mcp` from the server host |
 | MCP endpoint → 401 with bare `Bearer` (no resource_metadata) | `WALDO_PUBLIC_URL` not set | OAuth not mounted; static bearer only |
 | `redirect_uri_mismatch` on register | Supplied `redirect_uri` not in client's registered list | Re-register or fix the redirect URI |
 | `POST /oauth/register` → 400 `invalid_redirect_uri` | Callback not on the allowlist (§1.1) | Check the `oauth_dcr_redirect_rejected` log line; add the URI to `WALDO_OAUTH_REDIRECT_ALLOWLIST` if legitimate |

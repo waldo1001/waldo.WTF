@@ -111,43 +111,65 @@ silent success is NOT proof of success.
 This is the piece `npm test` cannot cover — the real Node process coming
 up with a real SQLite file under `src/index.ts`.
 
+Boot in **production shape**: OAuth on the public port (so it is
+OAuth-only) plus the loopback internal listener for the static bearer.
+
 ```sh
+SMOKE_INTERNAL_PORT=$((SMOKE_PORT + 1))
 WALDO_DB_PATH="$SMOKE_DB" WALDO_PORT="$SMOKE_PORT" \
+  WALDO_PUBLIC_URL="http://localhost:$SMOKE_PORT" \
+  WALDO_INTERNAL_PORT="$SMOKE_INTERNAL_PORT" \
   npx tsx src/index.ts > /tmp/waldo-smoke-boot.log 2>&1 &
 sleep 3
 
 BEARER="$(grep BEARER_TOKEN .env | cut -d= -f2)"
-curl -sS \
-  -H "Authorization: Bearer $BEARER" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -X POST "http://127.0.0.1:$SMOKE_PORT/mcp" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+list_tools() {
+  curl -sS -o /tmp/waldo-smoke-body.txt -w "%{http_code}" \
+    -H "Authorization: Bearer $BEARER" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
+    -X POST "http://127.0.0.1:$1/mcp" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+}
+echo "public:   $(list_tools "$SMOKE_PORT")"            # expect 401 (OAuth-only)
+echo "internal: $(list_tools "$SMOKE_INTERNAL_PORT")"   # expect 200
+cat /tmp/waldo-smoke-body.txt
+grep -c "internal MCP listener (static bearer only)" /tmp/waldo-smoke-boot.log   # expect 1
 kill %1 2>/dev/null; wait %1 2>/dev/null
 ```
+
+The **public** probe must be `401` — a `200` there means the static
+bearer leaked back onto the Funnel-exposed port (security regression,
+see [docs/oauth.md](../../../docs/oauth.md)). The **internal** probe
+must be `200`.
 
 Assert the JSON-RPC response (which arrives as an SSE frame beginning
 `data: {...}`) contains all expected tool names:
 
 - `get_recent_activity`
 - `get_sync_status`
+- `diagnose_sync_health`
 - `search`
 - `get_thread`
+- `list_threads`
 - `list_accounts`
+- `find_events`
+- `get_event`
+- `get_event_transcript`
 - `get_steering`
 - `add_steering_rule`
 - `remove_steering_rule`
 - `set_steering_enabled`
 
-Any missing name = a registration regression. Any `401` or `403` = bearer
-mismatch; re-check [.env](../../../.env). Any `415` = `Accept` header
+Any missing name = a registration regression. A `401` on the **internal**
+port = bearer mismatch; re-check [.env](../../../.env). Any `415` = `Accept` header
 wrong in the curl above. Any connection refused = the server crashed on
 boot — read `/tmp/waldo-smoke-boot.log` before going further.
 
 ## Step 4 — Teardown
 
 ```sh
-rm -f "$SMOKE_DB" "$SMOKE_DB-wal" "$SMOKE_DB-shm" /tmp/waldo-smoke-boot.log
+rm -f "$SMOKE_DB" "$SMOKE_DB-wal" "$SMOKE_DB-shm" /tmp/waldo-smoke-boot.log /tmp/waldo-smoke-body.txt
 ```
 
 ## Step 5 — Report
@@ -157,7 +179,7 @@ Post one short summary in chat:
 ```
 /local-smoke PASS
 - CLI: add x2, list, disable, remove, validation errors, no-op remove — all expected output
-- Boot: listened on $SMOKE_PORT, tools/list returned all 9 tools
+- Boot: listened on $SMOKE_PORT, tools/list returned all 14 tools
 - Teardown: throwaway artifacts removed
 ```
 

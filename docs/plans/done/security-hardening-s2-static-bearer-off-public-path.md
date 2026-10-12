@@ -1,6 +1,8 @@
 # S2 — Take the static bearer off the public path
 
-Parent: [security-hardening.md](security-hardening.md)
+Parent: [security-hardening.md](../security-hardening.md)
+
+Status: **DONE 2026-10-12** (branch `security/hardening`).
 
 ## Goal
 The non-expiring `BEARER_TOKEN` cannot be used by anything arriving through
@@ -47,6 +49,7 @@ for Funnel and strips spoofed ones.
 7. `.gitignore` contains both entries (a simple file assertion in the security-scan, not a Vitest test; listed for traceability).
 
 ## Risks
-- **Jarvis ordering**: if you deploy before switching Jarvis's URL, Jarvis 401s until it's switched. The umbrella plan's operator order handles this. The failure is loud (Jarvis spec 605 throws instead of returning `[]`).
+- **Jarvis ordering** (corrected during FRAME): the internal listener exists only after deploy, so it's `.env` (WALDO_INTERNAL_PORT) → deploy → switch Jarvis immediately. Between deploy and switch, Jarvis 401s loudly (spec 605 throws instead of returning `[]`).
+- **Decision made in FRAME**: `OAuthHttpOptions.disableStaticBearer` is removed (dead: public + OAuth never accepts the static bearer). `WALDO_DISABLE_STATIC_BEARER=true` now means "don't start the internal listener".
 - Port `8766` collisions on the Mac mini. Check with `lsof -i :8766` before choosing.
 - Also `/local-smoke` needs to exercise both listeners. Its SKILL.md is updated in `/docs-update`.

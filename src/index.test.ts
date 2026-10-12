@@ -223,6 +223,141 @@ describe("main", () => {
     await result.shutdown();
   });
 
+  const postInitialize = (url: string, token: string): Promise<Response> =>
+    fetch(`${url}/`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "t", version: "0" },
+        },
+      }),
+    });
+
+  const otherPort = (publicPort: string): string => {
+    let p = randomPort();
+    while (p === publicPort) p = randomPort();
+    return p;
+  };
+
+  it("serves the static bearer only on a loopback internal listener when WALDO_INTERNAL_PORT is set", async () => {
+    const h = makeHarness();
+    const env = makeEnv();
+    const internalPort = otherPort(env.WALDO_PORT as string);
+    const result = await main({
+      env: {
+        ...env,
+        WALDO_BIND_HOST: "0.0.0.0",
+        WALDO_PUBLIC_URL: "https://nas.example.ts.net",
+        WALDO_INTERNAL_PORT: internalPort,
+      },
+      loadDotenv: false,
+      overrides: {
+        ...makeOverrides(),
+        authStore: new InMemoryAuthStore(),
+        setTimer: h.setTimer,
+        logger: h.logger,
+      },
+    });
+    try {
+      const internal = result.internalHttpServer?.address() as AddressInfo;
+      expect(internal).toBeDefined();
+      expect(internal.address).toBe("127.0.0.1");
+      expect(internal.port).toBe(Number(internalPort));
+
+      const internalUrl = `http://127.0.0.1:${internalPort}`;
+      const publicUrl = `http://127.0.0.1:${env.WALDO_PORT}`;
+      expect((await postInitialize(internalUrl, "bearer-token")).status).toBe(200);
+      expect((await postInitialize(publicUrl, "bearer-token")).status).toBe(401);
+      expect((await postInitialize(internalUrl, "wrong-token")).status).toBe(401);
+
+      // No OAuth surface on the internal listener.
+      const reg = await fetch(`${internalUrl}/oauth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ redirect_uris: ["http://localhost:1/cb"] }),
+      });
+      expect(reg.status).toBe(401);
+      expect(
+        h.logs.some((l) => l.includes(`internal MCP listener (static bearer only) on http://127.0.0.1:${internalPort}`)),
+      ).toBe(true);
+    } finally {
+      await result.shutdown();
+    }
+    expect(result.internalHttpServer?.listening).toBe(false);
+    expect(result.httpServer.listening).toBe(false);
+  });
+
+  it("does not start the internal listener when WALDO_DISABLE_STATIC_BEARER=true", async () => {
+    const h = makeHarness();
+    const env = makeEnv();
+    const result = await main({
+      env: {
+        ...env,
+        WALDO_PUBLIC_URL: "https://nas.example.ts.net",
+        WALDO_INTERNAL_PORT: otherPort(env.WALDO_PORT as string),
+        WALDO_DISABLE_STATIC_BEARER: "true",
+      },
+      loadDotenv: false,
+      overrides: {
+        ...makeOverrides(),
+        authStore: new InMemoryAuthStore(),
+        setTimer: h.setTimer,
+        logger: h.logger,
+      },
+    });
+    try {
+      expect(result.internalHttpServer).toBeUndefined();
+      expect(
+        h.logs.some((l) => l.includes("internal listener not started")),
+      ).toBe(true);
+    } finally {
+      await result.shutdown();
+    }
+  });
+
+  it("starts the internal listener without OAuth configured (tailnet-only / dev setups)", async () => {
+    const h = makeHarness();
+    const env = makeEnv();
+    const internalPort = otherPort(env.WALDO_PORT as string);
+    const result = await main({
+      env: { ...env, WALDO_INTERNAL_PORT: internalPort },
+      loadDotenv: false,
+      overrides: { ...makeOverrides(), setTimer: h.setTimer, logger: h.logger },
+    });
+    try {
+      expect(result.internalHttpServer).toBeDefined();
+      expect(
+        (await postInitialize(`http://127.0.0.1:${internalPort}`, "bearer-token")).status,
+      ).toBe(200);
+    } finally {
+      await result.shutdown();
+    }
+  });
+
+  it("starts no internal listener when WALDO_INTERNAL_PORT is unset", async () => {
+    const h = makeHarness();
+    const result = await main({
+      env: makeEnv(),
+      loadDotenv: false,
+      overrides: { ...makeOverrides(), setTimer: h.setTimer, logger: h.logger },
+    });
+    try {
+      expect(result.internalHttpServer).toBeUndefined();
+    } finally {
+      await result.shutdown();
+    }
+  });
+
   it("starts both watchdogs by default with the documented intervals", async () => {
     const h = makeHarness();
     const overrides = makeOverrides();

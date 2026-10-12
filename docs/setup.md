@@ -134,7 +134,10 @@ BEARER_TOKEN=generate-a-long-random-hex-string
 # no trailing slash. Required for the Tailscale-Funnel deployment.
 # WALDO_PUBLIC_URL=https://waldo-nas.your-tailnet.ts.net
 # WALDO_ADMIN_PASSWORD=  # generate with: openssl rand -hex 24 — gates consent (slice 2+)
-# WALDO_DISABLE_STATIC_BEARER=  # set to true once OAuth is the primary path (slice 4+)
+# With WALDO_PUBLIC_URL set, the public port accepts OAuth tokens ONLY.
+# BEARER_TOKEN is then honoured solely on the loopback-only internal listener:
+# WALDO_INTERNAL_PORT=8766      # 127.0.0.1 only (ignores WALDO_BIND_HOST); for local headless clients (Jarvis)
+# WALDO_DISABLE_STATIC_BEARER=  # true = don't start the internal listener (no static-bearer access at all)
 # WALDO_OAUTH_REDIRECT_ALLOWLIST=  # comma-separated https callbacks allowed at DCR/authorize.
 #   Default: https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback
 #   http://localhost / 127.0.0.1 / [::1] (any port) are always allowed for native clients.

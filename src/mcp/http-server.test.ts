@@ -557,7 +557,7 @@ describe("createMcpHttpServer + OAuth resource guard", () => {
   const ACCESS_EXPIRES = new Date(NOW.getTime() + 3600 * 1000);
   const REFRESH_EXPIRES = new Date(NOW.getTime() + 30 * 24 * 3600 * 1000);
 
-  const makeServer = async (opts: { disableStaticBearer?: boolean } = {}): Promise<void> => {
+  const makeServer = async (): Promise<void> => {
     store = new InMemoryMessageStore();
     authStore = new InMemoryAuthStore();
     clock = new FakeClock(NOW);
@@ -595,7 +595,6 @@ describe("createMcpHttpServer + OAuth resource guard", () => {
         publicUrl: PUBLIC_URL,
         authStore,
         ids: fixedIds("unused"),
-        disableStaticBearer: opts.disableStaticBearer,
       },
     });
     await new Promise<void>((resolve) => {
@@ -671,8 +670,8 @@ describe("createMcpHttpServer + OAuth resource guard", () => {
     expect(wwwAuth).toContain(PUBLIC_URL);
   });
 
-  it("static bearer still works when disableStaticBearer is false", async () => {
-    await makeServer({ disableStaticBearer: false });
+  it("rejects the static bearer on a listener with OAuth configured (public path is OAuth-only)", async () => {
+    await makeServer();
     const res = await fetch(`${baseUrl}/`, {
       method: "POST",
       headers: {
@@ -681,20 +680,8 @@ describe("createMcpHttpServer + OAuth resource guard", () => {
       },
       body: JSON.stringify({ jsonrpc: "2.0", method: "initialize", id: 1, params: {} }),
     });
-    expect(res.status).not.toBe(401);
-  });
-
-  it("static bearer rejected when disableStaticBearer is true", async () => {
-    await makeServer({ disableStaticBearer: true });
-    const res = await fetch(`${baseUrl}/`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${BEARER}`,
-        "Content-Type": "application/json",
-      },
-      body: "{}",
-    });
     expect(res.status).toBe(401);
+    expect(res.headers.get("www-authenticate")).toContain("resource_metadata");
   });
 });
 

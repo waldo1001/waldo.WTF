@@ -36,3 +36,7 @@ Thumbs.db
 
 # Claude Code runtime state
 .claude/*.lock
+# Per-machine permission allowlist; can contain bearer tokens in curl entries.
+.claude/settings.local.json
+# Agent worktrees (full repo copies)
+.claude/worktrees/

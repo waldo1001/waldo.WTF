@@ -35,7 +35,6 @@ export interface OAuthHttpOptions {
   readonly ids: RandomIdSource;
   readonly adminPasswordHash?: string;
   readonly hasher?: PasswordHasher;
-  readonly disableStaticBearer?: boolean;
   /** Defaults to DEFAULT_REDIRECT_ALLOWLIST (claude.ai / claude.com callbacks). */
   readonly redirectAllowlist?: readonly string[];
 }
@@ -147,10 +146,12 @@ async function checkAuthorization(
   const token = extractBearerToken(authHeader);
   if (!token) return false;
 
+  // A listener with OAuth is the public (Funnel-exposed) one: OAuth tokens
+  // only. The non-expiring static bearer is accepted solely on a listener
+  // without OAuth — in production the loopback-only internal listener.
   if (oauth) {
     const pair = await oauth.authStore.getAccessToken(token, clock.now());
-    if (pair) return true;
-    if (oauth.disableStaticBearer) return false;
+    return pair !== undefined;
   }
 
   return isAuthorized(authHeader, staticBearer);

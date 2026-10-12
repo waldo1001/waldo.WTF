@@ -78,8 +78,11 @@ Implications — every route is reachable by anyone who knows the hostname:
 - **OAuth is the public access path.** `WALDO_PUBLIC_URL=https://<host>.<tailnet>.ts.net`
   in `.env` enables it; DCR and authorize are restricted to allowlisted callbacks
   ([oauth.md §1.1](oauth.md)).
-- **The static `BEARER_TOKEN` currently also works over Funnel.** It is being moved
-  to a loopback-only listener — see [plans/security-hardening.md](plans/security-hardening.md) (S2).
+- **The static `BEARER_TOKEN` is not accepted over Funnel.** The public port is
+  OAuth-only; the static bearer works only on the internal listener
+  `http://127.0.0.1:$WALDO_INTERNAL_PORT/mcp` (`.env`: `WALDO_INTERNAL_PORT=8766`),
+  which is hard-bound to loopback and must never be added to Serve/Funnel. Jarvis
+  (same machine) uses that URL via `JARVIS_WTF_MCP_URL`.
 - Funnel requests never carry Tailscale identity headers; the server sees every
   request as coming from `127.0.0.1`.
 

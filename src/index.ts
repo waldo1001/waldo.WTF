@@ -112,6 +112,7 @@ export interface MainResult {
   readonly config: Config;
   readonly scheduler: SyncScheduler;
   readonly httpServer: Server;
+  readonly internalHttpServer?: Server;
   readonly whatsappWatcher?: WhatsAppWatcherHandle;
   shutdown: () => Promise<void>;
 }
@@ -130,6 +131,10 @@ const nodeSetTimer: SetTimerFn = (fn, ms): TimerHandle => {
 };
 
 const DEFAULT_HTTP_TIMEOUT_MS = 60_000;
+
+// Hard-coded, not config.bindHost: the internal listener accepts the
+// non-expiring static bearer and must never be reachable off-box.
+const INTERNAL_BIND_HOST = "127.0.0.1";
 
 const WATCHDOG_EVENT_LOOP_INTERVAL_MS = 5_000;
 const WATCHDOG_EVENT_LOOP_MAX_LAG_MS = 1_000;
@@ -303,8 +308,8 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
             ids: cryptoRandomIdSource,
             adminPasswordHash,
             hasher: scryptPasswordHasher,
-            disableStaticBearer: oauthConfig.disableStaticBearer,
             redirectAllowlist: oauthConfig.redirectAllowlist,
+            disableStaticBearer: oauthConfig.disableStaticBearer,
           };
         })()
       : undefined;
@@ -324,6 +329,32 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
   logger.info(
     `waldo.WTF MCP server listening on http://${config.bindHost}:${config.port}`,
   );
+
+  let internalHttpServer: Server | undefined;
+  if (config.internalPort !== undefined) {
+    if (oauth?.disableStaticBearer === true) {
+      logger.info(
+        "WALDO_DISABLE_STATIC_BEARER=true: internal listener not started (static bearer disabled)",
+      );
+    } else {
+      // No `oauth` option: static bearer only, no OAuth routes.
+      const internal = createMcpHttpServer({
+        bearerToken: config.bearerToken,
+        store,
+        steering,
+        clock,
+        vivaSubs,
+        logger,
+      });
+      await new Promise<void>((resolve) => {
+        internal.listen(config.internalPort, INTERNAL_BIND_HOST, () => resolve());
+      });
+      internalHttpServer = internal;
+      logger.info(
+        `internal MCP listener (static bearer only) on http://${INTERNAL_BIND_HOST}:${config.internalPort}`,
+      );
+    }
+  }
   logger.info("starting initial sync tick (this may take a while on first run)");
 
   await scheduler.start();
@@ -388,13 +419,27 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
     selfProbe?.stop();
     whatsappWatcher?.stop();
     scheduler.stop();
-    await new Promise<void>((resolve, reject) => {
-      httpServer.close((err) => (err ? reject(err) : resolve()));
-    });
+    await Promise.all(
+      [httpServer, internalHttpServer]
+        .filter((s): s is Server => s !== undefined)
+        .map(
+          (s) =>
+            new Promise<void>((resolve, reject) => {
+              s.close((err) => (err ? reject(err) : resolve()));
+            }),
+        ),
+    );
     if (ownsDb && db !== null) db.close();
   };
 
-  return { config, scheduler, httpServer, whatsappWatcher, shutdown };
+  return {
+    config,
+    scheduler,
+    httpServer,
+    ...(internalHttpServer !== undefined ? { internalHttpServer } : {}),
+    whatsappWatcher,
+    shutdown,
+  };
 }
 
 export async function runFromCli(
