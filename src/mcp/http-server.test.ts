@@ -401,6 +401,62 @@ describe("createMcpHttpServer + OAuth authorize routes", () => {
     expectHardenedHtmlHeaders(res);
   });
 
+  const formAction = (res: Response): string | undefined =>
+    res.headers
+      .get("content-security-policy")
+      ?.split(";")
+      .map((d) => d.trim())
+      .find((d) => d.startsWith("form-action"));
+
+  it("consent page CSP allows the post-approval redirect to the validated client origin", async () => {
+    const res = await fetch(authorizeUrl());
+    expect(res.status).toBe(200);
+    expect(formAction(res)).toBe("form-action 'self' https://claude.ai");
+  });
+
+  it("wrong-password page CSP allows the same validated redirect origin", async () => {
+    const params = new URLSearchParams({
+      client_id: "cl-1",
+      redirect_uri: "https://claude.ai/api/mcp/auth_callback",
+      code_challenge: "ccccccccccccccccccccccccccccccccccccccccccc",
+      code_challenge_method: "S256",
+      password: "wrong",
+    });
+    const res = await fetch(`${baseUrl}/oauth/authorize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: params.toString(),
+    });
+    expect(res.status).toBe(401);
+    expect(formAction(res)).toBe("form-action 'self' https://claude.ai");
+  });
+
+  it("consent page CSP allows a loopback client's exact origin (host + port)", async () => {
+    await authStore.registerClient({
+      clientId: "cl-desktop",
+      redirectUris: ["http://127.0.0.1:53682/callback"],
+      createdAt: new Date("2026-04-20T09:00:00Z"),
+    });
+    const res = await fetch(
+      `${baseUrl}/oauth/authorize?` +
+        new URLSearchParams({
+          client_id: "cl-desktop",
+          redirect_uri: "http://127.0.0.1:53682/callback",
+          response_type: "code",
+          code_challenge: "ccccccccccccccccccccccccccccccccccccccccccc",
+          code_challenge_method: "S256",
+        }).toString(),
+    );
+    expect(res.status).toBe(200);
+    expect(formAction(res)).toBe("form-action 'self' http://127.0.0.1:53682");
+  });
+
+  it("error pages keep form-action 'self' only", async () => {
+    const res = await fetch(`${baseUrl}/oauth/authorize?client_id=nope`);
+    expect(res.status).toBe(400);
+    expect(formAction(res)).toBe("form-action 'self'");
+  });
+
   it("POST /oauth/authorize with a tampered client_id mints no code even with the right password", async () => {
     const params = new URLSearchParams({
       client_id: "attacker",

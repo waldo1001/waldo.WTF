@@ -13,6 +13,7 @@ skill.
 
 ## 2026-10-12
 
+- **Hotfix (post-deploy):** re-adding the claude.ai connector hung after "Approve". The S1 consent-page CSP `form-action 'self'` also governs the redirect that follows a form submission, so Chrome blocked the 302 back to claude.ai (the server had minted the codes; claude.ai never received them). The consent and wrong-password pages now allow `form-action 'self' <validated redirect origin>`; error pages keep `'self'` only ([plan](plans/done/hotfix-consent-csp-form-action.md)). `/local-smoke`'s curl checks can't see browser-enforced policies.
 - **Security hardening S1 — OAuth flow integrity** ([plan](plans/done/security-hardening-s1-oauth-flow-integrity.md), umbrella [security-hardening.md](plans/done/security-hardening.md)). Production is reachable via Tailscale **Funnel**, so consent phishing was a live path: DCR accepted any https callback and the consent POST minted a code for whatever it was sent.
 - DCR now only accepts redirect URIs on an allowlist (`WALDO_OAUTH_REDIRECT_ALLOWLIST`, default claude.ai + claude.com callbacks) plus http loopback for Claude Desktop / Claude Code; `client_name` is capped at 64 chars. Rejections log `oauth_dcr_redirect_rejected` so a new legitimate callback is easy to spot.
 - `GET` and `POST /oauth/authorize` share one validator (client exists, redirect registered **and** allowlisted, S256, well-formed challenge); the POST validates before the scrypt password check. Clients registered earlier with non-allowlisted callbacks are now refused at authorize time.

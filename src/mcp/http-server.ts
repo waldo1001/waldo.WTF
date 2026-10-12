@@ -118,13 +118,22 @@ const NO_STORE: Record<string, string> = { "Cache-Control": "no-store" };
 
 // The consent page takes the admin password: forbid framing (clickjacking),
 // caching, and leaking the query string (state, challenge) via Referer.
-const HTML_SECURITY_HEADERS: Record<string, string> = {
+// form-action also governs the redirect that FOLLOWS a form submission
+// (Chrome enforces this), so the consent form must allow the client's
+// validated redirect origin — 'self' alone blocks the 302 back to claude.ai.
+const htmlSecurityHeaders = (
+  formActionOrigin?: string,
+): Record<string, string> => ({
   "X-Frame-Options": "DENY",
-  "Content-Security-Policy":
-    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+  "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; form-action 'self'${
+    formActionOrigin !== undefined ? ` ${formActionOrigin}` : ""
+  }; frame-ancestors 'none'; base-uri 'none'`,
   "Cache-Control": "no-store",
   "Referrer-Policy": "no-referrer",
-};
+});
+
+/** Origin of a redirect URI that the authorize handler has already validated. */
+const validatedOrigin = (redirectUri: string): string => new URL(redirectUri).origin;
 
 const isAuthorized = (
   header: string | undefined,
@@ -146,11 +155,12 @@ const writeHtml = (
   status: number,
   contentType: string,
   body: string,
+  formActionOrigin?: string,
 ): void => {
   res.writeHead(status, {
     "Content-Type": contentType,
     "Content-Length": Buffer.byteLength(body).toString(),
-    ...HTML_SECURITY_HEADERS,
+    ...htmlSecurityHeaders(formActionOrigin),
   });
   res.end(body);
 };
@@ -354,7 +364,14 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
             redirectAllowlist,
             params,
           });
-          writeHtml(res, result.status, result.contentType, result.body);
+          // 200 = consent form rendered, i.e. redirect_uri passed validation.
+          writeHtml(
+            res,
+            result.status,
+            result.contentType,
+            result.body,
+            result.status === 200 ? validatedOrigin(params.redirect_uri) : undefined,
+          );
         });
         return;
       }
@@ -397,7 +414,15 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
             /* c8 ignore next -- authorize handler always sets Content-Type */
           const ct =
               headers["Content-Type"] ?? "text/html; charset=utf-8";
-            writeHtml(res, status, ct, result.body);
+            // 401 = wrong password; the form is re-rendered for an
+            // already-validated redirect_uri.
+            writeHtml(
+              res,
+              status,
+              ct,
+              result.body,
+              status === 401 ? validatedOrigin(formBody.redirect_uri) : undefined,
+            );
           }
         });
         return;
