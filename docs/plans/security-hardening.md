@@ -54,7 +54,7 @@ are consent phishing (#1) and a leaked bearer (#2), so those go first.
 |---|---|---|---|
 | S1 | [done/security-hardening-s1-oauth-flow-integrity.md](done/security-hardening-s1-oauth-flow-integrity.md) ✅ | #1, #5a/b/c | The only realistic remote takeover path. #5 is folded in because it touches the same handlers and pages. A separate slice would churn the same files twice. |
 | S2 | [done/security-hardening-s2-static-bearer-off-public-path.md](done/security-hardening-s2-static-bearer-off-public-path.md) ✅ | #2 | Removes the non-expiring credential from the internet. Needs a coordinated Jarvis env change. |
-| S3 | [security-hardening-s3-abuse-limits.md](security-hardening-s3-abuse-limits.md) | #3 + new crash finding | DoS / resource exhaustion |
+| S3 | [done/security-hardening-s3-abuse-limits.md](done/security-hardening-s3-abuse-limits.md) ✅ | #3 + new crash finding | DoS / resource exhaustion |
 | S4 | [security-hardening-s4-token-storage-lifetime.md](security-hardening-s4-token-storage-lifetime.md) | #4 + revoke CLI | Schema migration; the riskiest change, so it goes last when everything else is green |
 | — | (docs, inside each slice's `/docs-update`) | #6 | Not a code slice |
 

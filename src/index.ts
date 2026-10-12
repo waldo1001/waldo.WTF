@@ -309,6 +309,7 @@ export async function main(opts: MainOptions = {}): Promise<MainResult> {
             adminPasswordHash,
             hasher: scryptPasswordHasher,
             redirectAllowlist: oauthConfig.redirectAllowlist,
+            maxClients: oauthConfig.maxClients,
             disableStaticBearer: oauthConfig.disableStaticBearer,
           };
         })()

@@ -322,6 +322,75 @@ export function runAuthStoreContract(
       expect(got?.accessToken).toBe("at-2");
     });
 
+    it("countClients counts registered clients", async () => {
+      const store = await factory();
+      expect(await store.countClients()).toBe(0);
+      await store.registerClient(reg({ clientId: "c1" }));
+      await store.registerClient(reg({ clientId: "c2" }));
+      expect(await store.countClients()).toBe(2);
+    });
+
+    it("pruneUnusedClients deletes only clients older than the cutoff with no codes and no tokens", async () => {
+      const store = await factory();
+      const old = new Date("2026-04-01T00:00:00Z");
+      const cutoff = new Date("2026-04-10T00:00:00Z");
+      await store.registerClient(reg({ clientId: "old-unused", createdAt: old }));
+      await store.registerClient(reg({ clientId: "old-with-code", createdAt: old }));
+      await store.registerClient(reg({ clientId: "old-with-token", createdAt: old }));
+      await store.registerClient(
+        reg({ clientId: "new-unused", createdAt: new Date("2026-04-15T00:00:00Z") }),
+      );
+      await store.saveAuthCode({
+        code: "live-code",
+        clientId: "old-with-code",
+        redirectUri: "https://claude.ai/cb",
+        scope: "mcp",
+        codeChallenge: "c",
+        expiresAt: new Date("2026-04-15T00:10:00Z"),
+        createdAt: new Date("2026-04-15T00:00:00Z"),
+      });
+      await store.saveTokenPair({
+        accessToken: "at-x",
+        refreshToken: "rt-x",
+        clientId: "old-with-token",
+        scope: "mcp",
+        accessExpiresAt: new Date("2026-05-01T00:00:00Z"),
+        refreshExpiresAt: new Date("2026-05-01T00:00:00Z"),
+        createdAt: old,
+      });
+      expect(await store.pruneUnusedClients(cutoff)).toBe(1);
+      expect(await store.getClient("old-unused")).toBeUndefined();
+      expect(await store.getClient("old-with-code")).toBeDefined();
+      expect(await store.getClient("old-with-token")).toBeDefined();
+      expect(await store.getClient("new-unused")).toBeDefined();
+    });
+
+    it("saveAuthCode prunes codes that already expired at the new code's createdAt", async () => {
+      const store = await factory();
+      await store.registerClient(reg({ clientId: "abc123" }));
+      const base = {
+        clientId: "abc123",
+        redirectUri: "https://claude.ai/cb",
+        scope: "mcp",
+        codeChallenge: "c",
+      };
+      await store.saveAuthCode({
+        ...base,
+        code: "stale",
+        createdAt: new Date("2026-04-20T09:00:00Z"),
+        expiresAt: new Date("2026-04-20T09:10:00Z"),
+      });
+      await store.saveAuthCode({
+        ...base,
+        code: "fresh",
+        createdAt: new Date("2026-04-20T10:00:00Z"),
+        expiresAt: new Date("2026-04-20T10:10:00Z"),
+      });
+      // A pruned code consumed "in the past" would still be returned if it existed.
+      expect(await store.consumeAuthCode("stale", new Date("2026-04-20T09:05:00Z"))).toBeUndefined();
+      expect(await store.consumeAuthCode("fresh", new Date("2026-04-20T10:05:00Z"))).toBeDefined();
+    });
+
     it("registerClient round-trips multiple redirect URIs", async () => {
       const store = await factory();
       await store.registerClient(

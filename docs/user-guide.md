@@ -956,6 +956,7 @@ to `waldo-nas.<tailnet>.ts.net:8765`.
 | Claude says "no recent activity" but mail is flowing | Sync worker crashed | Check logs for `delta_sync_failed`; restart `npm run dev` |
 | SQLite "database is locked" | WAL mode lost, or db is on SMB | Confirm `journal_mode=wal`, move db to internal disk |
 | MCP connection refused in Claude Desktop | Server not running, wrong port, or bearer mismatch | Curl the endpoint with `Authorization: Bearer ...`, verify |
+| Adding the connector fails with `429` or `503` | OAuth rate limit or client cap hit ([oauth.md §1.2](oauth.md)) | Wait the `Retry-After` time; for 503 revoke stale clients or raise `WALDO_OAUTH_MAX_CLIENTS` |
 | Static bearer gets `401` on the public URL | Since 2026-10-12 the public (OAuth-enabled) port accepts OAuth tokens only | Use the claude.ai connector (OAuth), or — on the server host only — `http://127.0.0.1:$WALDO_INTERNAL_PORT/mcp` ([oauth.md](oauth.md)) |
 | Duplicate rows after re-import | Primary key collision disabled or hash function changed | Never change the hash function post-release; add a migration |
 | `--viva-discover` shows "no viva communities" despite having communities | Yammer API returned suggested groups (empty for guests in external networks) | Fixed in 2026-04-23 deploy — upgrade and re-run `--viva-discover` |

@@ -65,8 +65,35 @@ export class InMemoryAuthStore implements AuthStore {
       .map((r) => cloneRecord({ ...r }));
   }
 
+  async countClients(): Promise<number> {
+    return this.clients.size;
+  }
+
+  async pruneUnusedClients(olderThan: Date): Promise<number> {
+    this.deleteCodesExpiredBy(olderThan);
+    const used = new Set<string>([
+      ...[...this.authCodes.values()].map((c) => c.clientId),
+      ...[...this.tokensByAccess.values()].map((t) => t.clientId),
+    ]);
+    let deleted = 0;
+    for (const [id, client] of this.clients) {
+      if (client.createdAt.getTime() < olderThan.getTime() && !used.has(id)) {
+        this.clients.delete(id);
+        deleted += 1;
+      }
+    }
+    return deleted;
+  }
+
   async saveAuthCode(record: OAuthAuthCodeRecord): Promise<void> {
+    this.deleteCodesExpiredBy(record.createdAt);
     this.authCodes.set(record.code, cloneAuthCode(record));
+  }
+
+  private deleteCodesExpiredBy(at: Date): void {
+    for (const [code, rec] of this.authCodes) {
+      if (rec.expiresAt.getTime() <= at.getTime()) this.authCodes.delete(code);
+    }
   }
 
   async consumeAuthCode(

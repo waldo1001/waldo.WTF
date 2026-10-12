@@ -1,6 +1,8 @@
 # S3 — Abuse limits: body caps, rate limits, client cap, crash safety
 
-Parent: [security-hardening.md](security-hardening.md)
+Parent: [security-hardening.md](../security-hardening.md)
+
+Status: **DONE 2026-10-12** (branch `security/hardening`). Note: the SDK 1.32.1 transport already caps `/mcp` bodies (`maxRequestBodySize`, set to 1 MiB) — a declared-length pre-check adds `Connection: close`.
 
 ## Goal
 An unauthenticated internet caller can't exhaust memory, CPU (scrypt), disk

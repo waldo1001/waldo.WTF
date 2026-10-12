@@ -73,6 +73,9 @@ export class SqliteAuthStore implements AuthStore {
   >;
   private readonly getClientStmt: Statement<[string]>;
   private readonly listClientsStmt: Statement<[]>;
+  private readonly countClientsStmt: Statement<[]>;
+  private readonly deleteExpiredCodesStmt: Statement<[number]>;
+  private readonly pruneUnusedClientsStmt: Statement<[number]>;
   private readonly insertAuthCodeStmt: Statement<
     [string, string, string, string, string, string | null, number, number]
   >;
@@ -102,6 +105,16 @@ export class SqliteAuthStore implements AuthStore {
     );
     this.listClientsStmt = db.prepare(
       "SELECT client_id, client_name, redirect_uris_json, created_at FROM oauth_clients ORDER BY created_at ASC, client_id ASC",
+    );
+    this.countClientsStmt = db.prepare("SELECT COUNT(*) AS n FROM oauth_clients");
+    this.deleteExpiredCodesStmt = db.prepare(
+      "DELETE FROM oauth_auth_codes WHERE expires_at <= ?",
+    );
+    this.pruneUnusedClientsStmt = db.prepare(
+      `DELETE FROM oauth_clients
+        WHERE created_at < ?
+          AND client_id NOT IN (SELECT client_id FROM oauth_auth_codes)
+          AND client_id NOT IN (SELECT client_id FROM oauth_access_tokens)`,
     );
     this.insertAuthCodeStmt = db.prepare(
       "INSERT INTO oauth_auth_codes (code, client_id, redirect_uri, scope, code_challenge, state, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -197,7 +210,17 @@ export class SqliteAuthStore implements AuthStore {
     return rows.map(rowToRecord);
   }
 
+  async countClients(): Promise<number> {
+    return (this.countClientsStmt.get() as { n: number }).n;
+  }
+
+  async pruneUnusedClients(olderThan: Date): Promise<number> {
+    this.deleteExpiredCodesStmt.run(olderThan.getTime());
+    return this.pruneUnusedClientsStmt.run(olderThan.getTime()).changes;
+  }
+
   async saveAuthCode(record: OAuthAuthCodeRecord): Promise<void> {
+    this.deleteExpiredCodesStmt.run(record.createdAt.getTime());
     this.insertAuthCodeStmt.run(
       record.code,
       record.clientId,

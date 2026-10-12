@@ -24,6 +24,7 @@ describe("handleDynamicClientRegistration", () => {
       ids,
       clock,
       redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+      maxClients: 50,
     });
 
     expect(res.status).toBe(201);
@@ -55,6 +56,7 @@ describe("handleDynamicClientRegistration", () => {
       ids,
       clock,
       redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+      maxClients: 50,
     });
     const stored = await store.getClient("b".repeat(64));
     expect(stored?.clientName).toBeUndefined();
@@ -70,6 +72,7 @@ describe("handleDynamicClientRegistration", () => {
       ids,
       clock,
       redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+      maxClients: 50,
     });
     expect(res.status).toBe(400);
     expect(res.body).toEqual({
@@ -89,6 +92,7 @@ describe("handleDynamicClientRegistration", () => {
       ids,
       clock,
       redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+      maxClients: 50,
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_client_metadata");
@@ -104,6 +108,7 @@ describe("handleDynamicClientRegistration", () => {
       ids,
       clock,
       redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+      maxClients: 50,
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_redirect_uri");
@@ -124,6 +129,7 @@ describe("handleDynamicClientRegistration", () => {
       ids,
       clock,
       redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+      maxClients: 50,
     });
     expect(res.status).toBe(201);
   });
@@ -138,6 +144,7 @@ describe("handleDynamicClientRegistration", () => {
       ids,
       clock,
       redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+      maxClients: 50,
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_redirect_uri");
@@ -153,6 +160,7 @@ describe("handleDynamicClientRegistration", () => {
       ids,
       clock,
       redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+      maxClients: 50,
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_redirect_uri");
@@ -168,6 +176,7 @@ describe("handleDynamicClientRegistration", () => {
       ids,
       clock,
       redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+      maxClients: 50,
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_client_metadata");
@@ -183,6 +192,7 @@ describe("handleDynamicClientRegistration", () => {
       ids,
       clock,
       redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+      maxClients: 50,
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_client_metadata");
@@ -198,6 +208,7 @@ describe("handleDynamicClientRegistration", () => {
       ids,
       clock,
       redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+      maxClients: 50,
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_client_metadata");
@@ -211,6 +222,7 @@ describe("handleDynamicClientRegistration", () => {
       ids: fixedIds("e".repeat(64)),
       clock: new FakeClock(new Date("2026-04-20T10:00:00Z")),
       redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+      maxClients: 50,
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_redirect_uri");
@@ -225,6 +237,7 @@ describe("handleDynamicClientRegistration", () => {
       ids: fixedIds("f".repeat(64)),
       clock: new FakeClock(new Date("2026-04-20T10:00:00Z")),
       redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+      maxClients: 50,
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_client_metadata");
@@ -239,6 +252,7 @@ describe("handleDynamicClientRegistration", () => {
       ids: fixedIds("g".repeat(64)),
       clock: new FakeClock(new Date("2026-04-20T10:00:00Z")),
       redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+      maxClients: 50,
     });
     expect(res.status).toBe(201);
   });
@@ -251,9 +265,52 @@ describe("handleDynamicClientRegistration", () => {
       ids: fixedIds("h".repeat(64)),
       clock: new FakeClock(new Date("2026-04-20T10:00:00Z")),
       redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+      maxClients: 50,
     });
     expect(res.status).toBe(201);
     expect(res.body.client_name).toBeUndefined();
     expect((await store.getClient("h".repeat(64)))?.clientName).toBeUndefined();
+  });
+
+  describe("client cap", () => {
+    const NOW = new Date("2026-04-20T10:00:00Z");
+    let n = 0;
+    const seqIds: RandomIdSource = { next: () => `id-${++n}` };
+    const register = (store: InMemoryAuthStore, maxClients: number) =>
+      handleDynamicClientRegistration({
+        body: { redirect_uris: [CLAUDE_CB] },
+        store,
+        ids: seqIds,
+        clock: new FakeClock(NOW),
+        redirectAllowlist: DEFAULT_REDIRECT_ALLOWLIST,
+        maxClients,
+      });
+
+    it("refuses registration with 503 temporarily_unavailable once the cap is reached", async () => {
+      const store = new InMemoryAuthStore();
+      expect((await register(store, 2)).status).toBe(201);
+      expect((await register(store, 2)).status).toBe(201);
+      const third = await register(store, 2);
+      expect(third.status).toBe(503);
+      expect(third.body.error).toBe("temporarily_unavailable");
+      expect(await store.countClients()).toBe(2);
+    });
+
+    it("prunes clients unused for more than 24h before applying the cap", async () => {
+      const store = new InMemoryAuthStore();
+      await store.registerClient({
+        clientId: "abandoned",
+        redirectUris: [CLAUDE_CB],
+        createdAt: new Date(NOW.getTime() - 24 * 3600 * 1000 - 1),
+      });
+      await store.registerClient({
+        clientId: "recent",
+        redirectUris: [CLAUDE_CB],
+        createdAt: new Date(NOW.getTime() - 24 * 3600 * 1000 + 1),
+      });
+      expect((await register(store, 2)).status).toBe(201);
+      expect(await store.getClient("abandoned")).toBeUndefined();
+      expect(await store.getClient("recent")).toBeDefined();
+    });
   });
 });

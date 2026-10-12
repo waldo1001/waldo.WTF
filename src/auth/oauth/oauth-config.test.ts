@@ -119,4 +119,31 @@ describe("loadOAuthConfig", () => {
       }),
     ).toThrow(OAuthConfigError);
   });
+
+  it("maxClients defaults to 50", () => {
+    expect(loadOAuthConfig({ WALDO_PUBLIC_URL: "https://nas.example.ts.net" }).maxClients).toBe(50);
+  });
+
+  it("WALDO_OAUTH_MAX_CLIENTS overrides maxClients and must be a positive integer", () => {
+    expect(
+      loadOAuthConfig({
+        WALDO_PUBLIC_URL: "https://nas.example.ts.net",
+        WALDO_OAUTH_MAX_CLIENTS: "7",
+      }).maxClients,
+    ).toBe(7);
+    expect(
+      loadOAuthConfig({
+        WALDO_PUBLIC_URL: "https://nas.example.ts.net",
+        WALDO_OAUTH_MAX_CLIENTS: "120",
+      }).maxClients,
+    ).toBe(120);
+    for (const bad of ["0", "-1", "abc", "1.5"]) {
+      expect(() =>
+        loadOAuthConfig({
+          WALDO_PUBLIC_URL: "https://nas.example.ts.net",
+          WALDO_OAUTH_MAX_CLIENTS: bad,
+        }),
+      ).toThrow(OAuthConfigError);
+    }
+  });
 });

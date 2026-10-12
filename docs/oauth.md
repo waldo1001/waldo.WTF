@@ -14,6 +14,7 @@ This document covers setting up the OAuth 2.1 surface so claude.ai or Claude mob
 | `WALDO_INTERNAL_PORT` | Optional | Loopback-only (`127.0.0.1`) listener that accepts the static bearer and has no OAuth routes. For headless local clients (Jarvis). Never Serve/Funnel it. |
 | `WALDO_DISABLE_STATIC_BEARER` | Optional | `true` = don't start the internal listener, i.e. no static-bearer access at all. |
 | `WALDO_OAUTH_REDIRECT_ALLOWLIST` | Optional | Comma-separated https callback URIs a client may register/use. See §1.1. |
+| `WALDO_OAUTH_MAX_CLIENTS` | Optional | Max registered clients (default 50). See §1.2. |
 
 Add to `.env` (or the container environment):
 
@@ -65,6 +66,28 @@ new callback, that line tells you what to add.
 
 `POST /oauth/token`: if the client sends `client_id`, it must match the client
 the code / refresh token was issued to (`invalid_grant` otherwise).
+
+### 1.2. Abuse limits
+
+Everything below applies per server process (in-memory; reset on restart).
+
+| Route | Body cap | Rate limit (per client IP / global) | Over the limit |
+|---|---|---|---|
+| `POST /oauth/register` | 64 KB | 10 / hour, 50 / hour | `429` + `Retry-After` |
+| `POST /oauth/authorize` | 64 KB | 10 / minute, 30 / minute (checked before the scrypt password hash) | `429` + `Retry-After` |
+| `POST /oauth/token` | 64 KB | 60 / minute, 300 / minute | `429` + `Retry-After` |
+| `/mcp` (authenticated) | 1 MiB | — | `413` |
+
+- Bodies over the cap get `413` with `Connection: close` (the rest is not read).
+- **Client IP**: behind Tailscale Serve/Funnel every request comes from
+  `127.0.0.1`, so the left-most `X-Forwarded-For` is used — **only** when the
+  socket peer is loopback. A missing header puts the caller in a shared
+  `unknown` bucket (still bounded by the global limit).
+- **Client cap**: at `WALDO_OAUTH_MAX_CLIENTS` registrations, DCR first prunes
+  clients older than 24 h with no codes and no tokens, then refuses with
+  `503 temporarily_unavailable`. Revoke stale clients (§5) to make room.
+- Any unexpected error inside a route returns `500 {"error":"server_error"}` and
+  logs one `http_handler_failed error="<Class>: <message>"` line.
 
 ---
 
@@ -233,6 +256,9 @@ sqlite3 data/lake.db \
 | Static `BEARER_TOKEN` → 401 on the `ts.net` URL | Expected since S2: the public port is OAuth-only | Use the internal listener `http://127.0.0.1:$WALDO_INTERNAL_PORT/mcp` from the server host |
 | MCP endpoint → 401 with bare `Bearer` (no resource_metadata) | `WALDO_PUBLIC_URL` not set | OAuth not mounted; static bearer only |
 | `redirect_uri_mismatch` on register | Supplied `redirect_uri` not in client's registered list | Re-register or fix the redirect URI |
+| `POST /oauth/register` → 503 `temporarily_unavailable` | Client cap reached (§1.2) | Revoke unused clients (§5) or raise `WALDO_OAUTH_MAX_CLIENTS` |
+| OAuth route → 429 `rate_limited` | Too many attempts from one IP or globally (§1.2) | Wait `Retry-After` seconds; repeated 429s on authorize mean someone is guessing the admin password — check the log |
+| OAuth route → 413 | Body over 64 KB | Client bug or abuse; legitimate clients send < 2 KB |
 | `POST /oauth/register` → 400 `invalid_redirect_uri` | Callback not on the allowlist (§1.1) | Check the `oauth_dcr_redirect_rejected` log line; add the URI to `WALDO_OAUTH_REDIRECT_ALLOWLIST` if legitimate |
 | Consent page → 400 "redirect_uri is not registered for this client or not allowed" | Client registered before the allowlist with a callback that is no longer allowed | Remove/re-add the connector (fresh DCR) |
 

@@ -46,7 +46,14 @@ export interface AuthStore {
   registerClient(registration: OAuthClientRegistration): Promise<void>;
   getClient(clientId: string): Promise<OAuthClientRecord | undefined>;
   listClients(): Promise<readonly OAuthClientRecord[]>;
+  countClients(): Promise<number>;
+  /**
+   * Deletes clients created before `olderThan` that have no auth codes and no
+   * tokens (abandoned DCR registrations). Returns the number deleted.
+   */
+  pruneUnusedClients(olderThan: Date): Promise<number>;
 
+  /** Also deletes codes already expired at `record.createdAt`. */
   saveAuthCode(record: OAuthAuthCodeRecord): Promise<void>;
   consumeAuthCode(
     code: string,

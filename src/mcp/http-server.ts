@@ -28,6 +28,38 @@ import type { PasswordHasher } from "../auth/oauth/password.js";
 import { handleTokenRequest } from "../auth/oauth/token.js";
 import { DEFAULT_REDIRECT_ALLOWLIST } from "../auth/oauth/redirect-allowlist.js";
 import { createMcpServer } from "./mcp-server.js";
+import { readBodyCapped } from "./read-body.js";
+import { clientIp } from "./client-ip.js";
+import { FixedWindowRateLimiter } from "../auth/oauth/rate-limiter.js";
+import { DEFAULT_MAX_OAUTH_CLIENTS } from "../auth/oauth/oauth-config.js";
+
+export interface RateLimitSpec {
+  readonly windowMs: number;
+  readonly perKey: number;
+  readonly global: number;
+}
+
+export interface OAuthRateLimits {
+  readonly register: RateLimitSpec;
+  readonly authorize: RateLimitSpec;
+  readonly token: RateLimitSpec;
+}
+
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+
+// Single-user server: generous for the real clients (claude.ai registers once,
+// refreshes daily), tight enough to make scrypt / DB-row abuse pointless.
+export const DEFAULT_OAUTH_RATE_LIMITS: OAuthRateLimits = {
+  register: { windowMs: HOUR_MS, perKey: 10, global: 50 },
+  authorize: { windowMs: MINUTE_MS, perKey: 10, global: 30 },
+  token: { windowMs: MINUTE_MS, perKey: 60, global: 300 },
+};
+
+/** Unauthenticated OAuth bodies are tiny forms / JSON. */
+export const OAUTH_MAX_BODY_BYTES = 64 * 1024;
+/** Authenticated MCP JSON-RPC requests (tool args) — far below the SDK's 4 MiB default. */
+export const MCP_MAX_BODY_BYTES = 1024 * 1024;
 
 export interface OAuthHttpOptions {
   readonly publicUrl: string;
@@ -37,6 +69,10 @@ export interface OAuthHttpOptions {
   readonly hasher?: PasswordHasher;
   /** Defaults to DEFAULT_REDIRECT_ALLOWLIST (claude.ai / claude.com callbacks). */
   readonly redirectAllowlist?: readonly string[];
+  /** Defaults to DEFAULT_MAX_OAUTH_CLIENTS. */
+  readonly maxClients?: number;
+  /** Per-route overrides of DEFAULT_OAUTH_RATE_LIMITS. */
+  readonly rateLimits?: Partial<OAuthRateLimits>;
 }
 
 export interface McpHttpServerOptions {
@@ -99,22 +135,6 @@ const isAuthorized = (
   return timingSafeEqual(a, b);
 };
 
-const readJsonBody = async (req: IncomingMessage): Promise<string> => {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(chunk as Buffer);
-  }
-  return Buffer.concat(chunks).toString("utf8");
-};
-
-const readRawBody = async (req: IncomingMessage): Promise<string> => {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(chunk as Buffer);
-  }
-  return Buffer.concat(chunks).toString("utf8");
-};
-
 const writeHtml = (
   res: ServerResponse,
   status: number,
@@ -157,7 +177,64 @@ async function checkAuthorization(
   return isAuthorized(authHeader, staticBearer);
 }
 
+// Every async route runs through this: a throw (SQLite error, duplicate id,
+// bug) becomes a logged 500 instead of an unhandled rejection that can take
+// the process down.
+export const runSafely = (
+  res: ServerResponse,
+  logger: Logger | undefined,
+  fn: () => Promise<void>,
+): void => {
+  fn().catch((err: unknown) => {
+    const detail = err instanceof Error ? `${err.name}: ${err.message}` : "unknown";
+    logger?.error(`http_handler_failed error=${JSON.stringify(detail.slice(0, 300))}`);
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
+    writeJson(res, 500, { error: "server_error" }, NO_STORE);
+  });
+};
+
+const writeTooLarge = (res: ServerResponse): void => {
+  writeJson(
+    res,
+    413,
+    { error: "invalid_request", error_description: "request body too large" },
+    { ...NO_STORE, Connection: "close" },
+  );
+};
+
 export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
+  const limits: OAuthRateLimits = {
+    ...DEFAULT_OAUTH_RATE_LIMITS,
+    ...(opts.oauth?.rateLimits ?? {}),
+  };
+  const limiter = (spec: RateLimitSpec): FixedWindowRateLimiter =>
+    new FixedWindowRateLimiter({ clock: opts.clock, ...spec });
+  const registerLimiter = limiter(limits.register);
+  const authorizeLimiter = limiter(limits.authorize);
+  const tokenLimiter = limiter(limits.token);
+
+  /** Returns true when the request may proceed; otherwise has written 429. */
+  const admit = (
+    l: FixedWindowRateLimiter,
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): boolean => {
+    const decision = l.check(
+      clientIp(req.socket.remoteAddress, req.headers["x-forwarded-for"]),
+    );
+    if (decision.allowed) return true;
+    writeJson(
+      res,
+      429,
+      { error: "rate_limited", error_description: "too many requests" },
+      { ...NO_STORE, "Retry-After": String(decision.retryAfterSeconds) },
+    );
+    return false;
+  };
+
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     if (req.method === "GET" && req.url === "/health") {
       writeJson(res, 200, { ok: true });
@@ -190,8 +267,11 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
       }
       if (req.method === "POST" && req.url === "/oauth/register") {
         const oauth = opts.oauth;
-        void (async () => {
-          const raw = await readJsonBody(req);
+        if (!admit(registerLimiter, req, res)) return;
+        runSafely(res, opts.logger, async () => {
+          const body = await readBodyCapped(req, OAUTH_MAX_BODY_BYTES);
+          if (!body.ok) return writeTooLarge(res);
+          const raw = body.text;
           let parsed: unknown;
           try {
             parsed = raw.length === 0 ? {} : JSON.parse(raw);
@@ -208,6 +288,7 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
             ids: oauth.ids,
             clock: opts.clock,
             redirectAllowlist,
+            maxClients: oauth.maxClients ?? DEFAULT_MAX_OAUTH_CLIENTS,
           });
           if (result.body?.error === "invalid_redirect_uri") {
             // Not a secret, and the only way to notice that a legitimate
@@ -219,14 +300,16 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
             opts.logger?.info(`oauth_dcr_redirect_rejected redirect_uris=${uris}`);
           }
           writeJson(res, result.status, result.body, NO_STORE);
-        })();
+        });
         return;
       }
       if (req.method === "POST" && req.url === "/oauth/token") {
         const oauth = opts.oauth;
-        void (async () => {
-          const raw = await readRawBody(req);
-          const form = new URLSearchParams(raw);
+        if (!admit(tokenLimiter, req, res)) return;
+        runSafely(res, opts.logger, async () => {
+          const capped = await readBodyCapped(req, OAUTH_MAX_BODY_BYTES);
+          if (!capped.ok) return writeTooLarge(res);
+          const form = new URLSearchParams(capped.text);
           const body: Record<string, unknown> = {};
           for (const [k, v] of form.entries()) {
             body[k] = v;
@@ -238,7 +321,7 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
             body,
           });
           writeJson(res, result.status, result.body, NO_STORE);
-        })();
+        });
         return;
       }
       const parsedUrl = new URL(req.url ?? "/", "http://localhost");
@@ -248,7 +331,7 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
       ) {
         const qs = parsedUrl.searchParams;
         const oauth = opts.oauth;
-        void (async () => {
+        runSafely(res, opts.logger, async () => {
           /* c8 ignore next 8 -- null branches from qs.get handled by authorize handler validation */
           const params: AuthorizeGetParams = {
             client_id: qs.get("client_id") ?? "",
@@ -265,7 +348,7 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
             params,
           });
           writeHtml(res, result.status, result.contentType, result.body);
-        })();
+        });
         return;
       }
       if (
@@ -273,9 +356,12 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
         parsedUrl.pathname === "/oauth/authorize"
       ) {
         const oauth = opts.oauth;
-        void (async () => {
-          const raw = await readRawBody(req);
-          const form = new URLSearchParams(raw);
+        // Limited before the body is read: each admitted POST may run scrypt.
+        if (!admit(authorizeLimiter, req, res)) return;
+        runSafely(res, opts.logger, async () => {
+          const capped = await readBodyCapped(req, OAUTH_MAX_BODY_BYTES);
+          if (!capped.ok) return writeTooLarge(res);
+          const form = new URLSearchParams(capped.text);
           /* c8 ignore next 8 -- null branches from form.get handled by authorize handler validation */
           const formBody: AuthorizePostFormBody = {
             client_id: form.get("client_id") ?? "",
@@ -306,11 +392,11 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
               headers["Content-Type"] ?? "text/html; charset=utf-8";
             writeHtml(res, status, ct, result.body);
           }
-        })();
+        });
         return;
       }
     }
-    void (async () => {
+    runSafely(res, opts.logger, async () => {
       const authorized = await checkAuthorization(
         req.headers.authorization,
         opts.bearerToken,
@@ -328,6 +414,13 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
         res.end(JSON.stringify({ error: "unauthorized" }));
         return;
       }
+      // Declared-size check here (not only in the SDK transport, which also
+      // caps chunked bodies): answer with Connection: close so the socket is
+      // dropped instead of left half-read.
+      if (Number(req.headers["content-length"]) > MCP_MAX_BODY_BYTES) {
+        writeTooLarge(res);
+        return;
+      }
       const mcp = createMcpServer({
         store: opts.store,
         steering: opts.steering,
@@ -336,6 +429,7 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
       });
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
+        maxRequestBodySize: MCP_MAX_BODY_BYTES,
       } as unknown as ConstructorParameters<
         typeof StreamableHTTPServerTransport
       >[0]);
@@ -347,7 +441,7 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
         transport as unknown as Parameters<typeof mcp.connect>[0],
       );
       await transport.handleRequest(req, res);
-    })();
+    });
   });
   server.requestTimeout = opts.timeouts?.requestMs ?? 60_000;
   server.headersTimeout = opts.timeouts?.headersMs ?? 30_000;
