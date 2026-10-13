@@ -21,7 +21,7 @@ export interface EventLoopWatchdogHandle {
   stop(): void;
 }
 
-/* c8 ignore next 4 -- thin setTimeout/clearTimeout wrapper, exercised at runtime only */
+/* v8 ignore next -- thin setTimeout/clearTimeout wrapper, exercised at runtime only @preserve */
 const defaultSetTimer: SetTimerFn = (fn, ms) => {
   const h = setTimeout(fn, ms);
   return { clear: () => clearTimeout(h) };
@@ -42,7 +42,7 @@ export function startEventLoopWatchdog(
   const schedule = (): void => {
     const scheduledAt = clock.now().getTime();
     pending = setTimer(() => {
-      /* c8 ignore next -- defensive guard against real-Node clearTimeout/in-flight callback race */
+      /* v8 ignore next -- defensive guard against real-Node clearTimeout/in-flight callback race @preserve */
       if (stopped) return;
       const actualMs = clock.now().getTime() - scheduledAt;
       const lagMs = actualMs - intervalMs;

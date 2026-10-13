@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { createMcpHttpServer, runSafely } from "./http-server.js";
-import type { ServerResponse } from "node:http";
+import { request as httpRequest, type ServerResponse } from "node:http";
 import { InMemoryMessageStore } from "../testing/in-memory-message-store.js";
 import { InMemorySteeringStore } from "../testing/in-memory-steering-store.js";
 import { InMemoryAuthStore } from "../testing/in-memory-auth-store.js";
@@ -863,7 +863,7 @@ describe("createMcpHttpServer abuse limits (body caps, rate limits, crash safety
     expect(await authStore.countClients()).toBe(1);
   });
 
-  it("POST /mcp over 1 MiB → 413 even with a valid credential", async () => {
+  it("POST /mcp declaring more than 1 MiB → 413 even with a valid credential", async () => {
     await start(); // keeps afterEach symmetric
     const bare = createMcpHttpServer({
       bearerToken: BEARER,
@@ -873,21 +873,37 @@ describe("createMcpHttpServer abuse limits (body caps, rate limits, crash safety
     });
     await new Promise<void>((resolve) => bare.listen(0, "127.0.0.1", () => resolve()));
     try {
-      const url = `http://127.0.0.1:${(bare.address() as AddressInfo).port}/mcp`;
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${BEARER}`,
-          "Content-Type": "application/json",
-          Accept: "application/json, text/event-stream",
-        },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping", pad: "x".repeat(1024 * 1024) }),
+      // Declare > 1 MiB but send only a few bytes: the server must refuse on
+      // the declared length alone. Raw http.request (not fetch) so the client
+      // reads the 413 instead of racing a full upload into a closed socket.
+      const status = await new Promise<number>((resolve, reject) => {
+        const req = httpRequest(
+          {
+            host: "127.0.0.1",
+            port: (bare.address() as AddressInfo).port,
+            path: "/mcp",
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${BEARER}`,
+              "Content-Type": "application/json",
+              Accept: "application/json, text/event-stream",
+              "Content-Length": String(1024 * 1024 + 1),
+            },
+          },
+          (res) => {
+            res.resume();
+            resolve(res.statusCode ?? 0);
+          },
+        );
+        req.on("error", reject);
+        req.write("{");
       });
-      expect(res.status).toBe(413);
+      expect(status).toBe(413);
     } finally {
       await new Promise<void>((r) => bare.close(() => r()));
     }
   });
+
 
   it("the 11th authorize POST from one IP within a minute → 429 + Retry-After, without running the password hash", async () => {
     await start();

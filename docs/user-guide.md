@@ -768,6 +768,7 @@ five minutes later.
 | "Permission denied" on scp | NAS dir perms regressed | On NAS: `sudo chown waldo:1000 data/whatsapp-inbox data/whatsapp-archive && sudo chmod 775 data/whatsapp-*` |
 | "subsystem request failed on channel 0" | Using plain `scp` instead of `scp -O` | Script already passes `-O`; check you haven't shadowed it |
 | scp prompts for password | Key not installed / wrong perms on NAS `~/.ssh` | Redo §6b step "Install an SSH key" |
+| A `.zip` export stays in the inbox and the log shows `failed to open WhatsApp zip export` | The zip is corrupt, truncated, or malformed (e.g. duplicate `_chat.txt`); it is refused, not imported | Re-export the chat from WhatsApp and push again |
 | Agent doesn't fire on new files | Plist points at wrong `WatchPaths` | Inspect `~/Library/LaunchAgents/com.waldo.wtf.whatsapp-push.plist` |
 | `EXDEV: cross-device link` in container logs | Archive and inbox are on different mounts — should be handled | Check `src/fs-node.ts` has the copy+unlink fallback |
 | Launchd agent silently reads empty dir | You're watching a TCC-protected folder (`Downloads`, `Documents`, `Desktop`) | Don't. Use `~/WaldoInbox` |

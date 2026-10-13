@@ -21,6 +21,9 @@ export default defineConfig({
         "src/**/*.test.ts",
         "src/**/__integration__/**",
         "src/**/__contract__/**",
+        // Shared contract suites (e.g. auth-store-contract.ts) are test code
+        // imported by *.test.ts; production never runs them.
+        "src/**/*-contract.ts",
         // composition root — wires real MSAL/SQLite/http together. Excluded
         // per docs/tdd/coverage-policy.md §Exclusions. Validated by smoke run.
         "src/index.ts",

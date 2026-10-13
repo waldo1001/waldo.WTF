@@ -26,7 +26,7 @@ import { syncViva } from "./sync-viva.js";
 
 export const DEFAULT_SYNC_INTERVAL_MS = 300_000;
 
-/* c8 ignore next 3 */
+/* v8 ignore next -- @preserve */
 const errorToString = (err: unknown): string =>
   err instanceof Error ? err.message : String(err);
 

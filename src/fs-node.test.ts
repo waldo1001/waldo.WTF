@@ -75,6 +75,21 @@ describe("nodeFileSystem passthrough methods", () => {
     expect(buf.toString("utf8")).toBe("cross-device-bytes");
   });
 
+  it("moveAcrossDevices rethrows any rename error other than EXDEV without copying", async () => {
+    const from = path.join(tmpDir, "payload.bin");
+    const to = path.join(tmpDir, "moved.bin");
+    await fs.writeFile(from, "bytes");
+    const fakeRename = async (): Promise<void> => {
+      const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+      err.code = "EACCES";
+      throw err;
+    };
+
+    await expect(moveAcrossDevices(from, to, fakeRename)).rejects.toThrow("EACCES");
+    expect(await fs.readFile(from, "utf8")).toBe("bytes");
+    await expect(fs.stat(to)).rejects.toThrow();
+  });
+
   it("listDir returns filenames in the directory", async () => {
     await nodeFileSystem.writeFile(path.join(tmpDir, "a.txt"), "x");
     await nodeFileSystem.writeFile(path.join(tmpDir, "b.txt"), "x");

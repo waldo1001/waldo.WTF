@@ -43,7 +43,7 @@ async function handleAuthorizationCode(
   req: TokenRequest,
   body: Record<string, unknown>,
 ): Promise<TokenResponse> {
-  /* c8 ignore next 3 -- null branches handled by grant_type dispatch; missing fields become "" */
+  /* v8 ignore next -- null branches handled by grant_type dispatch; missing fields become "" @preserve */
   const code = String(body.code ?? "");
   const redirectUri = String(body.redirect_uri ?? "");
   const codeVerifier = String(body.code_verifier ?? "");
@@ -108,7 +108,7 @@ async function handleRefreshToken(
   req: TokenRequest,
   body: Record<string, unknown>,
 ): Promise<TokenResponse> {
-  /* c8 ignore next -- null branch: missing refresh_token becomes "" which fails !refreshToken check */
+  /* v8 ignore next -- null branch: missing refresh_token becomes "" which fails !refreshToken check @preserve */
   const refreshToken = String(body.refresh_token ?? "");
   if (!refreshToken) {
     return errorResponse(400, "invalid_request", "refresh_token is required");

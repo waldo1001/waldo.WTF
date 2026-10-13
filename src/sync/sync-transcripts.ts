@@ -75,7 +75,7 @@ function isEligible(rows: readonly Transcript[], now: Date): boolean {
         now.getTime() - latest.fetchedAt.getTime() >=
         FETCH_FAILED_RETRY_COOLDOWN_MS
       );
-    /* c8 ignore next 2 -- unreachable: the `some(status === "ok")` check above already returned */
+    /* v8 ignore next -- unreachable: the `some(status === "ok")` check above already returned @preserve */
     case "ok":
       return false;
   }

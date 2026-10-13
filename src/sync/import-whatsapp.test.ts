@@ -377,6 +377,27 @@ describe("importWhatsAppFile", () => {
     expect(await deps.fs.exists(src)).toBe(true);
   });
 
+  it("reports a non-Error archive failure in the WhatsAppArchiveError message", async () => {
+    const src = `${DOWNLOADS}/WhatsApp Chat - Mom.txt`;
+    await deps.fs.writeFile(src, CHAT_FIXTURE);
+    const breakingFs = Object.assign(deps.fs, {
+      rename: async (_from: string, _to: string) => {
+        throw "disk gone";
+      },
+    });
+
+    await expect(
+      importWhatsAppFile({
+        fs: breakingFs,
+        clock: deps.clock,
+        store: deps.store,
+        filePath: src,
+        account: ACCOUNT,
+        archiveRoot: ARCHIVE,
+      }),
+    ).rejects.toThrow("failed to archive WhatsApp export (disk gone)");
+  });
+
   it("throws WhatsAppArchiveError when fs.rename rejects and leaves the file in place", async () => {
     const src = `${DOWNLOADS}/WhatsApp Chat - Mom.txt`;
     await deps.fs.writeFile(src, CHAT_FIXTURE);

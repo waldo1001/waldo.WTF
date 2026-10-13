@@ -130,7 +130,7 @@ export class SqliteSteeringStore implements SteeringStore {
       const row = this.getStmt.get(Number(result.lastInsertRowid)) as
         | SteeringRuleRow
         | undefined;
-      /* c8 ignore next 3 -- defensive: sqlite just returned this rowid */
+      /* v8 ignore next -- defensive: sqlite just returned this rowid @preserve */
       if (row === undefined) {
         throw new StoreError("corrupt", "inserted rule vanished");
       }
@@ -142,7 +142,7 @@ export class SqliteSteeringStore implements SteeringStore {
           cause: err,
         });
       }
-      /* c8 ignore next -- defensive: any non-UNIQUE sqlite error bubbles up */
+      /* v8 ignore next -- defensive: any non-UNIQUE sqlite error bubbles up @preserve */
       throw err;
     }
   }

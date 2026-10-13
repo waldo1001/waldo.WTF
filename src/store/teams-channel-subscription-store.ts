@@ -173,7 +173,7 @@ export class SqliteTeamsChannelSubscriptionStore
           { cause: err },
         );
       }
-      /* c8 ignore next -- defensive: any non-conflict sqlite error bubbles up */
+      /* v8 ignore next -- defensive: any non-conflict sqlite error bubbles up @preserve */
       throw err;
     }
     const row = this.getStmt.get(
@@ -181,7 +181,7 @@ export class SqliteTeamsChannelSubscriptionStore
       input.teamId,
       input.channelId,
     ) as TeamsChannelSubscriptionRow | undefined;
-    /* c8 ignore next 3 -- defensive: row was just inserted */
+    /* v8 ignore next -- defensive: row was just inserted @preserve */
     if (row === undefined) {
       throw new StoreError("corrupt", "inserted subscription vanished");
     }

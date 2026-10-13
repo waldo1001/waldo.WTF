@@ -77,3 +77,17 @@ no longer hits it, that's a signal:
 
 Either way, never delete the line just to boost the number. Understand *why*
 it's uncovered first.
+
+## Ignore hints (vitest ≥ 4, v8 provider)
+
+Since the move to vitest 4 (2026-10-13), coverage uses AST-based remapping:
+
+- Only `v8 ignore` / `istanbul ignore` hints count. **`c8 ignore` is silently
+  ignored.**
+- A hint must carry `@preserve`, or the transform strips it before coverage
+  runs: `/* v8 ignore next -- @preserve <reason> */`.
+- `next` ignores the **next AST node**, not "the next N lines" (the count form
+  `next 3` no longer exists). Put the hint directly before the branching
+  statement or expression, not on the line above it.
+- Every `??`, `?.` and short-circuit is a branch. Prefer a real test. A hint is
+  for genuinely unreachable defensive code, with the reason written in the hint.

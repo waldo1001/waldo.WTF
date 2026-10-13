@@ -11,6 +11,12 @@ skill.
 
 ---
 
+## 2026-10-13
+
+- **adm-zip 0.5 → 0.6.1** (security, runtime). On 0.5 a crafted WhatsApp export (a smuggled second `_chat.txt`, or an entry claiming more data than the file holds) **imported successfully**. It's now refused as `WhatsAppParseError` and left in the inbox ([import-whatsapp.ts](../src/sync/import-whatsapp.ts)). `@types/adm-zip` dropped (0.6 ships its own types).
+- **vitest + @vitest/coverage-v8 2.1.9 → 4.1.11** (dev). `npm audit` now reports 0 critical / 0 high (was 3 / 2). vitest 4's AST-based coverage counts every `??` / short-circuit as a branch and exposed 17 previously-invisible untested branches; covered with ~16 new tests rather than lowering the gate. Shared `*-contract.ts` suites are now excluded from coverage (test code).
+- All 75 `c8 ignore` hints became `v8 ignore … -- @preserve` (vitest 4 silently ignores `c8` hints). New rules in [coverage-policy.md](tdd/coverage-policy.md#ignore-hints-vitest--4-v8-provider). Also fixed `readonly Array<…>` in [yammer.ts](../src/sources/yammer.ts) (vitest 4's parser rejected it, so the file silently dropped out of coverage) and made the `/mcp` 413 test deterministic. Plan: [deps-vitest4-admzip06](plans/done/deps-vitest4-admzip06.md).
+
 ## 2026-10-12
 
 - **Hotfix (post-deploy):** re-adding the claude.ai connector hung after "Approve". The S1 consent-page CSP `form-action 'self'` also governs the redirect that follows a form submission, so Chrome blocked the 302 back to claude.ai (the server had minted the codes; claude.ai never received them). The consent and wrong-password pages now allow `form-action 'self' <validated redirect origin>`; error pages keep `'self'` only ([plan](plans/done/hotfix-consent-csp-form-action.md)). `/local-smoke`'s curl checks can't see browser-enforced policies.

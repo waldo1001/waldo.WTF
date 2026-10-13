@@ -153,7 +153,7 @@ export class MsalAuthClient implements AuthClient {
     });
     this.pca = {
       getAllAccounts: () => real.getAllAccounts() as Promise<MsalAccountInfo[]>,
-      /* c8 ignore start -- thin MSAL adapter; verified via manual smoke run */
+      /* v8 ignore start -- thin MSAL adapter; verified via manual smoke run @preserve */
       acquireTokenSilent: async (req) => {
         const r = (await real.acquireTokenSilent({
           account: req.account as MsalAccountInfoReal,
@@ -177,7 +177,7 @@ export class MsalAuthClient implements AuthClient {
         }
         return { account: r.account as MsalAccountInfo };
       },
-      /* c8 ignore stop */
+      /* v8 ignore stop -- @preserve */
     };
   }
 

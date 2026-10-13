@@ -132,6 +132,26 @@ describe("syncViva", () => {
     expect(upserted[0]?.chatType).toBe("group");
   });
 
+  it("stops paging a thread on an empty posts page and upserts nothing for it", async () => {
+    const store = new InMemoryMessageStore();
+    const subs = new InMemoryVivaSubscriptionStore();
+    await seedSub(subs, { communityId: "com-1", communityName: "Eng" });
+    const clock = new FakeClock(new Date("2026-04-21T12:00:00Z"));
+    const viva = new FakeVivaClient({
+      steps: [
+        { kind: "listThreadsOk", response: threadsPage([thread("thr-1")]) },
+        { kind: "listPostsOk", response: postsPage([]) },
+      ],
+    });
+
+    const res = await syncViva({ account, auth: authWithToken(), viva, store, subs, clock });
+
+    expect(res.added).toBe(0);
+    expect(res.perCommunity).toEqual([{ communityId: "com-1", added: 0 }]);
+    expect(viva.calls.filter((c) => c.method === "listPosts")).toHaveLength(1);
+    expect(store.calls.some((c) => c.method === "upsertMessages")).toBe(false);
+  });
+
   it("skips subscriptions that are disabled", async () => {
     const store = new InMemoryMessageStore();
     const subs = new InMemoryVivaSubscriptionStore();

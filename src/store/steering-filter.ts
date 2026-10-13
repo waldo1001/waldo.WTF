@@ -115,7 +115,7 @@ function buildMessageClause(rule: SteeringRule): ClauseBuild<Message> {
           (msg.body ?? "").toLowerCase().includes(rule.pattern),
       };
     }
-    /* c8 ignore next 3 -- unreachable: ruleTarget() filters event-targeted rules out before this is called */
+    /* v8 ignore next -- unreachable: ruleTarget() filters event-targeted rules out before this is called @preserve */
     default:
       throw new Error(`not a message-targeted rule type: ${rule.ruleType}`);
   }
@@ -162,7 +162,7 @@ function buildEventClause(rule: SteeringRule): ClauseBuild<CalendarEvent> {
           (event.subject ?? "").toLowerCase().includes(rule.pattern),
       };
     }
-    /* c8 ignore next 3 -- unreachable: ruleTarget() filters message-targeted rules out before this is called */
+    /* v8 ignore next -- unreachable: ruleTarget() filters message-targeted rules out before this is called @preserve */
     default:
       throw new Error(`not an event-targeted rule type: ${rule.ruleType}`);
   }

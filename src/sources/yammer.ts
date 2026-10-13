@@ -33,7 +33,7 @@ export interface YammerMessage {
 
 export interface YammerMessagesResponse {
   readonly messages: readonly YammerMessage[];
-  readonly references: readonly Array<
+  readonly references: ReadonlyArray<
     | ({ readonly type: "user" } & YammerUser)
     | { readonly type: string; readonly id: number }
   >;

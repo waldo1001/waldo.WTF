@@ -390,6 +390,30 @@ describe("HttpYammerClient.listPosts", () => {
     expect(calls[0]!.headers["Authorization"]).toBe("Bearer tok-4");
   });
 
+  it("falls back to the rich (html) body and keeps escaped quotes inside JSON strings intact", async () => {
+    // Raw JSON with an escaped quote and an escaped backslash inside a string:
+    // the big-int quoting scanner must copy string contents verbatim.
+    const body =
+      '{"messages":[{"id":2003,"thread_id":2000,"sender_id":55,"created_at":"2026-04-21T10:00:00+00:00",' +
+      '"body":{"rich":"<p>say \\"hi\\" to C:\\\\temp 12345678901234567890</p>"}}],' +
+      '"references":[{"type":"user","id":55,"full_name":"Alice Tester"}]}';
+    const { fetch } = scriptFetch([response({ status: 200, body })]);
+    const got = await new HttpYammerClient({ fetch }).listPosts("t", "2000", {});
+    expect(got.value[0]?.body).toEqual({
+      contentType: "html",
+      content: '<p>say "hi" to C:\\temp 12345678901234567890</p>',
+    });
+  });
+
+  it("omits the body when a message has neither plain nor rich text", async () => {
+    const body =
+      '{"messages":[{"id":2004,"thread_id":2000,"sender_id":55,"created_at":"2026-04-21T10:00:00+00:00","body":{}}],' +
+      '"references":[]}';
+    const { fetch } = scriptFetch([response({ status: 200, body })]);
+    const got = await new HttpYammerClient({ fetch }).listPosts("t", "2000", {});
+    expect(got.value[0]?.body).toBeUndefined();
+  });
+
   it("appends ?older_than={id} when olderThan provided", async () => {
     const payload = makePostResponse([
       { id: 1900, thread_id: 2000, sender_id: 55, created_at: "2026-04-20T08:00:00+00:00" },

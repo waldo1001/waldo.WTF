@@ -83,14 +83,14 @@ function extractChatTextFromZip(buffer: Buffer, filePath: string): string {
 }
 
 function basename(p: string): string {
-  /* c8 ignore next */
   const i = p.lastIndexOf("/");
+  /* v8 ignore next -- @preserve watcher always passes absolute paths */
   return i >= 0 ? p.slice(i + 1) : p;
 }
 
 function splitExt(filename: string): { stem: string; ext: string } {
   const dot = filename.lastIndexOf(".");
-  /* c8 ignore next */
+  /* v8 ignore next -- @preserve */
   if (dot <= 0) return { stem: filename, ext: "" };
   return { stem: filename.slice(0, dot), ext: filename.slice(dot) };
 }

@@ -350,6 +350,68 @@ describe("createMcpServer (SDK, in-memory transport)", () => {
     }
   });
 
+  it("treats a tool call without arguments as an empty argument object", async () => {
+    const res = await client.callTool({ name: "get_sync_status" });
+    expect(res.isError).toBeFalsy();
+    expect((res.content as { type: string }[])[0]?.type).toBe("text");
+  });
+
+  it("maps a non-Error throw to InternalError 'NonErrorThrow: <value>' and logs it", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const throwing = new InMemoryMessageStore();
+      throwing.getRecentMessages = async () => {
+        throw "plain string failure";
+      };
+      const server = createMcpServer({
+        store: throwing,
+        steering: new InMemorySteeringStore(clock),
+        clock,
+      });
+      const [ct, st] = InMemoryTransport.createLinkedPair();
+      const c = new Client({ name: "c", version: "0.0.0" }, { capabilities: {} });
+      await Promise.all([server.connect(st), c.connect(ct)]);
+      await expect(
+        c.callTool({ name: "get_recent_activity", arguments: { hours: 1 } }),
+      ).rejects.toMatchObject({
+        code: ErrorCode.InternalError,
+        message: expect.stringContaining("NonErrorThrow: plain string failure"),
+      });
+      const logged = errSpy.mock.calls.map((a) => a.join(" ")).join("\n");
+      expect(logged).toContain("get_recent_activity failed: plain string failure");
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("logs an Error without a stack as just its message", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const throwing = new InMemoryMessageStore();
+      throwing.getRecentMessages = async () => {
+        const e = new Error("stackless");
+        e.stack = undefined;
+        throw e;
+      };
+      const server = createMcpServer({
+        store: throwing,
+        steering: new InMemorySteeringStore(clock),
+        clock,
+      });
+      const [ct, st] = InMemoryTransport.createLinkedPair();
+      const c = new Client({ name: "c", version: "0.0.0" }, { capabilities: {} });
+      await Promise.all([server.connect(st), c.connect(ct)]);
+      await expect(
+        c.callTool({ name: "get_recent_activity", arguments: { hours: 1 } }),
+      ).rejects.toMatchObject({ code: ErrorCode.InternalError });
+      const logged = errSpy.mock.calls.map((a) => a.join(" ")).join("\n");
+      expect(logged).toContain("get_recent_activity failed: stackless\n");
+      expect(logged).not.toMatch(/\n\s+at /);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
   it("does NOT log InvalidParamsError (caller error, not server fault)", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {

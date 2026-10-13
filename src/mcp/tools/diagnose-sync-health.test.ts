@@ -627,6 +627,75 @@ describe("handleDiagnoseSyncHealth — AC-D1..D19", () => {
     ]);
   });
 
+  it("rate-limit without a retry-after value omits it from evidence and summary", async () => {
+    const store = new InMemoryMessageStore();
+    const now = new Date(NOW);
+    await store.appendSyncLog({
+      ts: new Date(now.getTime() - 1 * MIN),
+      account: "a@example.test",
+      source: "outlook",
+      status: "error",
+      errorMessage: "GraphRateLimitedError: throttled",
+    });
+    const result = await handleDiagnoseSyncHealth(store, new InMemoryVivaSubscriptionStore(), clockAt());
+    const f = result.findings[0]!;
+    expect(f.category).toBe("rate-limit");
+    expect(f.evidence).not.toHaveProperty("retryAfterSeconds");
+    expect(f.summary).toBe("Rate-limited on outlook for a@example.test.");
+  });
+
+  it("viva-sub-drift for an internal, unnamed community has no tenant/name evidence and the internal summary", async () => {
+    const clock = clockAt();
+    const store = new InMemoryMessageStore();
+    const vivaSubs = new InMemoryVivaSubscriptionStore(clock);
+    clock.set(new Date(new Date(NOW).getTime() - 48 * HOUR));
+    await vivaSubs.subscribe({
+      account: "a@example.test",
+      networkId: "net-1",
+      communityId: "com-9",
+    });
+    clock.set(new Date(NOW));
+    const result = await handleDiagnoseSyncHealth(store, vivaSubs, clock);
+    const drift = result.findings.find((f) => f.category === "viva-sub-drift")!;
+    expect(drift.summary).toBe("No Viva posts in 24h for a@example.test community com-9.");
+    expect(drift.evidence).not.toHaveProperty("tenantId");
+    expect(drift.evidence).not.toHaveProperty("communityName");
+  });
+
+  it("an error row without an error message is reported as unknown-error with an empty lastError", async () => {
+    const store = new InMemoryMessageStore();
+    const now = new Date(NOW);
+    await store.appendSyncLog({
+      ts: new Date(now.getTime() - 1 * MIN),
+      account: "a@example.test",
+      source: "teams",
+      status: "error",
+    });
+    const result = await handleDiagnoseSyncHealth(store, new InMemoryVivaSubscriptionStore(), clockAt());
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]!.category).toBe("unknown-error");
+    expect(result.findings[0]!.evidence["lastError"]).toBe("");
+  });
+
+  it("same severity and account: findings are ordered by source", async () => {
+    const store = new InMemoryMessageStore();
+    const now = new Date(NOW);
+    for (const source of ["teams", "outlook"] as const) {
+      await store.appendSyncLog({
+        ts: new Date(now.getTime() - 30 * MIN),
+        account: "a@example.test",
+        source,
+        status: "ok",
+        messagesAdded: 1,
+      });
+    }
+    const result = await handleDiagnoseSyncHealth(store, new InMemoryVivaSubscriptionStore(), clockAt());
+    expect(result.findings.map((f) => `${f.source}:${f.category}`)).toEqual([
+      "outlook:stale",
+      "teams:stale",
+    ]);
+  });
+
   it("summary counts match findings list", async () => {
     const store = new InMemoryMessageStore();
     const vivaSubs = new InMemoryVivaSubscriptionStore();

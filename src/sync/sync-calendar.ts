@@ -128,8 +128,8 @@ export async function syncCalendarEvents(
       return { added, removed };
     }
     cursor = page.nextLink;
-    /* c8 ignore next 3 -- defensive: a page with neither link would loop
-       forever; FakeCalendarClient/HttpCalendarClient always supply one. */
+    /* v8 ignore next -- defensive: a page with neither link would loop
+       forever; FakeCalendarClient/HttpCalendarClient always supply one. @preserve */
     if (cursor === undefined) {
       return { added, removed };
     }

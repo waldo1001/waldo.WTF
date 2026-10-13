@@ -603,7 +603,7 @@ function resolveVivaCommand(parsed: {
     }
     return { action: "subscribe", account, communityId: subscribe };
   }
-  /* c8 ignore next 4 -- unsubscribe is the only remaining branch */
+  /* v8 ignore next -- unsubscribe is the only remaining branch @preserve */
   if (unsubscribe === undefined) return null;
   if (unsubscribe.trim() === "") {
     throw new CliUsageError("--viva-unsubscribe pattern must not be empty");
@@ -763,7 +763,7 @@ function resolveTeamsCommand(parsed: {
       channelId,
     };
   }
-  /* c8 ignore next 4 -- unsubscribe is the only remaining branch */
+  /* v8 ignore next -- unsubscribe is the only remaining branch @preserve */
   if (unsubscribe === undefined) return null;
   if (unsubscribe.trim() === "") {
     throw new CliUsageError("--teams-unsubscribe pattern must not be empty");
@@ -851,12 +851,12 @@ function reportTeamsResult(result: TeamsCliResult, print: PrintFn): void {
 }
 
 function resolveEnv(opts: AddAccountOptions): Env {
-  /* c8 ignore next -- dotenv side-effect, loaded only in production */
+  /* v8 ignore next -- dotenv side-effect, loaded only in production @preserve */
   if (opts.loadDotenv !== false && !opts.env) loadDotenv();
   return opts.env ?? process.env;
 }
 
-/* c8 ignore start -- real MSAL adapter, exercised only via live smoke */
+/* v8 ignore start -- real MSAL adapter, exercised only via live smoke @preserve */
 
 async function realImportWhatsApp(
   config: Config,
@@ -1038,7 +1038,7 @@ async function discoverForAccount(
   deps: VivaDeps,
   accountUsername: string,
 ): Promise<{ readonly communities: readonly VivaCommunity[] }> {
-  /* c8 ignore next -- default console.log only in production */
+  /* v8 ignore next -- default console.log only in production @preserve */
   const print: PrintFn = deps.print ?? ((m) => console.log(m));
   const auth = deps.auth ?? (await buildDefaultVivaAuth(config));
   const account = await resolveVivaAccount(auth, accountUsername);
@@ -1239,7 +1239,7 @@ export async function realViva(
         return { action: "subscribe", sub };
       }
     }
-    /* c8 ignore next 2 -- exhaustive switch above; only reachable if VivaCommand grows */
+    /* v8 ignore next -- exhaustive switch above; only reachable if VivaCommand grows @preserve */
     const _exhaustive: never = command;
     throw new Error(`unhandled viva action: ${JSON.stringify(_exhaustive)}`);
   } finally {
@@ -1396,7 +1396,7 @@ export async function realTeams(
         return { action: "unsubscribe", removed: r.removed };
       }
       case "discover": {
-        /* c8 ignore next -- default console.log only in production */
+        /* v8 ignore next -- default console.log only in production @preserve */
         const print: PrintFn = deps.print ?? ((m) => console.log(m));
         const auth = deps.auth ?? (await buildDefaultTeamsAuth(config));
         const accounts = await resolveCliAccounts(auth, command.account);
@@ -1420,7 +1420,7 @@ export async function realTeams(
         return { action: "admin-consent", urls };
       }
       case "subscribe": {
-        /* c8 ignore next -- default console.log only in production */
+        /* v8 ignore next -- default console.log only in production @preserve */
         const print: PrintFn = deps.print ?? ((m) => console.log(m));
         const auth = deps.auth ?? (await buildDefaultTeamsAuth(config));
         const accounts = await resolveCliAccounts(auth, command.account);
@@ -1469,7 +1469,7 @@ export async function realTeams(
         return { action: "subscribe", sub };
       }
     }
-    /* c8 ignore next 2 -- exhaustive switch above; only reachable if TeamsCommand grows */
+    /* v8 ignore next -- exhaustive switch above; only reachable if TeamsCommand grows @preserve */
     const _exhaustive: never = command;
     throw new Error(`unhandled teams action: ${JSON.stringify(_exhaustive)}`);
   } finally {
@@ -1538,17 +1538,17 @@ function buildRealVivaAuth(env: Env, tenantId: string): AuthClient {
     cacheStore,
   });
 }
-/* c8 ignore stop */
+/* v8 ignore stop -- @preserve */
 
 export async function addAccount(
   opts: AddAccountOptions = {},
 ): Promise<Account> {
   const env = resolveEnv(opts);
   const config = loadConfig(env);
-  /* c8 ignore next -- default console.log path, only in production */
+  /* v8 ignore next -- default console.log path, only in production @preserve */
   const print: PrintFn = opts.print ?? ((m) => console.log(m));
   const tenantId = opts.tenantId;
-  /* c8 ignore next 3 -- real MSAL adapters only constructed outside tests */
+  /* v8 ignore next -- real MSAL adapters only constructed outside tests @preserve */
   const auth =
     opts.auth ??
     (tenantId !== undefined ? buildRealVivaAuth(env, tenantId) : buildRealAuth(env));
@@ -1578,7 +1578,7 @@ async function buildDefaultCalendarAccountStore(
   store: CalendarAccountStore;
   close: () => void;
 }> {
-  /* c8 ignore start -- real sqlite store only constructed outside tests */
+  /* v8 ignore start -- real sqlite store only constructed outside tests @preserve */
   const { default: Database } = await import("better-sqlite3");
   const { SqliteCalendarAccountStore } = await import(
     "./store/calendar-account-store.js"
@@ -1589,7 +1589,7 @@ async function buildDefaultCalendarAccountStore(
     store: new SqliteCalendarAccountStore(db),
     close: () => db.close(),
   };
-  /* c8 ignore stop */
+  /* v8 ignore stop -- @preserve */
 }
 
 export async function calendarEnable(
@@ -1598,9 +1598,9 @@ export async function calendarEnable(
 ): Promise<{ account: string }> {
   const env = resolveEnv(opts);
   const config = loadConfig(env);
-  /* c8 ignore next -- default console.log path, only in production */
+  /* v8 ignore next -- default console.log path, only in production @preserve */
   const print: PrintFn = opts.print ?? ((m) => console.log(m));
-  /* c8 ignore next -- real MSAL adapter only constructed outside tests */
+  /* v8 ignore next -- real MSAL adapter only constructed outside tests @preserve */
   const auth = opts.auth ?? buildRealAuth(env);
 
   let account: Account;
@@ -1678,9 +1678,9 @@ export async function transcriptsEnable(
 ): Promise<{ account: string }> {
   const env = resolveEnv(opts);
   const config = loadConfig(env);
-  /* c8 ignore next -- default console.log path, only in production */
+  /* v8 ignore next -- default console.log path, only in production @preserve */
   const print: PrintFn = opts.print ?? ((m) => console.log(m));
-  /* c8 ignore next -- real MSAL adapter only constructed outside tests */
+  /* v8 ignore next -- real MSAL adapter only constructed outside tests @preserve */
   const auth = opts.auth ?? buildRealAuth(env);
 
   let store = opts.calendarAccountStore;
@@ -1774,15 +1774,15 @@ export async function calendarList(
 ): Promise<{ events: readonly CalendarEvent[] }> {
   const env = resolveEnv(opts);
   const config = loadConfig(env);
-  /* c8 ignore next -- default console.log path, only in production */
+  /* v8 ignore next -- default console.log path, only in production @preserve */
   const print: PrintFn = opts.print ?? ((m) => console.log(m));
-  /* c8 ignore next -- systemClock only constructed outside tests */
+  /* v8 ignore next -- systemClock only constructed outside tests @preserve */
   const clock = opts.clock ?? (await import("./clock.js")).systemClock;
 
   let store = opts.calendarStore;
   let close: (() => void) | undefined;
   if (store === undefined) {
-    /* c8 ignore start -- real sqlite store only constructed outside tests */
+    /* v8 ignore start -- real sqlite store only constructed outside tests @preserve */
     const { default: Database } = await import("better-sqlite3");
     const { SqliteMessageStore } = await import(
       "./store/sqlite-message-store.js"
@@ -1791,7 +1791,7 @@ export async function calendarList(
     db.pragma("journal_mode = WAL");
     store = new SqliteMessageStore(db);
     close = () => db.close();
-    /* c8 ignore stop */
+    /* v8 ignore stop -- @preserve */
   }
   try {
     const from = clock.now();
@@ -1836,14 +1836,14 @@ export async function calendarResync(
 ): Promise<{ clearedAccounts: readonly string[] }> {
   const env = resolveEnv(opts);
   const config = loadConfig(env);
-  /* c8 ignore next -- default console.log path, only in production */
+  /* v8 ignore next -- default console.log path, only in production @preserve */
   const print: PrintFn = opts.print ?? ((m) => console.log(m));
 
   let messageStore = opts.calendarStore;
   let accountStore = opts.calendarAccountStore;
   let close: (() => void) | undefined;
   if (messageStore === undefined || accountStore === undefined) {
-    /* c8 ignore start -- real sqlite stores only constructed outside tests */
+    /* v8 ignore start -- real sqlite stores only constructed outside tests @preserve */
     const { default: Database } = await import("better-sqlite3");
     const { SqliteMessageStore } = await import(
       "./store/sqlite-message-store.js"
@@ -1856,7 +1856,7 @@ export async function calendarResync(
     messageStore ??= new SqliteMessageStore(db);
     accountStore ??= new SqliteCalendarAccountStore(db);
     close = () => db.close();
-    /* c8 ignore stop */
+    /* v8 ignore stop -- @preserve */
   }
 
   try {
@@ -1924,7 +1924,7 @@ async function withAuthStore<T>(
   fn: (store: AuthStore) => Promise<T>,
 ): Promise<T> {
   if (opts.authStore !== undefined) return fn(opts.authStore);
-  /* c8 ignore start -- real-db wiring, exercised by /local-smoke */
+  /* v8 ignore start -- real-db wiring, exercised by /local-smoke @preserve */
   const config = loadConfig(resolveEnv(opts));
   const db = openDatabase(config.dbPath);
   try {
@@ -1933,7 +1933,7 @@ async function withAuthStore<T>(
   } finally {
     db.close();
   }
-  /* c8 ignore stop */
+  /* v8 ignore stop -- @preserve */
 }
 
 export async function runCli(
@@ -1941,7 +1941,7 @@ export async function runCli(
   opts: RunCliOptions = {},
 ): Promise<RunCliResult> {
   const parsed = parseArgv(argv);
-  /* c8 ignore next -- default console.log only in production */
+  /* v8 ignore next -- default console.log only in production @preserve */
   const printOut: PrintFn = opts.print ?? ((m) => console.log(m));
 
   if (parsed.boolean.has("--list-oauth-clients")) {
@@ -2067,9 +2067,9 @@ export async function runCli(
   if (steerCmd !== null) {
     const env = resolveEnv(opts);
     const config = loadConfig(env);
-    /* c8 ignore next -- default console.log only in production */
+    /* v8 ignore next -- default console.log only in production @preserve */
     const print: PrintFn = opts.print ?? ((m) => console.log(m));
-    /* c8 ignore next -- realSteer only constructed outside tests */
+    /* v8 ignore next -- realSteer only constructed outside tests @preserve */
     const impl = opts.steerImpl ?? realSteer;
     const result = await impl(config, steerCmd);
     reportSteerResult(result, print);
@@ -2080,9 +2080,9 @@ export async function runCli(
   if (vivaCmd !== null) {
     const env = resolveEnv(opts);
     const config = loadConfig(env);
-    /* c8 ignore next -- default console.log only in production */
+    /* v8 ignore next -- default console.log only in production @preserve */
     const print: PrintFn = opts.print ?? ((m) => console.log(m));
-    /* c8 ignore next -- realViva only constructed outside tests */
+    /* v8 ignore next -- realViva only constructed outside tests @preserve */
     const impl = opts.vivaImpl ?? realViva;
     const result = await impl(config, vivaCmd);
     reportVivaResult(result, print);
@@ -2093,9 +2093,9 @@ export async function runCli(
   if (teamsCmd !== null) {
     const env = resolveEnv(opts);
     const config = loadConfig(env);
-    /* c8 ignore next -- default console.log only in production */
+    /* v8 ignore next -- default console.log only in production @preserve */
     const print: PrintFn = opts.print ?? ((m) => console.log(m));
-    /* c8 ignore next -- realTeams only constructed outside tests */
+    /* v8 ignore next -- realTeams only constructed outside tests @preserve */
     const impl = opts.teamsImpl ?? realTeams;
     const result = await impl(config, teamsCmd);
     reportTeamsResult(result, print);
@@ -2105,7 +2105,7 @@ export async function runCli(
   if (parsed.boolean.has("--import-whatsapp")) {
     const env = resolveEnv(opts);
     const config = loadConfig(env);
-    /* c8 ignore next -- default console.log only in production */
+    /* v8 ignore next -- default console.log only in production @preserve */
     const print: PrintFn = opts.print ?? ((m) => console.log(m));
     const impl = opts.importWhatsAppImpl ?? realImportWhatsApp;
     const result = await impl(config);
@@ -2121,7 +2121,7 @@ export async function runCli(
   if (parsed.boolean.has("--rethread-whatsapp")) {
     const env = resolveEnv(opts);
     const config = loadConfig(env);
-    /* c8 ignore next -- default console.log only in production */
+    /* v8 ignore next -- default console.log only in production @preserve */
     const print: PrintFn = opts.print ?? ((m) => console.log(m));
     const impl = opts.rethreadWhatsAppImpl ?? realRethreadWhatsApp;
     const dryRun = parsed.boolean.has("--dry-run");
@@ -2140,7 +2140,7 @@ export async function runCli(
   if (parsed.boolean.has("--repair-transcript-linkage")) {
     const env = resolveEnv(opts);
     const config = loadConfig(env);
-    /* c8 ignore next -- default console.log only in production */
+    /* v8 ignore next -- default console.log only in production @preserve */
     const print: PrintFn = opts.print ?? ((m) => console.log(m));
     const impl =
       opts.repairTranscriptLinkageImpl ?? realRepairTranscriptLinkage;
@@ -2160,7 +2160,7 @@ export async function runCli(
   if (parsed.boolean.has("--backfill-bodies")) {
     const env = resolveEnv(opts);
     const config = loadConfig(env);
-    /* c8 ignore next -- default console.log only in production */
+    /* v8 ignore next -- default console.log only in production @preserve */
     const print: PrintFn = opts.print ?? ((m) => console.log(m));
     const impl = opts.backfillImpl ?? realBackfill;
     const result = await impl(config.dbPath);
@@ -2176,7 +2176,7 @@ export async function runCli(
   return { mode: "server", main: result };
 }
 
-/* c8 ignore start -- process-level bootstrap, exercised only in production */
+/* v8 ignore start -- process-level bootstrap, exercised only in production @preserve */
 const isMain =
   typeof process !== "undefined" &&
   process.argv[1] !== undefined &&
@@ -2238,4 +2238,4 @@ if (isMain) {
       process.exit(1);
     });
 }
-/* c8 ignore stop */
+/* v8 ignore stop -- @preserve */

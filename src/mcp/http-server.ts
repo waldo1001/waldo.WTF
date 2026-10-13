@@ -349,7 +349,7 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
         const qs = parsedUrl.searchParams;
         const oauth = opts.oauth;
         runSafely(res, opts.logger, async () => {
-          /* c8 ignore next 8 -- null branches from qs.get handled by authorize handler validation */
+          /* v8 ignore next -- null branches from qs.get handled by authorize handler validation @preserve */
           const params: AuthorizeGetParams = {
             client_id: qs.get("client_id") ?? "",
             redirect_uri: qs.get("redirect_uri") ?? "",
@@ -386,7 +386,7 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
           const capped = await readBodyCapped(req, OAUTH_MAX_BODY_BYTES);
           if (!capped.ok) return writeTooLarge(res);
           const form = new URLSearchParams(capped.text);
-          /* c8 ignore next 8 -- null branches from form.get handled by authorize handler validation */
+          /* v8 ignore next -- null branches from form.get handled by authorize handler validation @preserve */
           const formBody: AuthorizePostFormBody = {
             client_id: form.get("client_id") ?? "",
             redirect_uri: form.get("redirect_uri") ?? "",
@@ -411,7 +411,7 @@ export function createMcpHttpServer(opts: McpHttpServerOptions): Server {
             res.writeHead(302, { ...headers, ...NO_STORE });
             res.end();
           } else {
-            /* c8 ignore next -- authorize handler always sets Content-Type */
+            /* v8 ignore next -- authorize handler always sets Content-Type @preserve */
           const ct =
               headers["Content-Type"] ?? "text/html; charset=utf-8";
             // 401 = wrong password; the form is re-rendered for an

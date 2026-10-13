@@ -19,13 +19,13 @@ export interface SelfProbeHandle {
   stop(): void;
 }
 
-/* c8 ignore next 4 -- thin setTimeout/clearTimeout wrapper, exercised at runtime only */
+/* v8 ignore next -- thin setTimeout/clearTimeout wrapper, exercised at runtime only @preserve */
 const defaultSetTimer: SetTimerFn = (fn, ms) => {
   const h = setTimeout(fn, ms);
   return { clear: () => clearTimeout(h) };
 };
 
-/* c8 ignore next 8 -- production fetch wrapper, exercised at runtime only */
+/* v8 ignore next -- production fetch wrapper, exercised at runtime only @preserve */
 const defaultFetch: FetchLike = async (input, init) => {
   const res = await globalThis.fetch(input, init);
   return {
@@ -70,11 +70,11 @@ export function startSelfProbe(opts: SelfProbeOptions): SelfProbeHandle {
   };
 
   const tick = (): void => {
-    /* c8 ignore next -- defensive guard against real-Node clearTimeout/in-flight callback race */
+    /* v8 ignore next -- defensive guard against real-Node clearTimeout/in-flight callback race @preserve */
     if (stopped) return;
     void (async () => {
       const ok = await probe();
-      /* c8 ignore next -- defensive guard against stop() racing the in-flight probe */
+      /* v8 ignore next -- defensive guard against stop() racing the in-flight probe @preserve */
       if (stopped) return;
       if (ok) {
         consecutive = 0;

@@ -69,7 +69,7 @@ export class VivaExternalTenantsStore {
   }
 
   private warn(message: string): void {
-    /* c8 ignore next -- default warn is console in production */
+    /* v8 ignore next -- default warn is console in production @preserve */
     const fn = this.opts.warn ?? ((m: string) => console.warn(m));
     fn(message);
   }

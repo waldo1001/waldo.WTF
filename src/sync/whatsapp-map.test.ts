@@ -67,6 +67,10 @@ describe("normalizeWhatsAppChatName", () => {
     expect(normalizeWhatsAppChatName("General chat (2)")).toBe("General chat");
   });
 
+  it("keeps a placeholder whose parenthesised content is blank", () => {
+    expect(normalizeWhatsAppChatName("General chat ( )")).toBe("General chat ( )");
+  });
+
   it("leaves a whole-parenthetical name untouched", () => {
     expect(normalizeWhatsAppChatName("(Family)")).toBe("(Family)");
   });

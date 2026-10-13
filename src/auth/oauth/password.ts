@@ -21,7 +21,7 @@ const scryptAsync = (
       KEY_LEN,
       { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P },
       (err, derived) => {
-        /* c8 ignore next -- scrypt only errors on bad params, not at runtime */
+        /* v8 ignore next -- scrypt only errors on bad params, not at runtime @preserve */
         if (err) reject(err);
         else resolve(derived);
       },
@@ -40,12 +40,12 @@ export const scryptPasswordHasher: PasswordHasher = {
     if (colonIdx === -1) return false;
     const saltHex = storedHash.slice(0, colonIdx);
     const hashHex = storedHash.slice(colonIdx + 1);
-    /* c8 ignore next -- malformed hash without content on both sides of ':' is an edge case */
+    /* v8 ignore next -- malformed hash without content on both sides of ':' is an edge case @preserve */
     if (!saltHex || !hashHex) return false;
     const salt = Buffer.from(saltHex, "hex");
     const expected = Buffer.from(hashHex, "hex");
     const derived = await scryptAsync(password, salt);
-    /* c8 ignore next -- scrypt always produces KEY_LEN bytes; guard for timingSafeEqual */
+    /* v8 ignore next -- scrypt always produces KEY_LEN bytes; guard for timingSafeEqual @preserve */
     if (derived.length !== expected.length) return false;
     return timingSafeEqual(derived, expected);
   },

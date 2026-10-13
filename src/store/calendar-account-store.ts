@@ -94,7 +94,7 @@ export class SqliteCalendarAccountStore implements CalendarAccountStore {
     const row = this.getStmt.get(input.account) as
       | CalendarAccountRow
       | undefined;
-    /* c8 ignore next 3 -- defensive: row was just inserted/updated */
+    /* v8 ignore next -- defensive: row was just inserted/updated @preserve */
     if (row === undefined) {
       throw new StoreError("corrupt", "enabled calendar account vanished");
     }

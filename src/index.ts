@@ -143,19 +143,19 @@ const WATCHDOG_SELF_PROBE_TIMEOUT_MS = 5_000;
 const WATCHDOG_SELF_PROBE_FAILURES_BEFORE_WEDGE = 3;
 const WATCHDOG_SIGKILL_FALLBACK_MS = 5_000;
 
-/* c8 ignore next 6 -- production SIGKILL fallback, exercised only at runtime */
+/* v8 ignore next -- production SIGKILL fallback, exercised only at runtime @preserve */
 const defaultScheduleKill = (): void => {
   setTimeout(() => {
     process.kill(process.pid, "SIGKILL");
   }, WATCHDOG_SIGKILL_FALLBACK_MS).unref();
 };
 
-/* c8 ignore next 3 -- production process.exit, exercised only at runtime */
+/* v8 ignore next -- production process.exit, exercised only at runtime @preserve */
 const defaultProcessExit = (code: number): void => {
   process.exit(code);
 };
 
-/* c8 ignore next 6 -- default process signal seam, exercised only at runtime */
+/* v8 ignore next -- default process signal seam, exercised only at runtime @preserve */
 const nodeSignals: Signals = {
   on(signal, handler) {
     process.on(signal, handler);
@@ -463,7 +463,7 @@ export async function runFromCli(
   return result;
 }
 
-/* c8 ignore next 4 -- direct-run guard, exercised only by `tsx src/index.ts` */
+/* v8 ignore next -- direct-run guard, exercised only by `tsx src/index.ts` @preserve */
 const isDirectRun =
   import.meta.url === `file://${process.argv[1]}` ||
   process.argv[1]?.endsWith("/src/index.ts") === true;
