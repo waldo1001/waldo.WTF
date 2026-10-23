@@ -11,6 +11,11 @@ skill.
 
 ---
 
+## 2026-10-23
+
+- **Node 22.22.3 → 22.23.4 on the Mac mini** (security, runtime). Fixes the 21 Oct 2026 Node CVEs; reachable here were the Brotli decoder bug (undici `fetch` auto-decompresses `br` from Graph/Yammer) and the TLS hostname-verification bypass (all outbound HTTPS). `dns.resolve` is unused. Same ABI 127, no `better-sqlite3` rebuild.
+- `engines.node` raised from `>=22` to `^22.23.4 || ^24.22.1 || >=26.12.1`; patch procedure added to [deploy-macmini.md](deploy-macmini.md#operational-notes).
+
 ## 2026-10-13
 
 - **adm-zip 0.5 → 0.6.1** (security, runtime). On 0.5 a crafted WhatsApp export (a smuggled second `_chat.txt`, or an entry claiming more data than the file holds) **imported successfully**. It's now refused as `WhatsAppParseError` and left in the inbox ([import-whatsapp.ts](../src/sync/import-whatsapp.ts)). `@types/adm-zip` dropped (0.6 ships its own types).

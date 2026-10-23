@@ -34,7 +34,7 @@ chokidar watcher imports + archives them.
 | Server LaunchDaemon | `/Library/LaunchDaemons/com.waldo.wtf.server.plist` (template: `deploy/com.waldo.wtf.server.plist`) |
 | Backup LaunchDaemon | `/Library/LaunchDaemons/com.waldo.wtf.backup.plist` (template: `deploy/com.waldo.wtf.backup.plist`, runs `deploy/wtf-backup.sh` @ 03:30) |
 | Log rotation | `/etc/newsyslog.d/com.waldo.wtf.conf` (template: `deploy/newsyslog-waldo.conf`) |
-| Node (pinned) | `/opt/homebrew/opt/node@22/bin/node` (ABI 127) |
+| Node (pinned) | `/opt/homebrew/opt/node@22/bin/node` (ABI 127), **≥ 22.23.4** (Oct-2026 Node security release) |
 | Logs | `/Users/waldo/waldo-wtf/logs/server.{out,err}.log`, `backup.log` |
 
 ## Prerequisites (one-time)
@@ -100,6 +100,9 @@ Implications — every route is reachable by anyone who knows the hostname:
 - **better-sqlite3 is ABI-locked to Node 22 (modules 127).** Pin `node@22`; after any
   Node major bump, `npm rebuild better-sqlite3` (or boot fails with a NODE_MODULE_VERSION
   mismatch).
+- **Node security patches** (same major, no rebuild): `brew upgrade node@22`, then
+  `sudo launchctl kickstart -k system/com.waldo.wtf.server`. The plist points at the
+  `opt/` symlink, so it follows the upgrade. Minimum is 22.23.4 (`engines` in `package.json`).
 - **IPv4-first.** The plist sets `NODE_OPTIONS=--dns-result-order=ipv4first`: this
   network's IPv6 path to some Microsoft 365 endpoints is unreliable (an established
   IPv6 socket can stall on large responses). IPv4 is healthy.
